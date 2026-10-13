@@ -1,0 +1,58 @@
+{
+  "name": "huitu-offramp-mock-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mock-only stablecoin offramp operations MVP. Real money execution disabled.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev:api": "node --import tsx apps/api/src/main.ts",
+    "dev:web": "next dev apps/web --hostname 127.0.0.1 -p 3000",
+    "build": "npm run typecheck && next build apps/web",
+    "build:api": "tsc -p tsconfig.build.json",
+    "start:api": "node dist/apps/api/src/main.js",
+    "start:web": "next start apps/web -p 3000",
+    "test": "node --import tsx --test packages/core/test/*.test.ts apps/api/test/*.test.ts apps/web/test/*.test.ts",
+    "test:db": "node scripts/db-test.mjs",
+    "typecheck": "tsc --noEmit",
+    "migrate": "node --import tsx scripts/migrate.ts",
+    "worker": "node --import tsx apps/api/src/worker.ts",
+    "demo": "node --import tsx scripts/demo.ts",
+    "check": "npm run typecheck && npm test && npm run test:db",
+    "format:check": "prettier --check \"packages/**/*.ts\" \"apps/api/**/*.ts\" \"apps/web/**/*.{tsx,ts,css}\" \"scripts/*.{ts,mjs}\" \"sites/**/*.{ts,json}\"",
+    "build:sites": "SITE_EXPORT=true next build apps/web && node scripts/build-sites.mjs",
+    "test:sites": "node --import tsx --test sites/*.test.ts",
+    "typecheck:sites": "tsc -p sites/tsconfig.json"
+  },
+  "dependencies": {
+    "@nestjs/common": "^12.1.3",
+    "@nestjs/core": "^12.1.3",
+    "@nestjs/platform-express": "^12.1.3",
+    "@noble/hashes": "^2.4.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "buffer": "^6.0.3",
+    "bullmq": "^5.0.0",
+    "csv-parse": "^7.0.3",
+    "helmet": "^8.0.0",
+    "next": "16.4.0",
+    "pg": "^8.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.9",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.9.10",
+    "tsx": "^4.0.0",
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,121 @@
+import { Actor, State } from "./types";
+export const ACTORS: Record<string, Actor> = {
+  "customer-demo": {
+    id: "customer-demo",
+    role: "customer",
+    customerId: "customer-1",
+  },
+  "company-demo": {
+    id: "company-demo",
+    role: "customer",
+    customerId: "customer-2",
+  },
+  "maker-demo": { id: "maker-demo", role: "operations" },
+  "checker-demo": { id: "checker-demo", role: "finance" },
+  "checker-two-demo": { id: "checker-two-demo", role: "finance" },
+  "auditor-demo": { id: "auditor-demo", role: "auditor" },
+  "partner-demo": {
+    id: "partner-demo",
+    role: "partner",
+    partnerId: "partner-1",
+  },
+};
+export function fixtureState(): State {
+  return {
+    customers: [
+      {
+        id: "customer-1",
+        kind: "personal",
+        name: "演示个人",
+        status: "approved",
+        partnerId: "partner-1",
+        attributionVersion: "attribution-demo-v1",
+      },
+      {
+        id: "customer-2",
+        kind: "company",
+        name: "演示企业",
+        status: "approved",
+        serviceFeeOverride: "3.000000",
+      },
+    ],
+    beneficiaries: [
+      {
+        id: "beneficiary-cn",
+        customerId: "customer-1",
+        name: "演示境内收款人",
+        country: "CN",
+        currency: "CNY",
+        accountMasked: "**** 0001",
+        accountToken: "mock-vault-cn-1",
+        status: "approved",
+        createdBy: "maker-demo",
+        approvedBy: "checker-demo",
+      },
+      {
+        id: "beneficiary-us",
+        customerId: "customer-1",
+        name: "Demo US beneficiary",
+        country: "US",
+        currency: "USD",
+        accountMasked: "**** 0002",
+        accountToken: "mock-vault-us-1",
+        status: "approved",
+        createdBy: "maker-demo",
+        approvedBy: "checker-demo",
+      },
+      {
+        id: "beneficiary-company",
+        customerId: "customer-2",
+        name: "演示企业收款人",
+        country: "US",
+        currency: "USD",
+        accountMasked: "**** 0003",
+        accountToken: "mock-vault-us-2",
+        status: "approved",
+        createdBy: "maker-demo",
+        approvedBy: "checker-demo",
+      },
+    ],
+    quotes: [],
+    orders: [],
+    attempts: [],
+    journals: [],
+    audits: [],
+    outbox: [],
+    webhookEvents: [],
+    refunds: [],
+    commissions: [],
+    settlements: [],
+    discrepancies: [],
+    batches: [],
+    batchItems: [],
+  };
+}
+/** Proposal fixtures, not approved pricing or commercial terms. Rates are sample strings. */
+export const CONFIG = Object.freeze({
+  version: "mock-pricing-v1",
+  feeRuleVersion: "mock-fee-v1",
+  commissionRuleVersion: "proposed-20pct-v1",
+  serviceFee: "5.000000",
+  channelFee: "2.000000",
+  commissionRate: "0.20000000",
+  quoteTtlSeconds: 300,
+  commissionHoldDays: 7,
+  routes: {
+    CNY: {
+      enabled: true,
+      country: "CN",
+      costRate: "7.23000000",
+      referenceRate: "7.25000000",
+      customerRate: "7.20000000",
+    },
+    USD: {
+      enabled: true,
+      country: "US",
+      costRate: "1.00000000",
+      referenceRate: "1.00000000",
+      customerRate: "0.99500000",
+    },
+  },
+});

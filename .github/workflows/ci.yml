@@ -1,0 +1,47 @@
+name: Mock MVP verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mock-verification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install exact locked dependencies
+        run: npm ci
+      - name: Verify domain, HTTP API and SQL invariants
+        run: npm run check
+      - name: Compile API and queue worker
+        run: npm run build:api
+      - name: Build and typecheck Next.js app
+        run: npm run build
+      - name: Typecheck isolated preview worker
+        run: npm run typecheck:sites
+      - name: Verify isolated preview worker
+        run: npm run test:sites
+      - name: Build isolated preview artifact
+        run: npm run build:sites

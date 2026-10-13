@@ -1,0 +1,80 @@
+name: huitu-offramp-mock
+x-app-env: &app-env
+  EXECUTION_MODE: mock
+  DEMO_AUTH: "true"
+  NODE_ENV: development
+  STORAGE_MODE: postgres
+  HOST: 0.0.0.0
+  PORT: "3001"
+  DATABASE_URL: postgresql://offramp:${POSTGRES_PASSWORD:-local-mock-only-change-me}@postgres:5432/offramp
+  WEBHOOK_SECRET: ${WEBHOOK_SECRET:-local-mock-only-replace-with-random-32-plus-characters}
+  REDIS_HOST: redis
+  FRONTEND_ORIGIN: http://localhost:8080
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: offramp
+      POSTGRES_USER: offramp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-mock-only-change-me}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U offramp -d offramp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, "yes"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: .
+    image: huitu-offramp-mock:local
+    environment: *app-env
+    command: [npm, run, migrate]
+    depends_on:
+      postgres: { condition: service_healthy }
+  api:
+    image: huitu-offramp-mock:local
+    environment: *app-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3001/api/health').then(async r=>{if(!r.ok||(await r.json()).status!=='ok')process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  worker:
+    image: huitu-offramp-mock:local
+    environment: *app-env
+    command: [node, dist/apps/api/src/worker.js]
+    depends_on:
+      api: { condition: service_healthy }
+      redis: { condition: service_healthy }
+  web:
+    image: huitu-offramp-mock:local
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: http://api:3001
+    command: [npm, run, start:web]
+    depends_on:
+      api: { condition: service_healthy }
+  nginx:
+    image: nginx:stable-alpine
+    ports: ["127.0.0.1:8080:80"]
+    volumes: ["./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro"]
+    depends_on: [web, api]
+volumes:
+  postgres-data:
+  redis-data:

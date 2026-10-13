@@ -1,0 +1,12 @@
+node_modules
+dist
+apps/web/.next
+.env
+.git
+*.zip
+*.log
+apps/web/out
+sites-dist
+*.tsbuildinfo
+.env.*
+!.env.example
