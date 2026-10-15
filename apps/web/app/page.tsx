@@ -1169,8 +1169,8 @@ export default function Home() {
           )}
         </div>
         <p className="muted small">
-          演示上传仅支持 PNG、JPEG、PDF，最大 64
-          KB。仅使用虚构文件；文件未经安全扫描，演示会话失效后不可恢复。
+          演示上传仅支持 PNG、JPEG、PDF，最大 2
+          MB。仅使用虚构文件；文件未经安全扫描，演示会话失效后不可恢复。
         </p>
         <div className="ruleline" />
         <div className="card-heading">
