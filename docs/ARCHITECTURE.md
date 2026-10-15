@@ -16,19 +16,19 @@ The runtime ledger is already relational with NUMERIC(38,18), per-currency preci
 
 ## Financial model
 
-- Quotes freeze the explicit input mode. Principal mode adds service/channel fees; total-deposit mode deducts those fees to derive principal. Both preserve the same principal + fees = total identity in source stablecoin. Payout is the principal multiplied by customer rate, rounded down to fiat minor units.
+- Quotes freeze the explicit input mode. Principal mode adds service/channel fees; total-deposit mode deducts those fees to derive principal. Target-payout mode instead rounds required stablecoin principal up to six decimals and validates the forward fiat result exactly. All modes preserve the same principal + fees = total identity in source stablecoin. Payout is the principal multiplied by customer rate, rounded down to fiat minor units.
 - Deposit debits custody assets and credits an order liability. Mismatched/late/extra deposits credit a separate unallocated liability and cannot fund the order automatically.
 - Recorded external conversion debits source order principal liability and credits custody; separately debits target provider assets and credits order payout liability. This is an allocation model. It does not claim to calculate real treasury spread, slippage, inventory cost or provider costs.
 - Sent payout debits payout liability and credits provider assets. Only then is service revenue realized; channel fees remain a separate payable.
-- Commissions debit partner expense and credit partner payable. Principal, channel fees and FX spread are not commission bases. Independent reconciliation and the quote’s frozen attribution/rule are required.
+- Commissions debit partner expense and credit partner payable. Principal, channel fees and FX spread are not commission bases. Recorded reconciliation and the quote’s frozen attribution/rule are required. Administrator self-attestation is explicitly distinguished from independent verification.
 - Refunds reverse the proper liability/revenue and custody leg. Service refunds reduce commissions to the cumulative net basis, so split refunds cannot leave rounding dust. Pre-accrual refunds reduce the initial base; later refunds produce separate negative entries.
 - A principal refund before conversion cancels the original payout. Partial remaining funds and unused fees are still liabilities; this MVP does not silently clear them or provide a completed full-order refund orchestration. They need the reviewed residual-funds workflow before production.
 
 ## Manual execution boundary
 
-The app cannot log into a provider, broadcast a token transfer, call a money API or submit a bank payment. Operators record mock external actions. Maker and checker are separate server-side fixture identities in development, not evidence of real authentication. A production manual portal process must claim/reserve the execution task before portal submission, persist an in-progress/unknown state before the external side effect, and have independent statement verification. Implement and test that provider-specific SOP before enabling any real operation.
+The app cannot log into a provider, broadcast a token transfer, call a money API or submit a bank payment. Operators record mock external actions. The current merchant-admin fixture handles all steps without role switching. Legacy maker/checker fixtures remain separate for compatibility; none is real authentication. A production manual portal process must claim/reserve the execution task before portal submission, persist an in-progress/unknown state before the external side effect, and have independent statement verification. Implement and test that provider-specific SOP before enabling any real operation.
 
-An unknown attempt blocks new attempts. Only independent finance verification can mark it sent or definitely failed. A definitely failed attempt permits a new attempt. Retries must use stable provider-side idempotency and immutable destination snapshots when real providers are integrated.
+An unknown attempt blocks new attempts. The administrator can resolve it with documented verification evidence to sent or definitely failed; legacy finance flows remain available. A definitely failed attempt permits a new attempt. Retries must use stable provider-side idempotency and immutable destination snapshots when real providers are integrated.
 
 ## Outbox
 
@@ -36,7 +36,7 @@ Events and monetary changes commit together. A PostgreSQL row-locked relay adds 
 
 ## Files and authentication
 
-Private file upload/download/verification and token verification are interfaces with fail-closed unconfigured implementations. No public bucket or permanent file URL exists. The UI records no uploaded bytes; receipt metadata is a simulation only. Real integration must verify ownership, object existence, content hash, MIME/magic bytes, size and clean scan status before attaching the receipt.
+Production private object storage and token verification remain fail-closed unconfigured interfaces. No public bucket or permanent file URL exists. The current mock supports bounded 2 MiB synthetic attachment bytes in aggregate state, checks basic type/signature/hash, and returns bytes only through scoped reads. These files are unscanned and volatile on Sites; they are not production storage. Real integration must verify ownership, object existence, content hash, MIME/magic bytes, size and clean scan status before attaching the receipt.
 
 Customer and partner views project safe fields; finance/auditor scopes see operational evidence metadata. Raw request bodies must never be logged. Credential, webhook and account secrets must never enter audit, jobs or Library artifacts.
 

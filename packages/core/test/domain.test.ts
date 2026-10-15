@@ -212,7 +212,7 @@ test("underpaid, overpaid and expired deposits stay unallocated", async () => {
   for (const input of ["1000", "1008", "expired"]) {
     const h = harness();
     const o = await order(h);
-    if (input === "expired") h.advance(300001);
+    if (input === "expired") h.advance(30 * 60 * 1000 + 1);
     await deposit(h, o, input === "expired" ? {} : { amount: input });
     const s = await h.store.read();
     assert.equal(s.orders[0].depositStatus, "exception");

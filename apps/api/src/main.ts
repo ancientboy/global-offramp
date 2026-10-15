@@ -1,5 +1,6 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
+import { NestExpressApplication } from "@nestjs/platform-express";
 import helmet from "helmet";
 import { Pool } from "pg";
 import { makeAppModule } from "./app";
@@ -14,7 +15,11 @@ async function main() {
       )
     : new MemoryStore();
   if (store instanceof PostgresStore) await store.initialize();
-  const app = await NestFactory.create(makeAppModule(store), { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(
+    makeAppModule(store),
+    { rawBody: true },
+  );
+  app.useBodyParser("json", { limit: "3mb" });
   app.use(helmet());
   app.enableCors({
     origin: process.env.FRONTEND_ORIGIN ?? "http://localhost:3000",

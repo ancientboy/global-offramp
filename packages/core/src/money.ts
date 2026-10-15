@@ -1,4 +1,4 @@
-/** No IEEE-754 arithmetic is used for monetary values. Rounding is always down. */
+/** No IEEE-754 arithmetic is used for monetary values. Forward conversion rounds down; reverse target quotes explicitly round principal up. */
 export type Currency = "USDT" | "USDC" | "CNY" | "USD";
 export const SCALE: Record<Currency, number> = {
   USDT: 6,

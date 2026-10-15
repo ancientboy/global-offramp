@@ -5,7 +5,7 @@ fixture actors, fixed-point money, ledger and authorization logic through a
 Cloudflare-compatible `fetch(request, env)` ES module. It serves the exported
 Next client through `env.ASSETS` on all non-API paths. It is **not** the NestJS
 server or a deployed PostgreSQL backend. It has no provider integrations,
-real-money execution, raw TCP, object/file upload storage, queue consumer,
+real-money execution, raw TCP, durable object/file upload storage, queue consumer,
 persistent database, identity provider, or durable ledger.
 
 Publish only inside the existing private Site. Site access control is supplied
@@ -65,13 +65,13 @@ submit a signed deposit webhook in this adapter.
   `Sec-Fetch-Site: same-origin` when that header is present. A missing/expired
   write session returns HTTP 410 `SESSION_EXPIRED`, without replay or implicit
   creation. The user must explicitly reload/bootstrap a fresh dashboard.
-- At most 16 sessions per isolate, with at most 1 MiB JSON domain state per
+- At most 4 sessions per isolate, with at most 4 MiB JSON domain state per
   session. Core transactions that exceed the cap roll back. Only idle synthetic
   sessions can be evicted. Queued or active commands are never evicted.
 - Per session: 120 requests/minute, 40 commands/minute, 8 pending requests.
   Per isolate: 600 API requests/minute and 32 new sessions/minute. HTTP 429 has
   a `Retry-After: 60` header. Expired sessions are cleaned on API access.
-- JSON bodies are capped at 128 KiB (including streamed bodies), with a 5-second
+- JSON bodies are capped at 3 MiB (including streamed bodies), with a 5-second
   body-read deadline. Domain CSV limits remain enforced by the core. Commands
   are serialized across the entire session; the scenario endpoint is idempotent
   across simultaneous repeated commands.
@@ -88,7 +88,7 @@ runtime checks and `apps/api/src/demo.ts` are unchanged; the Worker never spoofs
 `NODE_ENV` or a process environment.
 
 `POST /api/demo/scenario` accepts `{ "idempotencyKey": "sample-key" }` for
-`maker-demo` only. It creates three bounded synthetic fixtures: funded,
+`admin-demo` or legacy `maker-demo`. It creates three bounded synthetic fixtures: funded,
 approved, reconciled. The same key reuses the same logical three orders. Partial
 progress is recoverable by the same key. Its internal role transitions use the
 known server fixture maker/checker actors; arbitrary role elevation is not
@@ -97,13 +97,13 @@ regular quote commands pass the requested principal/total-deposit mode unchanged
 through the core calculation.
 
 `POST /api/demo/orders/:id/deposit` accepts an empty JSON object and requires
-`maker-demo`. It constructs an exact MOCK-network event from the stored order,
+`admin-demo` or legacy `maker-demo`. It constructs an exact MOCK-network event from the stored order,
 signs it with the per-session secret, and calls the core webhook validator. No
 request field can supply amount, destination, network, signing secret, or role.
 Repeated deposit calls retain core event/transaction idempotence.
 
 `POST /api/demo/reset` is an adapter-only disposal action. It requires
-`maker-demo`, the live session cookie, same-origin headers, and exactly
+`admin-demo` or legacy `maker-demo`, the live session cookie, same-origin headers, and exactly
 `{ "confirm": "reset-synthetic-session" }`. Invoke only from an explicit reset
 button/authorized smoke-test action. It discards only that session's synthetic
 state and rotates its internal signing secret. It does not extend the lifetime
@@ -119,3 +119,9 @@ blocking, exact fixed-point quote math, and asset delegation. Production-bundle
 tests execute the emitted module through dashboard, scenario, partner SHA256 and
 CSV paths. Crypto tests compare SHA256/HMAC to native Node, including browser
 bundling with no Node globals.
+
+## Single-admin and attachment update (2026-10-15)
+
+The current UI uses admin-demo for one merchant workbench. It exposes the core manual-payout and receipt-file contracts documented in docs/API.md. Receipt bytes are scoped synthetic state, not durable object storage: PNG/JPEG/PDF up to 2 MiB, unscanned, basic signature/type validation only. JSON body limit is 3 MiB, state limit 4 MiB per session and maximum 4 sessions per isolate. Multiple attachments can exhaust the state cap even when each file is individually within its limit; the transaction must fail without corrupting prior state.
+
+Target-payout quote mode and the separate 30-minute order funding deadline are supported. Funding instructions are explicitly nonpayable, address null, network MOCK. No real wallet address/QR or blockchain payment is provided. Administrator payment confirmation is bookkeeping attestation, not an external bank verification.

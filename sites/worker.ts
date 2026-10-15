@@ -18,9 +18,9 @@ export interface PreviewEnvironment {
 }
 export const PREVIEW_LIMITS = Object.freeze({
   ttlMs: 30 * 60 * 1000,
-  maxSessions: 16,
-  maxStateBytes: 1024 * 1024,
-  maxBodyBytes: 128 * 1024,
+  maxSessions: 4,
+  maxStateBytes: 4 * 1024 * 1024,
+  maxBodyBytes: 3 * 1024 * 1024,
   requestsPerMinute: 120,
   commandsPerMinute: 40,
   globalRequestsPerMinute: 600,
@@ -203,7 +203,7 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
     declared &&
     (!/^\d+$/.test(declared) || Number(declared) > PREVIEW_LIMITS.maxBodyBytes)
   )
-    fail("BODY_TOO_LARGE", 413, "Preview request exceeds 128 KiB.");
+    fail("BODY_TOO_LARGE", 413, "Preview request exceeds 3 MiB.");
   if (!request.body) return {};
   const reader = request.body.getReader();
   const parts: Uint8Array[] = [];
@@ -241,7 +241,7 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
       size += value.byteLength;
       if (size > PREVIEW_LIMITS.maxBodyBytes) {
         await reader.cancel();
-        fail("BODY_TOO_LARGE", 413, "Preview request exceeds 128 KiB.");
+        fail("BODY_TOO_LARGE", 413, "Preview request exceeds 3 MiB.");
       }
       parts.push(value);
     }
@@ -486,6 +486,15 @@ const ROUTES: Route[] = [
   ),
   route("POST", "quotes", (s, a, b) => s.core.createQuote(a, b)),
   route("POST", "orders", (s, a, b) => s.core.createOrder(a, b)),
+  route("POST", `orders/${pathId}/manual-payout`, (s, a, b, id) =>
+    s.core.confirmManualPayout(a, id, b),
+  ),
+  route("POST", `orders/${pathId}/receipt-file`, (s, a, b, id) =>
+    s.core.uploadReceiptFile(a, id, b),
+  ),
+  route("GET", `orders/${pathId}/receipt-file`, (s, a, _b, id) =>
+    s.core.downloadReceiptFile(a, id),
+  ),
   route("POST", `orders/${pathId}/conversion`, (s, a, b, id) =>
     s.core.recordConversion(a, id, b),
   ),

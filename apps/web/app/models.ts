@@ -1,5 +1,6 @@
 /** Read models returned by the MOCK API. All monetary values remain decimal strings. */
 export type ActorKey =
+  | "admin-demo"
   | "customer-demo"
   | "company-demo"
   | "maker-demo"
@@ -9,8 +10,10 @@ export type ActorKey =
   | "partner-demo";
 export type ViewRole = "customer" | "admin" | "partner";
 export interface Quote {
-  amountMode?: "total_deposit" | "principal";
+  amountMode?: "total_deposit" | "principal" | "target_payout";
   inputAmount?: string;
+  inputCurrency?: string;
+  requestedPayoutAmount?: string;
   id: string;
   customerId: string;
   beneficiaryId: string;
@@ -38,9 +41,22 @@ export interface Order {
   conversionStatus: string;
   payoutStatus: string;
   receiptStatus: string;
+  receiptFileAvailable?: boolean;
   reconciled: boolean;
   createdAt: string;
   batchId?: string;
+  fundingExpiresAt?: string;
+  fundingInstruction?: {
+    mode: "mock";
+    payable: false;
+    status: string;
+    reference: string;
+    network: string;
+    address: null;
+    currency: string;
+    amount: string;
+    expiresAt: string;
+  };
 }
 export interface Customer {
   id: string;
@@ -186,7 +202,7 @@ export const labels: Record<string, string> = {
   failed: "确认失败",
   cancelled: "已取消",
   none: "未登记",
-  uploaded: "元数据已登记",
+  uploaded: "回单已登记",
   verified: "已核验",
   suspended: "已暂停",
   requested: "待退款复核",
@@ -254,5 +270,30 @@ export function canResetDemoSession(
   actor: ActorKey,
   persistence: string | undefined,
 ): boolean {
-  return actor === "maker-demo" && persistence === "session-memory";
+  return (
+    (actor === "admin-demo" || actor === "maker-demo") &&
+    persistence === "session-memory"
+  );
+}
+
+/** Preserve user decimal strings; all pricing/rounding is performed by the API. */
+export function quoteAmountInput(
+  mode: "target_payout" | "total_deposit",
+  value: string,
+  currency: string,
+) {
+  return mode === "target_payout"
+    ? { amountMode: mode, targetAmount: value, payoutCurrency: currency }
+    : { amountMode: mode, sourceAmount: value };
+}
+export function validQuoteAmount(
+  mode: "target_payout" | "total_deposit",
+  value: string,
+): boolean {
+  return (
+    (mode === "target_payout"
+      ? /^(0|[1-9]\d{0,19})(\.\d{1,2})?$/
+      : /^(0|[1-9]\d{0,19})(\.\d{1,6})?$/
+    ).test(value) && /[1-9]/.test(value)
+  );
 }

@@ -1,5 +1,6 @@
 import { Actor, State } from "./types";
 export const ACTORS: Record<string, Actor> = {
+  "admin-demo": { id: "admin-demo", role: "merchant_admin" },
   "customer-demo": {
     id: "customer-demo",
     role: "customer",

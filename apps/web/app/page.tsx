@@ -32,6 +32,8 @@ import type { Icon } from "@phosphor-icons/react";
 import { Badge, Note, Steps, FeeRows, Empty, Modal, downloadCSV } from "./ui";
 import {
   money,
+  quoteAmountInput,
+  validQuoteAmount,
   canResetDemoSession,
   percentage,
   shortId,
@@ -117,26 +119,23 @@ const titles: Record<Page, string> = {
 };
 const subtitles: Record<Page, string> = {
   payment: "使用稳定币，向已验证的银行账户付款",
-  recipients: "管理可信任的收款账户，独立审核后可用",
+  recipients: "管理可信任的收款账户，管理员审核后可用",
   orders: "资金到账、换汇、出款与回单，分别追踪",
   detail: "每一步资金状态，都有清晰记录",
   certification: "来自服务端的演示客户审核状态",
-  workbench: "合作方后台人工出款，经办与财务独立复核",
+  workbench: "查看入金、登记线下付款、上传回单，一处完成",
   pricing: "服务端样例配置与不可覆盖的报价快照",
   reconciliation: "核对模拟渠道参考号、金额与证据",
   audit: "来自服务端的脱敏操作记录",
   partner: "查看服务费佣金与月度结算",
   clients: "仅显示已产生佣金记录的脱敏客户",
-  commissions: "按独立对账后的服务费计提，保留退款调整",
-  settlements: "服务端结算草稿与独立批准记录",
+  commissions: "按对账后的服务费计提，保留退款调整",
+  settlements: "服务端结算草稿与批准记录",
 };
 const actors: [ActorKey, string][] = [
   ["customer-demo", "客户 · 个人"],
   ["company-demo", "客户 · 企业"],
-  ["maker-demo", "运营 · 经办 A"],
-  ["checker-demo", "财务 · 复核 B"],
-  ["checker-two-demo", "财务 · 复核 C"],
-  ["auditor-demo", "审计 · 只读"],
+  ["admin-demo", "商家 · 管理员"],
   ["partner-demo", "合作伙伴"],
 ];
 const errorText = (e: unknown) =>
@@ -153,8 +152,8 @@ export default function Home() {
       : ["customer-demo", "company-demo"].includes(actor)
         ? "customer"
         : "admin";
-  const finance = actor === "checker-demo" || actor === "checker-two-demo";
-  const maker = actor === "maker-demo";
+  const finance = actor === "admin-demo";
+  const maker = actor === "admin-demo";
   const [page, setPage] = useState<Page>("payment");
   const [dataState, setDataState] = useState<{
     actor: ActorKey;
@@ -172,10 +171,10 @@ export default function Home() {
   const [support, setSupport] = useState(false);
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState("single");
-  const [enteredAmount, setEnteredAmount] = useState("1000.00");
-  const [amountMode, setAmountMode] = useState<"total_deposit" | "principal">(
-    "total_deposit",
-  );
+  const [enteredAmount, setEnteredAmount] = useState("100000.00");
+  const [amountMode, setAmountMode] = useState<
+    "total_deposit" | "target_payout"
+  >("target_payout");
   const [asset, setAsset] = useState("USDT");
   const [market, setMarket] = useState("CNY");
   const [beneficiaryId, setBeneficiaryId] = useState("");
@@ -362,8 +361,12 @@ export default function Home() {
       setQuoteBusy(false);
       return;
     }
-    if (!/^(0|[1-9]\d{0,19})(\.\d{1,6})?$/.test(enteredAmount)) {
-      setQuoteError("请输入正数金额，最多 6 位小数");
+    if (!validQuoteAmount(amountMode, enteredAmount)) {
+      setQuoteError(
+        amountMode === "target_payout"
+          ? "请输入法币金额，最多 2 位小数"
+          : "请输入稳定币金额，最多 6 位小数",
+      );
       setQuoteBusy(false);
       return;
     }
@@ -376,8 +379,7 @@ export default function Home() {
           customerId,
           beneficiaryId: chosenBeneficiaryId,
           sourceCurrency: asset,
-          sourceAmount: enteredAmount,
-          amountMode,
+          ...quoteAmountInput(amountMode, enteredAmount, market),
         },
         controller.signal,
       )
@@ -408,6 +410,7 @@ export default function Home() {
     currentCustomer?.status,
     enteredAmount,
     amountMode,
+    market,
     asset,
     customerId,
     request,
@@ -592,7 +595,7 @@ export default function Home() {
     openCommand({
       title: "创建服务端 MOCK 场景",
       description:
-        "服务端通过领域方法创建三笔关联样例：已入金待换汇、已复核待记录结果、已对账待观察期佣金。再次点击返回同一组样例，不重置或覆盖已有订单。",
+        "服务端通过领域方法创建三笔关联样例：已入金待付款、待记录付款结果、已对账待观察期佣金。再次点击返回同一组样例，不重置或覆盖已有订单。",
       path: "demo/scenario",
       base: { idempotencyKey: "workspace-default-v1" },
       button: "创建 MOCK 场景",
@@ -703,7 +706,7 @@ export default function Home() {
                   </td>
                   <td>
                     <Badge status={o.receiptStatus}>
-                      {o.receiptStatus === "none" ? "待补充" : "已登记元数据"}
+                      {o.receiptStatus === "none" ? "待补充" : "已登记回单"}
                     </Badge>
                   </td>
                 </tr>
@@ -714,11 +717,100 @@ export default function Home() {
             <Empty title={search ? "没有匹配的订单" : "还没有订单"}>
               {role === "customer"
                 ? "创建付款后，服务端订单将在这里显示。"
-                : "可以先创建 MOCK 场景，再切换经办与财务验证流程。"}
+                : "可以先创建 MOCK 场景，由同一管理员验证完整流程。"}
             </Empty>
           )}
         </div>
       </div>
+    );
+  }
+  async function uploadReceipt(orderId: string, file: File) {
+    if (busyRef.current) return;
+    if (
+      file.size > 2 * 1024 * 1024 ||
+      !["image/png", "image/jpeg", "application/pdf"].includes(file.type)
+    ) {
+      setError(
+        "请选择不超过 2 MB 的 PNG、JPEG 或 PDF 演示回单；较大截图请压缩后上传。",
+      );
+      return;
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      await mutate(
+        `orders/${orderId}/receipt-file`,
+        {
+          fileName: file.name,
+          contentType: file.type,
+          dataBase64: btoa(binary),
+        },
+        "回单已上传，客户可在订单详情下载。付款状态不受影响。",
+      );
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  async function downloadReceipt(orderId: string) {
+    try {
+      const file = await request<{
+        fileName: string;
+        contentType: string;
+        dataBase64: string;
+      }>(`orders/${orderId}/receipt-file`);
+      const binary = atob(file.dataBase64);
+      const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(
+        new Blob([bytes], { type: "application/octet-stream" }),
+      );
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = file.fileName;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }
+  function fundingPanel(o: Order) {
+    const funding = o.fundingInstruction;
+    return (
+      <>
+        <div className="deposit-number">
+          {money(funding?.amount ?? o.quote.totalDeposit)}{" "}
+          <span>{o.quote.sourceCurrency}</span>
+        </div>
+        <dl className="details">
+          <div>
+            <dt>入金网络</dt>
+            <dd>{funding?.network ?? "MOCK"} · 演示网络</dd>
+          </div>
+          <div>
+            <dt>入金指引</dt>
+            <dd>未接入托管服务 · 不可转账</dd>
+          </div>
+          <div>
+            <dt>到账状态</dt>
+            <dd>
+              <Badge status={o.depositStatus} />
+            </dd>
+          </div>
+          {(funding?.expiresAt ?? o.fundingExpiresAt) && (
+            <div>
+              <dt>演示入金截止</dt>
+              <dd>{date((funding?.expiresAt ?? o.fundingExpiresAt)!)}</dd>
+            </div>
+          )}
+        </dl>
+        <div className="demo-address">
+          <Lock size={19} />
+          <strong>MOCK ONLY · 无可付款地址或二维码</strong>
+        </div>
+        <Note>
+          当前未接入真实托管收币服务，请勿转账。正式接入后，这里会显示与订单绑定的地址、网络及所需金额。演示仅由管理员模拟到账。
+        </Note>
+      </>
     );
   }
   function orderDetail(admin = false) {
@@ -751,7 +843,7 @@ export default function Home() {
             </span>
           </div>
           <div>
-            <small>收款人到账金额</small>
+            <small>目标出款金额</small>
             <strong className="large-number">
               {symbol(o.quote.payoutCurrency)}
               {money(o.quote.payoutAmount)}
@@ -773,7 +865,7 @@ export default function Home() {
             <Badge status={o.payoutStatus} />
           </div>
           <div>
-            <small>独立对账</small>
+            <small>对账</small>
             <Badge status={o.reconciled ? "verified" : "pending"}>
               {o.reconciled ? "已核对一致" : "待核对"}
             </Badge>
@@ -785,13 +877,16 @@ export default function Home() {
           </Note>
         )}
         <FeeRows quote={o.quote} />
+        {!admin && o.depositStatus === "awaiting" && fundingPanel(o)}
         <dl className="details">
           <div>
             <dt>金额输入方式</dt>
             <dd>
-              {o.quote.amountMode === "total_deposit"
-                ? "支付总额（含费用）"
-                : "兑换本金（费用另加）"}
+              {o.quote.amountMode === "target_payout"
+                ? "目标出款金额"
+                : o.quote.amountMode === "total_deposit"
+                  ? "支付总额（含费用）"
+                  : "兑换本金（费用另加）"}
             </dd>
           </div>
           <div>
@@ -812,190 +907,154 @@ export default function Home() {
             </div>
             <Steps
               active={
-                o.payoutStatus === "draft"
-                  ? 1
-                  : o.payoutStatus === "awaiting_approval"
+                o.payoutStatus === "sent"
+                  ? 3
+                  : o.depositStatus === "confirmed"
                     ? 2
-                    : 3
+                    : 1
               }
-              labels={["经办提交", "独立复核", "记录结果"]}
+              labels={["确认入金", "线下付款", "确认与回单"]}
             />
+            <Note>
+              一个管理员即可处理。在线下 OTC
+              或银行完成付款后，登记结果；回单可稍后上传。这里所有订单与资金均为
+              MOCK 演示。
+            </Note>
             <div className="actions">
-              {maker && o.depositStatus === "awaiting" && (
+              {o.depositStatus === "awaiting" && (
                 <button
                   className="button"
                   disabled={locked}
                   onClick={() =>
                     openCommand({
-                      title: "生成签名 MOCK 入金事件",
-                      description:
-                        "服务端为该订单生成金额完全匹配的模拟入金事件并验签处理。不会提供真实地址或执行真实链上转账。过期订单会按服务端规则进入异常队列。",
+                      title: "模拟稳定币到账",
+                      description: "仅创建签名 MOCK 入金事件，不产生真实转账。",
                       path: `demo/orders/${o.id}/deposit`,
-                      button: "模拟准确入金",
-                      success:
-                        "MOCK 入金事件已由服务端处理，请核对最新入金状态。",
+                      button: "模拟到账",
+                      success: "模拟入金已处理。",
                     })
                   }
                 >
-                  模拟准确入金
+                  模拟到账
                 </button>
               )}
-              {finance &&
-                o.depositStatus === "confirmed" &&
-                o.conversionStatus === "pending" &&
+              {o.depositStatus === "confirmed" &&
+                ["draft", "failed", "approved", "awaiting_approval"].includes(
+                  o.payoutStatus,
+                ) &&
                 !blockedByRefund && (
-                  <button
-                    className="button"
-                    disabled={locked}
-                    onClick={() =>
-                      openCommand({
-                        title: "登记外部换汇结果",
-                        description:
-                          "记录已经发生的 MOCK 换汇分配，不执行交易。实际汇率必须与订单目标金额一致，服务端会验证。",
-                        path: `orders/${o.id}/conversion`,
-                        fields: [
-                          reference("fx_" + o.id),
-                          {
-                            key: "actualRate",
-                            label: "实际分配汇率",
-                            value: o.quote.customerRate,
+                  <>
+                    <button
+                      className="button"
+                      disabled={locked}
+                      onClick={() =>
+                        openCommand({
+                          title: "确认已付款",
+                          description:
+                            "请核对收款人和金额。此操作登记线下已完成的付款，不会发起转账。回单可以稍后补充。",
+                          path: `orders/${o.id}/manual-payout`,
+                          base: {
+                            idempotencyKey:
+                              "manual_" + o.id + "_" + (attempt?.id ?? "first"),
+                            outcome: "sent",
                           },
-                          evidence(
-                            "MOCK: externally allocated conversion evidence",
-                          ),
-                        ],
-                        button: "登记 MOCK 换汇",
-                        success: "外部换汇已登记，经办可以准备出款。",
-                      })
-                    }
-                  >
-                    登记外部换汇
-                  </button>
+                          fields: [
+                            {
+                              key: "actualAmount",
+                              label:
+                                "实际付款金额（" +
+                                o.quote.payoutCurrency +
+                                "）",
+                              value: o.quote.payoutAmount,
+                            },
+                            {
+                              key: "paidAt",
+                              label: "付款时间（ISO，含时区）",
+                              value: new Date().toISOString(),
+                            },
+                            reference(""),
+                            evidence(""),
+                          ],
+                          button: "确认付款记录",
+                          success: "付款结果已登记，可上传回单或稍后补充。",
+                        })
+                      }
+                    >
+                      确认已付款
+                    </button>
+                    <button
+                      className="button outline"
+                      disabled={locked}
+                      onClick={() =>
+                        openCommand({
+                          title: "标记付款结果待核实",
+                          description:
+                            "若渠道超时或不能确定是否已付款，请先标记待核实。系统会阻止重复付款和退款。",
+                          path: `orders/${o.id}/manual-payout`,
+                          base: {
+                            idempotencyKey:
+                              "unknown_" +
+                              o.id +
+                              "_" +
+                              (attempt?.id ?? "first"),
+                            outcome: "unknown",
+                          },
+                          fields: [evidence("")],
+                          button: "标记待核实",
+                          success: "已锁定重复付款，请先核实渠道结果。",
+                        })
+                      }
+                    >
+                      结果待核实
+                    </button>
+                  </>
                 )}
-              {maker &&
-                o.conversionStatus === "recorded" &&
-                ["draft", "failed"].includes(o.payoutStatus) &&
-                !blockedByRefund && (
-                  <button
-                    className="button"
-                    disabled={locked || o.depositStatus !== "confirmed"}
-                    onClick={() =>
-                      void mutate(
-                        `orders/${o.id}/attempts`,
-                        {
-                          idempotencyKey:
-                            "web_pay_" + o.id + "_" + (attempt?.id ?? "first"),
-                        },
-                        "出款申请已提交，请切换财务身份独立复核。",
-                      )
-                    }
-                  >
-                    经办提交出款
-                  </button>
-                )}
-              {finance && attempt?.state === "awaiting_approval" && (
-                <button
-                  className="button"
-                  disabled={locked || attempt.makerId === actor}
-                  onClick={() =>
-                    void mutate(
-                      `attempts/${attempt.id}/approve`,
-                      {},
-                      "独立复核通过，等待经办登记模拟渠道结果。",
-                    )
-                  }
-                >
-                  复核通过
-                </button>
-              )}
-              {maker && attempt?.state === "approved" && (
-                <>
-                  <button
-                    className="button"
-                    disabled={locked || attempt.makerId !== actor}
-                    onClick={() =>
-                      openCommand({
-                        title: "记录模拟渠道发送",
-                        description:
-                          "“已发送”仅代表登记渠道结果，仍需财务独立对账。此操作不会向银行或链上提交付款。",
-                        path: `attempts/${attempt.id}/record`,
-                        base: { outcome: "sent" },
-                        fields: [
-                          reference("mock_" + attempt.id),
-                          evidence("MOCK: portal success confirmation"),
-                        ],
-                        button: "登记已发送",
-                        success:
-                          "渠道发送结果已登记，等待独立对账；回单可后补。",
-                      })
-                    }
-                  >
-                    记录已发送
-                  </button>
-                  <button
-                    className="button outline"
-                    disabled={locked || attempt.makerId !== actor}
-                    onClick={() =>
-                      openCommand({
-                        title: "记录结果未知",
-                        description:
-                          "渠道超时或结果不明确。服务端会锁定重试与退款，必须先由财务核实实际结果。",
-                        path: `attempts/${attempt.id}/record`,
-                        base: { outcome: "unknown" },
-                        fields: [
-                          evidence("MOCK: portal timed out, result unknown"),
-                        ],
-                        button: "登记结果未知",
-                        success: "未知结果已记录，重试和退款已被服务端锁定。",
-                      })
-                    }
-                  >
-                    结果未知
-                  </button>
-                </>
-              )}
-              {finance && attempt?.state === "unknown" && (
+              {attempt?.state === "unknown" && (
                 <>
                   <button
                     className="button"
                     disabled={locked}
                     onClick={() =>
                       openCommand({
-                        title: "独立核实已发送",
+                        title: "核实已付款",
                         description:
-                          "请提供 MOCK 查询结果和渠道参考号。核实后仍需独立对账。",
+                          "根据渠道查询结果登记参考号及证据，再核对实际金额。",
                         path: `attempts/${attempt.id}/resolve`,
                         base: { outcome: "sent" },
                         fields: [
-                          reference("mock_" + attempt.id),
-                          evidence(
-                            "MOCK: provider independently confirms transfer exists",
-                          ),
+                          {
+                            key: "actualAmount",
+                            label:
+                              "实际付款金额（" + o.quote.payoutCurrency + "）",
+                            value: o.quote.payoutAmount,
+                          },
+                          {
+                            key: "paidAt",
+                            label: "付款时间（ISO，含时区）",
+                            value: new Date().toISOString(),
+                          },
+                          reference(""),
+                          evidence(""),
                         ],
-                        button: "核实已发送",
-                        success: "已独立核实发送结果，等待对账。",
+                        button: "确认查询结果",
+                        success: "付款结果已核实，请核对渠道金额。",
                       })
                     }
                   >
-                    核实已发送
+                    核实已付款
                   </button>
                   <button
                     className="button outline"
                     disabled={locked}
                     onClick={() =>
                       openCommand({
-                        title: "独立核实未付款",
-                        description:
-                          "仅在查询证据确认未发生转账时解除未知状态。后续重试需要重新经办和复核。",
+                        title: "核实未付款",
+                        description: "仅在渠道明确确认未发生付款时解除锁定。",
                         path: `attempts/${attempt.id}/resolve`,
                         base: { outcome: "failed" },
-                        fields: [
-                          evidence(
-                            "MOCK: provider independently confirms no transfer exists",
-                          ),
-                        ],
-                        button: "核实未付款",
-                        success: "已核实未付款，经办可创建新出款申请。",
+                        fields: [evidence("")],
+                        button: "确认未付款",
+                        success: "已核实未付款，可以重新处理。",
                       })
                     }
                   >
@@ -1003,71 +1062,44 @@ export default function Home() {
                   </button>
                 </>
               )}
-              {finance && o.payoutStatus === "sent" && !o.reconciled && (
+              {o.payoutStatus === "sent" && !o.reconciled && (
                 <button
-                  className="button"
+                  className="button outline"
                   disabled={locked}
                   onClick={() =>
                     openCommand({
-                      title: "核对渠道记录",
+                      title: "核对付款记录",
                       description:
-                        "服务端核对渠道参考号与实际金额；不一致会进入差异队列。对账通过才可产生符合规则的佣金。",
+                        "核对实际金额和渠道参考号。不一致会进入差异队列。",
                       path: `orders/${o.id}/reconcile`,
                       fields: [
                         reference(attempt?.providerReference ?? ""),
                         {
                           key: "actualAmount",
-                          label:
-                            "渠道实际金额（" + o.quote.payoutCurrency + "）",
+                          label: "实际金额（" + o.quote.payoutCurrency + "）",
                           value: o.quote.payoutAmount,
                         },
-                        evidence(
-                          "MOCK: provider statement independently matched",
-                        ),
+                        evidence(""),
                       ],
-                      button: "提交独立对账",
-                      success: "对账请求已处理，请核对最新订单与差异状态。",
+                      button: "确认核对",
+                      success: "核对结果已保存。",
                     })
                   }
                 >
-                  核对渠道记录
+                  核对付款记录
                 </button>
               )}
             </div>
-            {o.depositStatus === "awaiting" && (
-              <Note>
-                等待签名验证的 MOCK 入金事件。浏览器不持有 webhook
-                签名密钥，也不提供充值地址。
-              </Note>
-            )}
-            {o.depositStatus === "confirmed" &&
-              o.conversionStatus === "pending" &&
-              !blockedByRefund &&
-              !finance && (
-                <p className="muted small">
-                  下一步：切换财务身份，先登记外部换汇分配。
-                </p>
-              )}
-            {o.payoutStatus === "awaiting_approval" && !finance && (
-              <p className="muted small">
-                下一步：切换财务复核 B 或 C，审核经办提交的出款。
-              </p>
-            )}
-            {o.payoutStatus === "approved" && !maker && (
-              <p className="muted small">
-                下一步：切换运营经办 A，登记模拟渠道结果。
-              </p>
-            )}
             {o.payoutStatus === "sent" && (
-              <span className="success-text">
+              <p className="success-text">
                 <CheckCircle size={18} />
                 {o.reconciled
-                  ? "已发送并独立对账一致"
-                  : "发送结果已登记，仍待独立对账"}
-              </span>
+                  ? "付款已登记，金额已核对"
+                  : "付款已登记，待核对金额"}
+              </p>
             )}
             <p className="muted small">
-              权限、状态迁移、幂等与经办复核分离均由服务端强制校验。
+              系统保留操作记录、金额校验与防重复处理。无需切换经办或复核人员。
             </p>
           </>
         ) : (
@@ -1084,7 +1116,7 @@ export default function Home() {
               className="button text"
               disabled={busy}
               onClick={() => {
-                changeActor("maker-demo");
+                changeActor("admin-demo");
                 setSelected(o.id);
               }}
             >
@@ -1094,55 +1126,52 @@ export default function Home() {
         )}
         {o.payoutStatus === "unknown" && (
           <Note danger>
-            出款结果未知。禁止重复出款与退款，须由财务提供独立查询依据。
+            出款结果未知。禁止重复出款与退款，须先核实渠道查询结果。
           </Note>
         )}
         <div className="receipt-row">
           <FileText size={30} />
           <div>
-            <strong>客户回单 · 元数据</strong>
+            <strong>付款截图 / 银行水单</strong>
             <p>
               {o.receiptStatus === "none"
-                ? "发送后可补录，不改变出款状态"
-                : "已登记私有对象引用，尚未接入实际文件存储"}
+                ? "付款确认后可上传，也可稍后补充"
+                : o.receiptFileAvailable
+                  ? "回单文件已上传，可下载查看"
+                  : "仅有回单记录，文件待管理员补充"}
             </p>
           </div>
-          {admin && (maker || finance) ? (
+          {admin && (
+            <label className="button outline">
+              <Upload size={16} />
+              上传回单
+              <input
+                type="file"
+                accept="image/png,image/jpeg,application/pdf"
+                disabled={locked || o.payoutStatus !== "sent"}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void uploadReceipt(o.id, file);
+                }}
+              />
+            </label>
+          )}
+          {o.receiptFileAvailable && (
             <button
               className="button outline"
-              disabled={
-                locked ||
-                o.payoutStatus !== "sent" ||
-                o.receiptStatus !== "none"
-              }
-              onClick={() =>
-                openCommand({
-                  title: "登记回单元数据",
-                  description:
-                    "这里只保存一个 MOCK 私有对象引用，不上传或生成文件，不构成付款凭证。实际文件上传和下载尚未接入。",
-                  path: `orders/${o.id}/receipt-metadata`,
-                  fields: [
-                    {
-                      key: "objectKey",
-                      label: "MOCK 私有对象引用",
-                      value: "receipts/" + o.id + "/mock-receipt.pdf",
-                    },
-                  ],
-                  button: "登记元数据",
-                  success:
-                    "回单元数据已登记；没有上传实际文件，出款状态未改变。",
-                })
-              }
+              disabled={locked}
+              onClick={() => void downloadReceipt(o.id)}
             >
-              <Upload size={16} />
-              {o.receiptStatus === "none" ? "登记元数据" : "已登记"}
+              <Download size={16} />
+              下载回单
             </button>
-          ) : (
-            <Badge status={o.receiptStatus}>
-              {o.receiptStatus === "none" ? "等待平台补充" : "仅元数据"}
-            </Badge>
           )}
         </div>
+        <p className="muted small">
+          演示上传仅支持 PNG、JPEG、PDF，最大 64
+          KB。仅使用虚构文件；文件未经安全扫描，演示会话失效后不可恢复。
+        </p>
         <div className="ruleline" />
         <div className="card-heading">
           <h3>退款记录</h3>
@@ -1161,7 +1190,7 @@ export default function Home() {
                         ? "申请服务费退款记录"
                         : "申请换汇前本金退款",
                     description:
-                      "仅创建 MOCK 退款预留记录，仍需独立审批与经办登记。服务端校验累计金额上限，不执行实际退款。",
+                      "仅创建 MOCK 退款预留记录，须再次确认并登记结果。服务端校验累计金额上限，不执行实际退款。",
                     path: `orders/${o.id}/refunds`,
                     base: {
                       idempotencyKey: "refund_" + uid(),
@@ -1176,7 +1205,7 @@ export default function Home() {
                       },
                     ],
                     button: "提交退款预留",
-                    success: "退款申请已预留，等待财务独立审批。",
+                    success: "退款申请已预留，等待管理员确认。",
                   })
                 }
               >
@@ -1200,12 +1229,12 @@ export default function Home() {
               {finance && r.status === "requested" && (
                 <button
                   className="button outline"
-                  disabled={locked || r.makerId === actor}
+                  disabled={locked}
                   onClick={() =>
                     void mutate(
                       `refunds/${r.id}/approve`,
                       {},
-                      "退款已独立审批，等待原经办登记结果。",
+                      "退款已确认，请登记结果。",
                     )
                   }
                 >
@@ -1215,7 +1244,7 @@ export default function Home() {
               {maker && r.status === "approved" && (
                 <button
                   className="button outline"
-                  disabled={locked || r.makerId !== actor}
+                  disabled={locked}
                   onClick={() =>
                     openCommand({
                       title: "登记模拟退款结果",
@@ -1341,16 +1370,16 @@ export default function Home() {
                         <div className="actions table-actions">
                           <button
                             className="button outline"
-                            disabled={locked || s.makerId === actor}
+                            disabled={locked}
                             onClick={() =>
                               void mutate(
                                 `settlements/${s.id}/approve`,
                                 {},
-                                "结算单已独立批准。本系统不执行或记录实际佣金付款。",
+                                "结算单已批准。本系统不执行或记录实际佣金付款。",
                               )
                             }
                           >
-                            独立批准
+                            批准
                           </button>
                           <button
                             className="button text"
@@ -1388,7 +1417,7 @@ export default function Home() {
         </div>
         {!settlementRows.length && (
           <Empty title="尚无结算单">
-            财务可为已关闭月份的合格佣金生成草稿。伙伴只读查看。
+            管理员可为已关闭月份的合格佣金生成草稿。伙伴只读查看。
           </Empty>
         )}
         <Note>
@@ -1442,7 +1471,7 @@ export default function Home() {
         </div>
         {!commissionRows.length && (
           <Empty title="尚无佣金记录">
-            关联订单发送并通过独立对账后，才会由服务端按规则计提。
+            关联订单发送并通过对账后，才会由服务端按规则计提。
           </Empty>
         )}
         <Note>
@@ -1616,10 +1645,9 @@ export default function Home() {
             <div className="card support">
               <h2>从这里开始体验</h2>
               <p>
-                客户：选择支付总额或兑换本金 → 核对服务端报价 →
-                创建订单。管理员：创建 MOCK 场景 → 财务登记换汇 → 经办提交 →
-                财务复核 → 经办记录结果 →
-                财务对账。伙伴：查看同一服务端产生的佣金与观察期。
+                客户：输入目标法币金额或稳定币总额 → 核对报价 →
+                创建订单与查看入金指引。管理员：确认入金 → 线下付款后确认 →
+                上传回单 → 核对记录。伙伴：查看同一服务端产生的佣金与观察期。
               </p>
               <Note>
                 只使用虚构资料。所有资金相关按钮仅调用 MOCK
@@ -1704,6 +1732,19 @@ export default function Home() {
                               <button
                                 type="button"
                                 disabled={busy}
+                                aria-pressed={amountMode === "target_payout"}
+                                className={
+                                  amountMode === "target_payout" ? "active" : ""
+                                }
+                                onClick={() =>
+                                  editForm(() => setAmountMode("target_payout"))
+                                }
+                              >
+                                目标出款金额
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
                                 aria-pressed={amountMode === "total_deposit"}
                                 className={
                                   amountMode === "total_deposit" ? "active" : ""
@@ -1714,32 +1755,26 @@ export default function Home() {
                               >
                                 支付总额（含费用）
                               </button>
-                              <button
-                                type="button"
-                                disabled={busy}
-                                aria-pressed={amountMode === "principal"}
-                                className={
-                                  amountMode === "principal" ? "active" : ""
-                                }
-                                onClick={() =>
-                                  editForm(() => setAmountMode("principal"))
-                                }
-                              >
-                                兑换本金（费用另加）
-                              </button>
                             </div>
                             <label>
                               {amountMode === "total_deposit"
                                 ? "支付总额（含费用）"
-                                : "兑换本金（费用另加）"}
+                                : "目标出款金额"}
                               <div className="input-unit amount">
                                 <input
                                   aria-label={
                                     amountMode === "total_deposit"
                                       ? "支付总额（含费用）"
-                                      : "兑换本金（费用另加）"
+                                      : "目标出款金额"
                                   }
                                   inputMode="decimal"
+                                  placeholder={
+                                    amountMode === "target_payout"
+                                      ? market === "CNY"
+                                        ? "例如 100000 人民币"
+                                        : "例如 50000 美元"
+                                      : "例如 1000 USDT"
+                                  }
                                   value={enteredAmount}
                                   disabled={busy}
                                   onChange={(e) =>
@@ -1749,7 +1784,44 @@ export default function Home() {
                                   }
                                 />
                                 <select
-                                  aria-label="稳定币"
+                                  aria-label={
+                                    amountMode === "target_payout"
+                                      ? "出款币种"
+                                      : "稳定币"
+                                  }
+                                  value={
+                                    amountMode === "target_payout"
+                                      ? market
+                                      : asset
+                                  }
+                                  disabled={busy}
+                                  onChange={(e) =>
+                                    editForm(() =>
+                                      amountMode === "target_payout"
+                                        ? setMarket(e.target.value)
+                                        : setAsset(e.target.value),
+                                    )
+                                  }
+                                >
+                                  {amountMode === "target_payout" ? (
+                                    <>
+                                      <option>CNY</option>
+                                      <option>USD</option>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <option>USDT</option>
+                                      <option>USDC</option>
+                                    </>
+                                  )}
+                                </select>
+                              </div>
+                            </label>
+                            <div className="form-grid">
+                              <label>
+                                支付稳定币
+                                <select
+                                  aria-label="支付稳定币"
                                   value={asset}
                                   disabled={busy}
                                   onChange={(e) =>
@@ -1759,9 +1831,7 @@ export default function Home() {
                                   <option>USDT</option>
                                   <option>USDC</option>
                                 </select>
-                              </div>
-                            </label>
-                            <div className="form-grid">
+                              </label>
                               <label>
                                 网络
                                 <select aria-label="网络" value="MOCK" disabled>
@@ -1824,7 +1894,7 @@ export default function Home() {
                                     ? recipient.accountMasked +
                                       " · " +
                                       recipient.currency
-                                    : "请先新增并由财务审核白名单"}
+                                    : "请先新增并由管理员审核白名单"}
                                 </p>
                               </div>
                               <ShieldCheck size={22} className="teal" />
@@ -1833,7 +1903,7 @@ export default function Home() {
                               <Note>
                                 {amountMode === "total_deposit"
                                   ? "支付总额已包含服务费与通道费，扣除费用后的本金用于兑换。"
-                                  : "手续费在本金之外另收。应入金总额 = 兑换本金 + 平台服务费 + 通道费。"}
+                                  : "输入希望支付的法币金额，服务端反算应转入的稳定币总额（含费用）。收款银行如另收费，以实际渠道规则为准。"}
                               </Note>
                             </div>
                             <p className="subtle">
@@ -1842,7 +1912,7 @@ export default function Home() {
                             </p>
                             <div className="bottom-note">
                               <FileText size={20} />
-                              回单元数据可后补，实际文件存储尚未接入
+                              付款截图或水单可后补，不阻塞订单付款
                             </div>
                           </>
                         ) : (
@@ -2092,7 +2162,7 @@ export default function Home() {
                               <Info size={16} />
                               {amountMode === "total_deposit"
                                 ? "费用已包含在支付总额内"
-                                : "本金用于兑换，手续费另加"}
+                                : "已按目标法币金额反算稳定币总额"}
                             </p>
                             <button
                               className="button full big"
@@ -2207,7 +2277,7 @@ export default function Home() {
                               <dd>
                                 {quote.amountMode === "total_deposit"
                                   ? "支付总额（含费用）"
-                                  : "兑换本金（费用另加）"}
+                                  : "目标出款金额"}
                               </dd>
                             </div>
                             <div>
@@ -2288,18 +2358,7 @@ export default function Home() {
                         </div>
                         <h2>等待稳定币到账</h2>
                         <p>订单 {shortId(order.id)} · MOCK 网络</p>
-                        <div className="deposit-number">
-                          {money(order.quote.totalDeposit)}{" "}
-                          <span>{order.quote.sourceCurrency}</span>
-                        </div>
-                        <div className="demo-address">
-                          <Lock size={19} />
-                          <strong>MOCK ONLY · 无真实充值地址</strong>
-                        </div>
-                        <Note>
-                          不要向任何地址转账。该订单等待签名验证的 MOCK
-                          入金事件。管理员可创建独立的演示场景验证出款流程。
-                        </Note>
+                        {fundingPanel(order)}
                         <div className="actions">
                           <button
                             className="button"
@@ -2332,7 +2391,7 @@ export default function Home() {
                             </dd>
                           </div>
                           <div>
-                            <dt>回单元数据</dt>
+                            <dt>付款回单</dt>
                             <dd>
                               <Badge status={order.receiptStatus} />
                             </dd>
@@ -2360,7 +2419,7 @@ export default function Home() {
                 <>
                   <div className="section-actions">
                     <Note>
-                      只显示当前身份有权限读取的账户。新增项必须经过财务独立审核。
+                      只显示当前身份有权限读取的账户。新增项必须经过管理员审核。
                     </Note>
                     {(role === "customer" || maker) && (
                       <button
@@ -2373,7 +2432,7 @@ export default function Home() {
                           openCommand({
                             title: "新增 MOCK 白名单收款人",
                             description:
-                              "创建中国大陆 CNY 路线的虚构账户（尾号 8888）。仅使用虚构名称和账户引用，不收集银行账号。财务独立审核通过后才可报价。",
+                              "创建中国大陆 CNY 路线的虚构账户（尾号 8888）。仅使用虚构名称和账户引用，不收集银行账号。管理员审核通过后才可报价。",
                             path: "beneficiaries",
                             base: {
                               country: "CN",
@@ -2403,7 +2462,7 @@ export default function Home() {
                               },
                             ],
                             button: "提交白名单审核",
-                            success: "收款人已保存为待审核，须由财务独立审批。",
+                            success: "收款人已保存为待审核，须由管理员确认。",
                           })
                         }
                       >
@@ -2438,17 +2497,17 @@ export default function Home() {
                                 void mutate(
                                   `beneficiaries/${b.id}/approve`,
                                   {},
-                                  "白名单已通过服务端独立审核。",
+                                  "白名单已通过服务端管理员审核。",
                                 )
                               }
                             >
-                              独立审核通过
+                              管理员审核通过
                             </button>
                           ) : (
                             <span className="muted small">
                               {b.status === "approved"
                                 ? "已通过审核，可用于报价"
-                                : "等待财务身份独立审核"}
+                                : "等待管理员审核"}
                             </span>
                           )}
                         </div>
@@ -2493,7 +2552,7 @@ export default function Home() {
                               },
                             ],
                             button: "创建待审核客户",
-                            success: "演示客户已创建，等待财务审核。",
+                            success: "演示客户已创建，等待管理员审核。",
                           })
                         }
                       >
@@ -2641,12 +2700,12 @@ export default function Home() {
                       {pricingPanel()}
                       <div className="card mini-note">
                         <ShieldCheck size={24} />
-                        <h3>经办与复核分离</h3>
+                        <h3>统一商家工作台</h3>
                         <p>
-                          先登记换汇分配，再由经办提交。独立财务复核后，原经办记录渠道结果。未知结果先核实，禁止重复付款。
+                          管理员线下付款后直接确认结果，上传截图或水单。未知结果先核实，禁止重复付款。
                         </p>
                         <Note>
-                          所有操作受服务端控制。角色切换仅是隔离演示入口。
+                          所有操作受服务端控制。客户、商家和伙伴入口仅用于演示，不能替代正式登录。
                         </Note>
                       </div>
                     </aside>
@@ -2705,7 +2764,7 @@ export default function Home() {
                   <div className="stat-grid">
                     <div className="card stat">
                       <div>
-                        <span>待独立核对</span>
+                        <span>待核对</span>
                         <strong>
                           {
                             orders.filter(
@@ -2806,7 +2865,7 @@ export default function Home() {
                       <Empty title="暂无可见差异" />
                     )}
                     <Note>
-                      对账不会改写客户报价。要核对某笔订单，请在出款工作台选择该订单并使用财务身份。
+                      对账不会改写客户报价。要核对某笔订单，请在出款工作台选择该订单直接核对付款记录。
                     </Note>
                   </div>
                   {orderTable()}
@@ -2836,9 +2895,7 @@ export default function Home() {
                     </button>
                   </div>
                   {!finance && actor !== "auditor-demo" ? (
-                    <Note>
-                      审计日志仅向财务与审计身份开放，请切换角色查看。
-                    </Note>
+                    <Note>操作记录仅向商家管理员开放。</Note>
                   ) : auditError ? (
                     <Note danger>{auditError}</Note>
                   ) : audits === null ? (
@@ -2875,7 +2932,7 @@ export default function Home() {
                           </div>
                           <div>
                             <h2>每笔服务费，清晰可查</h2>
-                            <p>单层推荐 · 独立对账后计提 · 服务端观察期</p>
+                            <p>单层推荐 · 对账后计提 · 服务端观察期</p>
                           </div>
                           <div className="partner-banner-note">
                             <ShieldCheck size={20} />
@@ -3053,7 +3110,7 @@ export default function Home() {
                     <section className="card settlement-bar">
                       <div>
                         <h2>月度结算</h2>
-                        <p>由财务生成草稿，另一位财务独立批准</p>
+                        <p>管理员生成草稿并确认结算记录</p>
                       </div>
                       <div className="actions">
                         <button
@@ -3113,8 +3170,7 @@ export default function Home() {
                                 },
                               ],
                               button: "生成服务端草稿",
-                              success:
-                                "月度结算草稿已生成，请另一位财务独立批准。",
+                              success: "月度结算草稿已生成，请核对后确认。",
                             });
                           }}
                         >
@@ -3123,7 +3179,7 @@ export default function Home() {
                       )}
                     </div>
                     {!finance && actor !== "auditor-demo" ? (
-                      <Note>佣金明细与结算记录仅向财务、审计身份开放。</Note>
+                      <Note>佣金明细与结算记录仅向商家管理员开放。</Note>
                     ) : (
                       <>
                         {settlementsTable()}

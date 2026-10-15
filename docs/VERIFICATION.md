@@ -1,8 +1,8 @@
 # Verification record
 
-Date: 2026-10-13. This record describes local mock tests, not a production launch certification.
+The baseline section below is historical (2026-10-13). It is not proof that the 2026-10-15 single-admin changes passed. Current-release results must be appended after final testing/review; neither baseline nor new mock tests certify production readiness.
 
-## Passed
+## Historical passed checks (2026-10-13)
 
 - Node.js 24.19.0 / npm 11.9.0 install with lockfile
 - `npm run typecheck`: backend/domain/scripts strict TypeScript check
@@ -40,7 +40,7 @@ The integrated artifact was also published behind the unchanged owner-only priva
 - Docker image or Docker Compose startup: Docker is unavailable in this executor
 - Native/networked PostgreSQL, multiple simultaneous database sessions, failover, migration/restore drills and real role privileges
 - Redis/BullMQ runtime connectivity, retry/failure injection and delivery under real process crashes
-- Full browser/device matrix and formal visual acceptance; cloud Chrome at 405/391 CSS-pixel widths passed the integrated flow, but actual Android devices, touch gestures and virtual keyboard behavior are not certified. See `qa/integrated-mobile/VERIFICATION.md`.
+- Full browser/device matrix and formal visual acceptance; mobile browser interaction for the newly integrated client has not been verified
 - Real identity/MFA, KYC/KYB, custody, chain confirmations/reorgs, conversion, fiat provider, refunds, statement polling or commission payments
 - Private object upload/download, malware scan and content/ownership verification
 - Load, penetration, operational, financial and legal/compliance acceptance
@@ -51,6 +51,6 @@ The review found and reproduced: changed economics on reused journal keys, inval
 
 The app's runtime adapter and the normalized reference design remain explicitly separate. Tests on one are not evidence that the other has been wired into the API. Read ARCHITECTURE.md before extending persistence.
 
-## Responsive phone-width follow-through
+## 2026-10-15 single-admin revision
 
-Cloud Chrome at 405/391 CSS-pixel widths passed the integrated customer → maker/checker → unknown-result resolution → receipt/reconciliation → partner → reset flow against the final static client and Worker artifact. Seven screenshots and the detailed method are recorded in [`qa/integrated-mobile/VERIFICATION.md`](qa/integrated-mobile/VERIFICATION.md). Android hardware, touch and virtual keyboard checks remain unverified.
+Independent review reported 53 core/API/web tests, 34 Sites tests, 63 reference SQL assertions, backend TypeScript and Sites TypeScript passing against the revised source. Coverage includes single-admin operation, target-fiat quote math, separate funding expiry, unknown-result protection, duplicate confirmation, receipt authorization and bounded mock file storage. Publication/build verification and hosted browser acceptance are separate release gates; they are not established by these unit/API checks alone.

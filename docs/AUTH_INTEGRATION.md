@@ -10,10 +10,10 @@ The current app is an isolated mock demo. The role switch chooses a named server
 
 1. Implement the provider adapter using the provider's maintained SDK or reviewed OIDC/JWT verification. Require expected issuer and audience, allowed algorithms, signature validation, token expiration and key rotation. Never trust a decoded-but-unverified JWT.
 2. Bind the verified issuer + subject to a server-owned account/actor. Resolve roles, customer ownership, suspension and partner attribution from trusted storage. Do not accept role/customer/partner IDs from headers, form fields or arbitrary token claims.
-3. Require verified staff MFA and step-up/recent authentication for payout/refund/settlement review. Separate human identities must remain separate even if one person can select multiple demo roles.
+3. Require verified staff MFA and step-up/recent authentication for payout/refund/settlement review. The approved product uses one merchant administrator for the workflow. Resolve that role server-side; do not require demo-role switching. Preserve explicit administrator attestation provenance, audit and secondary confirmation for consequential operations.
 4. Implement session logout, revocation, refresh, short lifetimes, abuse limits and auditable actor/session IDs. Decide token storage and CSRF strategy based on browser session design.
 5. Replace and remove the demo guard from production modules. Do not weaken `assertSafeRuntime` until independent identity, authorization and deployment acceptance passes.
-6. Test tenant isolation, cross-account resource IDs, suspended users, wrong audience/issuer, expired tokens, key rotation, revoked sessions, missing MFA and privilege changes. Repeat domain maker/checker checks with real principals.
+6. Test tenant isolation, cross-account resource IDs, suspended users, wrong audience/issuer, expired tokens, key rotation, revoked sessions, missing MFA and privilege changes. Repeat merchant-admin permissions, customer isolation and legacy maker/checker checks with real principals.
 
 ## Can proceed locally without choosing a provider
 

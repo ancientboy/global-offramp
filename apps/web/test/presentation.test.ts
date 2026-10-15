@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { money, csvText, percentage, canResetDemoSession } from "../app/models";
+import {
+  money,
+  csvText,
+  percentage,
+  canResetDemoSession,
+  quoteAmountInput,
+  validQuoteAmount,
+} from "../app/models";
 
 test("money display preserves server decimal precision without numeric coercion", () => {
   assert.equal(money("1007.000000"), "1,007.00");
@@ -62,5 +69,45 @@ test("session reset control is visible only to maker in hosted session memory", 
     "partner-demo",
   ] as const) {
     assert.equal(canResetDemoSession(actor, "session-memory"), false);
+  }
+});
+
+test("merchant admin can reset the isolated demo session", () => {
+  assert.equal(canResetDemoSession("admin-demo", "session-memory"), true);
+  assert.equal(canResetDemoSession("admin-demo", "postgres"), false);
+});
+
+test("target fiat quote payload never mislabels fiat as stablecoin principal", () => {
+  assert.deepEqual(quoteAmountInput("target_payout", "100000.00", "CNY"), {
+    amountMode: "target_payout",
+    targetAmount: "100000.00",
+    payoutCurrency: "CNY",
+  });
+  assert.deepEqual(quoteAmountInput("target_payout", "50000.00", "USD"), {
+    amountMode: "target_payout",
+    targetAmount: "50000.00",
+    payoutCurrency: "USD",
+  });
+  assert.deepEqual(quoteAmountInput("total_deposit", "1000.123456", "CNY"), {
+    amountMode: "total_deposit",
+    sourceAmount: "1000.123456",
+  });
+});
+
+test("fiat accepts two decimals, stablecoin six, and invalid or zero amounts cannot quote", () => {
+  assert.equal(validQuoteAmount("target_payout", "0.01"), true);
+  assert.equal(validQuoteAmount("target_payout", "0.001"), false);
+  assert.equal(validQuoteAmount("total_deposit", "0.000001"), true);
+  for (const value of [
+    "0",
+    "0.00",
+    "1e5",
+    "-1",
+    "NaN",
+    "100,000",
+    "1.1234567",
+  ]) {
+    assert.equal(validQuoteAmount("target_payout", value), false);
+    assert.equal(validQuoteAmount("total_deposit", value), false);
   }
 });

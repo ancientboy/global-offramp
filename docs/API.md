@@ -1,6 +1,6 @@
 # API contract (MOCK only)
 
-Prefix `/api`. Local development uses `x-demo-actor` selecting one server-side fixture: `customer-demo`, `company-demo`, `maker-demo`, `checker-demo`, `checker-two-demo`, `auditor-demo`, `partner-demo`. Do not deploy this header authentication. No arbitrary actor/role headers are trusted. Production bootstrap fails closed.
+Prefix `/api`. Local development uses `x-demo-actor` selecting one server-side fixture: `customer-demo`, `company-demo`, `admin-demo` (merchant_admin), `maker-demo`, `checker-demo`, `checker-two-demo`, `auditor-demo`, `partner-demo`. Do not deploy this header authentication. No arbitrary actor/role headers are trusted. Production bootstrap fails closed.
 
 All monetary inputs and outputs are JSON strings. Timestamps are ISO-8601 UTC. Most commands return the updated record; errors return `error` plus a safe message. Unknown input fields are rejected by strict schemas for financial DTOs.
 
@@ -13,7 +13,7 @@ All monetary inputs and outputs are JSON strings. Timestamps are ISO-8601 UTC. M
 | POST `/customers/:id/review`        | Approve/suspend                              | finance: status                                                                       |
 | POST `/beneficiaries`               | Create pending whitelist                     | customer/operations: customerId, name, country, currency, accountToken, accountMasked |
 | POST `/beneficiaries/:id/approve`   | Independent review                           | finance                                                                               |
-| POST `/quotes`                      | Immutable expiring quote                     | customer/operations: customerId, beneficiaryId, sourceCurrency, sourceAmount, amountMode? |
+| POST `/quotes`                      | Immutable expiring quote                     | customer/operations: customerId, beneficiaryId, sourceCurrency, sourceAmount OR targetAmount, amountMode? |
 | POST `/orders`                      | Accept quote                                 | quoteId, clientOrderId                                                                |
 | POST `/orders/:id/conversion`       | Record external allocation                   | finance: providerReference, actualRate, evidence                                      |
 | POST `/orders/:id/attempts`         | Reserve payout attempt                       | operations: idempotencyKey                                                            |
@@ -51,7 +51,7 @@ Only `MOCK` network is accepted. Event identity and transaction identity dedupe 
 
 CSV columns: `clientItemId,beneficiaryId,sourceCurrency,sourceAmount`. Up to 100 data rows and 100KB. Client item IDs are unique across the customer's batches. Import returns per-item `valid` or `error`; submit promotes valid records to `created` once. Invalid rows are not paid or ordered. Batch status is derived from children; no atomic “all successful” claim is made.
 
-Payout `sent` means recorded portal success pending independent reconciliation, not final proof. Customer receipt file state is separate. Commission eligibility derives from independently reconciled sent orders; an uploaded receipt by itself never creates commission.
+Payout `sent` means recorded portal success pending recorded reconciliation, not final proof. Customer receipt file state is separate. Commission eligibility derives from reconciled sent orders (single-admin attestation is labelled as such); an uploaded receipt by itself never creates commission.
 
 ## Unified frontend demonstration endpoints
 
@@ -68,3 +68,17 @@ Dashboard additions: customers see only their batches/items; operations/finance/
 ## Hosted private mock adapter
 
 The hosted adapter shares domain logic but owns a separate ephemeral per-cookie MemoryStore. It does not expose external webhook routes. GET health is stateless; GET dashboard alone can create a synthetic session. Subsequent commands require that cookie, a fixed fixture actor and a matching Origin. Expiry returns SESSION_EXPIRED rather than silently replaying a command into a new session. See sites/README.md for reset and limits.
+
+## Current single-administrator contract (2026-10-15)
+
+`admin-demo` selects the server-owned `merchant_admin` fixture. It can complete the operational workflow without identity switching. Legacy maker/checker routes above remain for compatibility and their original role separation still applies to those legacy roles; the merchant administrator has explicit permissions for its unified flow. This is not production authentication.
+
+- POST `/orders/:id/manual-payout`: administrator only. Body `{idempotencyKey, outcome: "sent" | "unknown", actualAmount?, paidAt?, providerReference?, evidence}`. Sent requires exact order fiat amount, ISO timestamp after order creation (at most 60 seconds future tolerance), and unique reference. Confirmed deposit, approved customer/beneficiary and no open discrepancy/principal refund are required. It records external allocation as an administrator attestation if pending; it never performs an exchange or payment. Changed payload on reused key conflicts. Sent or unresolved unknown blocks another payout.
+- POST `/orders/:id/receipt-file`: `{fileName, contentType, dataBase64}`. Only after sent. PNG/JPEG/PDF, at most 2,097,152 decoded bytes; canonical base64, extension and magic-byte matching required. Replacement is audited. Upload is optional and does not reconcile or bank-verify payment.
+- GET `/orders/:id/receipt-file`: returns mock file metadata/base64 for authorized order readers, not a public URL. Customer ownership is enforced; normal order/dashboard projections omit file bytes. `scanStatus: not_scanned` is intentional. Synthetic attachments only.
+- POST `/quotes` with `amountMode: "target_payout"` requires `targetAmount`, accepts an optional matching `payoutCurrency` (CNY/USD), and forbids `sourceAmount`. Other modes require sourceAmount and forbid targetAmount. Target currency comes from the selected approved beneficiary. Reverse calculation rounds stablecoin principal up, then validates forward payout exactly; fees remain separate. The snapshot includes requested target and input currency.
+- New orders contain `fundingExpiresAt` (30 minutes after creation) and `fundingInstruction`: mock, nonpayable, status mock_nonpayable, reference, network MOCK, address null, currency, amount, expiresAt. Quote expiry gates acceptance, not the already accepted order's funding deadline. No live funding provider or blockchain ingestion is implemented.
+
+Single-admin payment/reconciliation records are `admin_attestation`, not independent bank verification. Commission eligibility still requires reconciliation; uploading a receipt alone is insufficient. On Sites all attachments and business state are volatile session memory, with a maximum 30-minute session lifetime and possible earlier loss.
+
+Unknown-to-sent resolution through `/attempts/:id/resolve` also requires exact actualAmount and paidAt. Receipt metadata cannot replace an already uploaded file. Sites limits: 3 MiB JSON body, 4 MiB state per session, at most 4 volatile sessions per isolate.

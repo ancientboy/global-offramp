@@ -535,3 +535,125 @@ test("validation and unexpected errors never expose request data or implementati
   assert.equal(errorBody.error, "INTERNAL_ERROR");
   assert.ok(!JSON.stringify(errorBody).includes("provider-secret-and-stack"));
 });
+
+test("merchant admin completes target quote, payment and scoped demo receipt without role switches", async () => {
+  const worker = createPreviewWorker();
+  const { cookie } = await bootstrap(worker, "admin-demo");
+  const common = { cookie, actor: "admin-demo" };
+  const q = await call(worker, "/api/quotes", {
+    ...common,
+    body: {
+      customerId: "customer-1",
+      beneficiaryId: "beneficiary-cn",
+      sourceCurrency: "USDT",
+      amountMode: "target_payout",
+      targetAmount: "100000",
+      payoutCurrency: "CNY",
+    },
+  });
+  assert.equal(q.response.status, 200);
+  assert.equal(q.body.totalDeposit, "13895.888889");
+  const created = await call(worker, "/api/orders", {
+    ...common,
+    body: { quoteId: q.body.id, clientOrderId: "merchant-order" },
+  });
+  const o = created.body;
+  assert.equal(o.fundingInstruction.payable, false);
+  assert.equal(o.fundingInstruction.address, null);
+  assert.equal(
+    (
+      await call(worker, `/api/demo/orders/${o.id}/deposit`, {
+        ...common,
+        body: {},
+      })
+    ).response.status,
+    200,
+  );
+  const paid = await call(worker, `/api/orders/${o.id}/manual-payout`, {
+    ...common,
+    body: {
+      idempotencyKey: "merchant-paid",
+      outcome: "sent",
+      actualAmount: "100000",
+      paidAt: new Date().toISOString(),
+      providerReference: "merchant-payment-ref",
+      evidence: "Synthetic administrator attestation",
+    },
+  });
+  assert.equal(paid.response.status, 200);
+  assert.equal(paid.body.payoutStatus, "sent");
+  assert.equal(paid.body.receiptFileAvailable, false);
+  const file = {
+    fileName: "demo.pdf",
+    contentType: "application/pdf",
+    dataBase64: Buffer.from("%PDF-1.4\n%%EOF").toString("base64"),
+  };
+  const upload = await call(worker, `/api/orders/${o.id}/receipt-file`, {
+    ...common,
+    body: file,
+  });
+  assert.equal(upload.response.status, 200);
+  assert.equal(upload.body.receiptFileAvailable, true);
+  const download = await call(worker, `/api/orders/${o.id}/receipt-file`, {
+    cookie,
+    actor: "customer-demo",
+  });
+  assert.equal(download.response.status, 200);
+  assert.equal(download.body.dataBase64, file.dataBase64);
+  assert.equal(
+    (
+      await call(worker, `/api/orders/${o.id}/receipt-file`, {
+        cookie,
+        actor: "company-demo",
+      })
+    ).response.status,
+    403,
+  );
+  const other = await bootstrap(worker, "admin-demo");
+  assert.equal(
+    (
+      await call(worker, `/api/orders/${o.id}/receipt-file`, {
+        cookie: other.cookie,
+        actor: "admin-demo",
+      })
+    ).response.status,
+    404,
+  );
+});
+
+test("two MiB demo receipt works within bounded session and larger file is rejected", async () => {
+  const worker = createPreviewWorker();
+  const { cookie } = await bootstrap(worker, "admin-demo");
+  const common = { cookie, actor: "admin-demo" };
+  await call(worker, "/api/demo/scenario", {
+    ...common,
+    body: { idempotencyKey: "large-receipt" },
+  });
+  const dashboard = await call(worker, "/api/dashboard", common);
+  const o = dashboard.body.orders.find((x: any) => x.payoutStatus === "sent");
+  const bytes = Buffer.alloc(2 * 1024 * 1024, 32);
+  bytes.write("%PDF-1.4\n");
+  const file = {
+    fileName: "large-demo.pdf",
+    contentType: "application/pdf",
+    dataBase64: bytes.toString("base64"),
+  };
+  const result = await call(worker, `/api/orders/${o.id}/receipt-file`, {
+    ...common,
+    body: file,
+  });
+  assert.equal(result.response.status, 200);
+  const download = await call(worker, `/api/orders/${o.id}/receipt-file`, {
+    cookie,
+    actor: "customer-demo",
+  });
+  assert.equal(download.body.size, 2 * 1024 * 1024);
+  const denied = await call(worker, `/api/orders/${o.id}/receipt-file`, {
+    ...common,
+    body: {
+      ...file,
+      dataBase64: Buffer.concat([bytes, Buffer.from("x")]).toString("base64"),
+    },
+  });
+  assert.equal(denied.response.status, 409);
+});

@@ -2608,3 +2608,17 @@ footer button {
     width: 100%;
   }
 }
+
+.receipt-row input[type="file"] {
+  max-width: 190px;
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .receipt-row {
+    flex-wrap: wrap;
+  }
+  .receipt-row .button {
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+}

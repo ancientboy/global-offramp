@@ -149,6 +149,26 @@ class OperationsController {
   @Post("orders") order(@Req() r: DemoRequest, @Body() b: unknown) {
     return this.core.createOrder(r.actor, b);
   }
+  @Post("orders/:id/manual-payout") manualPayout(
+    @Req() r: DemoRequest,
+    @Param("id") id: string,
+    @Body() b: unknown,
+  ) {
+    return this.core.confirmManualPayout(r.actor, id, b);
+  }
+  @Post("orders/:id/receipt-file") receiptFile(
+    @Req() r: DemoRequest,
+    @Param("id") id: string,
+    @Body() b: unknown,
+  ) {
+    return this.core.uploadReceiptFile(r.actor, id, b);
+  }
+  @Get("orders/:id/receipt-file") downloadReceipt(
+    @Req() r: DemoRequest,
+    @Param("id") id: string,
+  ) {
+    return this.core.downloadReceiptFile(r.actor, id);
+  }
   @Post("orders/:id/conversion") conversion(
     @Req() r: DemoRequest,
     @Param("id") id: string,

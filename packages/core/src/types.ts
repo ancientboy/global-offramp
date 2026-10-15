@@ -1,6 +1,11 @@
 import { Currency } from "./money";
 export type Role =
-  "customer" | "operations" | "finance" | "auditor" | "partner";
+  | "merchant_admin"
+  | "customer"
+  | "operations"
+  | "finance"
+  | "auditor"
+  | "partner";
 export interface Actor {
   id: string;
   role: Role;
@@ -35,7 +40,9 @@ export interface Quote {
   sourceCurrency: "USDT" | "USDC";
   payoutCurrency: "CNY" | "USD";
   sourceAmount: string;
-  amountMode: "principal" | "total_deposit";
+  amountMode: "principal" | "total_deposit" | "target_payout";
+  inputCurrency?: Currency;
+  requestedPayoutAmount?: string;
   inputAmount: string;
   payoutAmount: string;
   serviceFee: string;
@@ -73,6 +80,34 @@ export interface Order {
   reconciled: boolean;
   createdAt: string;
   depositEventId?: string;
+  fundingExpiresAt?: string;
+  fundingInstruction?: {
+    mode: "mock";
+    payable: false;
+    status: "mock_nonpayable";
+    reference: string;
+    network: "MOCK";
+    address: null;
+    currency: "USDT" | "USDC";
+    amount: string;
+    expiresAt: string;
+  };
+  paymentConfirmation?: {
+    actualAmount: string;
+    paidAt: string;
+    providerReference: string;
+    confirmedBy: string;
+    verification: "admin_attestation";
+  };
+  receiptFile?: {
+    fileName: string;
+    contentType: string;
+    dataBase64: string;
+    size: number;
+    sha256: string;
+    mode: "mock";
+    scanStatus: "not_scanned";
+  };
   conversion?: {
     providerReference: string;
     actualRate: string;

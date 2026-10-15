@@ -36,8 +36,12 @@ const quoteInput = z
     customerId: id,
     beneficiaryId: id,
     sourceCurrency: z.enum(["USDT", "USDC"]),
-    sourceAmount: decimalString,
-    amountMode: z.enum(["principal", "total_deposit"]).optional(),
+    sourceAmount: decimalString.optional(),
+    targetAmount: decimalString.optional(),
+    payoutCurrency: z.enum(["CNY", "USD"]).optional(),
+    amountMode: z
+      .enum(["principal", "total_deposit", "target_payout"])
+      .optional(),
   })
   .strict();
 const eventSchema = z
@@ -129,17 +133,45 @@ export class OfframpService {
       "ROUTE_DISABLED",
       "Route unavailable",
     );
-    const inputAmount = amount(input.sourceAmount, input.sourceCurrency);
+    const amountMode = input.amountMode ?? "principal";
+    demand(
+      amountMode === "target_payout"
+        ? !!input.targetAmount && input.sourceAmount === undefined
+        : !!input.sourceAmount && input.targetAmount === undefined,
+      "INVALID_AMOUNT_MODE",
+      "Provide only targetAmount for target_payout, otherwise sourceAmount",
+    );
+    demand(
+      !input.payoutCurrency || input.payoutCurrency === beneficiary.currency,
+      "CURRENCY_MISMATCH",
+      "Target currency must match beneficiary",
+    );
+    const inputAmount = amount(
+      amountMode === "target_payout"
+        ? input.targetAmount!
+        : input.sourceAmount!,
+      amountMode === "target_payout"
+        ? beneficiary.currency
+        : input.sourceCurrency,
+    );
     const serviceFee = amount(
       customer.serviceFeeOverride ?? this.config.serviceFee,
       input.sourceCurrency,
     );
     const channelFee = amount(this.config.channelFee, input.sourceCurrency);
-    const amountMode = input.amountMode ?? "principal";
+    const rate = units(route.customerRate, 8);
+    demand(rate > 0n, "INVALID_RATE", "Rate must be positive");
+    const numerator =
+      amountMode === "target_payout"
+        ? units(inputAmount, 2) * 1000000n * 100000000n
+        : 0n;
+    const denominator = rate * 100n;
     const principalUnits =
-      amountMode === "total_deposit"
-        ? units(inputAmount, 6) - units(serviceFee, 6) - units(channelFee, 6)
-        : units(inputAmount, 6);
+      amountMode === "target_payout"
+        ? (numerator + denominator - 1n) / denominator
+        : amountMode === "total_deposit"
+          ? units(inputAmount, 6) - units(serviceFee, 6) - units(channelFee, 6)
+          : units(inputAmount, 6);
     demand(
       principalUnits > 0n,
       "INVALID_AMOUNT",
@@ -156,6 +188,13 @@ export class OfframpService {
       sourceAmount: principal,
       amountMode,
       inputAmount,
+      inputCurrency:
+        amountMode === "target_payout"
+          ? beneficiary.currency
+          : input.sourceCurrency,
+      ...(amountMode === "target_payout"
+        ? { requestedPayoutAmount: inputAmount }
+        : {}),
       payoutAmount: convert(
         principal,
         input.sourceCurrency,
@@ -190,6 +229,12 @@ export class OfframpService {
       "INVALID_AMOUNT",
       "Payout rounds to zero",
     );
+    if (amountMode === "target_payout")
+      demand(
+        q.payoutAmount === inputAmount,
+        "UNREPRESENTABLE_AMOUNT",
+        "Target cannot be represented at supported precision",
+      );
     s.quotes.push(q);
     return q;
   }
@@ -268,7 +313,7 @@ export class OfframpService {
         "Pending beneficiary required",
       );
       demand(
-        b.createdBy !== actor.id,
+        actor.role === "merchant_admin" || b.createdBy !== actor.id,
         "MAKER_CHECKER",
         "Creator cannot approve beneficiary",
       );
@@ -333,6 +378,20 @@ export class OfframpService {
       createdAt: this.clock().toISOString(),
       ...(batchId ? { batchId } : {}),
     };
+    order.fundingExpiresAt = new Date(
+      this.clock().getTime() + 30 * 60 * 1000,
+    ).toISOString();
+    order.fundingInstruction = {
+      mode: "mock",
+      payable: false,
+      status: "mock_nonpayable",
+      reference: "MOCK-" + order.id,
+      network: "MOCK",
+      address: null,
+      currency: q.sourceCurrency,
+      amount: q.totalDeposit,
+      expiresAt: order.fundingExpiresAt,
+    };
     s.orders.push(order);
     this.audit(s, actor, "order.created", order.id);
     this.emit(s, "order.created", order.id);
@@ -394,7 +453,8 @@ export class OfframpService {
       const matches =
         o.depositStatus === "awaiting" &&
         value === o.quote.totalDeposit &&
-        Date.parse(o.quote.expiresAt) > this.clock().getTime();
+        Date.parse(o.fundingExpiresAt ?? o.quote.expiresAt) >
+          this.clock().getTime();
       transfer(
         s,
         "deposit:" + v.transactionId,
@@ -566,7 +626,7 @@ export class OfframpService {
         "Pending attempt required",
       );
       demand(
-        a.makerId !== actor.id,
+        actor.role === "merchant_admin" || a.makerId !== actor.id,
         "MAKER_CHECKER",
         "Maker cannot approve own payout",
       );
@@ -613,6 +673,11 @@ export class OfframpService {
   }
   async recordPayout(actor: Actor, attemptId: string, input: unknown) {
     authorize(actor, "payout.record");
+    demand(
+      actor.role !== "merchant_admin",
+      "USE_MANUAL_PAYOUT",
+      "Merchant administrator must use the amount-checked manual payout endpoint",
+    );
     const v = z
       .object({
         outcome: z.enum(["sent", "unknown"]),
@@ -670,6 +735,8 @@ export class OfframpService {
       .object({
         outcome: z.enum(["sent", "failed"]),
         providerReference: id.optional(),
+        actualAmount: decimalString.optional(),
+        paidAt: z.string().datetime({ offset: true }).optional(),
         evidence: text,
       })
       .strict()
@@ -682,7 +749,7 @@ export class OfframpService {
         "Unknown attempt required",
       );
       demand(
-        a.makerId !== actor.id,
+        actor.role === "merchant_admin" || a.makerId !== actor.id,
         "MAKER_CHECKER",
         "Independent verification required",
       );
@@ -699,16 +766,303 @@ export class OfframpService {
           "DUPLICATE_REFERENCE",
           "Reference already used",
         );
-        this.recordSent(s, this.order(s, a.orderId));
+        const o = this.order(s, a.orderId);
+        this.checkCustomer(s, o.customerId);
+        this.checkBeneficiary(s, o.customerId, o.quote.beneficiaryId);
+        if (actor.role === "merchant_admin") {
+          demand(
+            v.actualAmount && v.paidAt,
+            "PAYMENT_DETAILS_REQUIRED",
+            "Amount and payment time are required for sent resolution",
+          );
+          demand(
+            amount(v.actualAmount, o.quote.payoutCurrency) ===
+              o.quote.payoutAmount,
+            "PAYOUT_AMOUNT_MISMATCH",
+            "Paid amount must exactly match the order",
+          );
+          demand(
+            Date.parse(v.paidAt) >= Date.parse(o.createdAt) &&
+              Date.parse(v.paidAt) <= this.clock().getTime() + 60000,
+            "INVALID_PAYMENT_TIME",
+            "Payment time must be after order creation and not in the future",
+          );
+          o.paymentConfirmation = {
+            actualAmount: amount(v.actualAmount, o.quote.payoutCurrency),
+            paidAt: v.paidAt,
+            providerReference: v.providerReference,
+            confirmedBy: actor.id,
+            verification: "admin_attestation",
+          };
+        }
+        this.recordSent(s, o);
       } else this.order(s, a.orderId).payoutStatus = "failed";
       Object.assign(a, { state: v.outcome, verifiedBy: actor.id, ...v });
       this.audit(s, actor, "payout.verified", a.orderId, {
         attemptId,
         outcome: v.outcome,
         evidence: v.evidence,
+        actualAmount: v.actualAmount,
+        paidAt: v.paidAt,
+        verification:
+          actor.role === "merchant_admin"
+            ? "admin_attestation"
+            : "independent_manual_review",
       });
       return a;
     });
+  }
+  /** Mock bookkeeping only: the administrator attests a payment made outside this application. */
+  async confirmManualPayout(actor: Actor, orderId: string, input: unknown) {
+    authorize(actor, "payout.record");
+    demand(
+      actor.role === "merchant_admin",
+      "FORBIDDEN",
+      "Merchant administrator required",
+    );
+    const v = z
+      .object({
+        idempotencyKey: id,
+        outcome: z.enum(["sent", "unknown"]),
+        actualAmount: decimalString.optional(),
+        paidAt: z.string().datetime({ offset: true }).optional(),
+        providerReference: id.optional(),
+        evidence: text,
+      })
+      .strict()
+      .parse(input);
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(v))
+      .digest("hex");
+    return this.store.transaction((s) => {
+      const o = this.order(s, orderId);
+      const existing = s.attempts.find(
+        (a) => a.idempotencyKey === v.idempotencyKey,
+      );
+      if (existing) {
+        const audit = s.audits.find(
+          (a) =>
+            a.action === "payout.admin_attested" &&
+            a.data.attemptId === existing.id,
+        );
+        demand(
+          existing.orderId === orderId &&
+            audit?.data.fingerprint === fingerprint,
+          "IDEMPOTENCY_CONFLICT",
+          "Payment key reused with changed details",
+        );
+        return this.orderView(o, actor);
+      }
+      this.checkCustomer(s, o.customerId);
+      this.checkBeneficiary(s, o.customerId, o.quote.beneficiaryId);
+      demand(
+        o.depositStatus === "confirmed",
+        "FUNDS_NOT_READY",
+        "Confirmed stablecoin deposit required",
+      );
+      demand(
+        ["draft", "failed", "approved", "awaiting_approval"].includes(
+          o.payoutStatus,
+        ),
+        "PAYOUT_LOCKED",
+        "Sent, active or unknown payment cannot be repeated",
+      );
+      demand(
+        !s.refunds.some((r) => r.orderId === o.id && r.kind === "principal"),
+        "REFUND_CONFLICT",
+        "Principal refund blocks payment",
+      );
+      demand(
+        !s.discrepancies.some((d) => d.orderId === o.id && d.status === "open"),
+        "OPEN_DISCREPANCY",
+        "Resolve discrepancies before payment confirmation",
+      );
+      const previous = s.attempts.filter((a) => a.orderId === o.id).at(-1);
+      if (o.payoutStatus === "failed")
+        demand(
+          previous?.state === "failed" && previous.verifiedBy,
+          "VERIFY_BEFORE_RETRY",
+          "Verify failed payment before retrying",
+        );
+      if (v.outcome === "sent") {
+        demand(
+          v.actualAmount && v.paidAt && v.providerReference,
+          "PAYMENT_DETAILS_REQUIRED",
+          "Amount, payment time and reference are required",
+        );
+        demand(
+          amount(v.actualAmount, o.quote.payoutCurrency) ===
+            o.quote.payoutAmount,
+          "PAYOUT_AMOUNT_MISMATCH",
+          "Paid amount must exactly match the order",
+        );
+        demand(
+          Date.parse(v.paidAt) >= Date.parse(o.createdAt) &&
+            Date.parse(v.paidAt) <= this.clock().getTime() + 60000,
+          "INVALID_PAYMENT_TIME",
+          "Payment time must be after order creation and not in the future",
+        );
+      }
+      if (v.providerReference)
+        demand(
+          !s.attempts.some((a) => a.providerReference === v.providerReference),
+          "DUPLICATE_REFERENCE",
+          "Payment reference already recorded",
+        );
+      // Allocation is bookkeeping attestation, not an executed exchange or a bank verification.
+      if (o.conversionStatus === "pending") {
+        transfer(
+          s,
+          "conversion-source:" + o.id,
+          o.quote.sourceCurrency,
+          o.quote.sourceAmount,
+          "liability:order:" + o.id,
+          "asset:custody:mock",
+          this.clock(),
+        );
+        transfer(
+          s,
+          "conversion-target:" + o.id,
+          o.quote.payoutCurrency,
+          o.quote.payoutAmount,
+          "asset:provider:mock",
+          "liability:payout:" + o.id,
+          this.clock(),
+        );
+        o.conversionStatus = "recorded";
+        o.conversion = {
+          providerReference: "manual-allocation-" + o.id,
+          actualRate: o.quote.customerRate,
+          evidence:
+            "Administrator attested manual external allocation; not bank verified",
+          recordedBy: actor.id,
+        };
+        this.audit(s, actor, "allocation.admin_attested", o.id);
+      }
+      const attempt =
+        previous && ["approved", "awaiting_approval"].includes(previous.state)
+          ? previous
+          : {
+              id: randomUUID(),
+              orderId,
+              idempotencyKey: v.idempotencyKey,
+              makerId: actor.id,
+              state: v.outcome,
+              createdAt: this.clock().toISOString(),
+            };
+      if (attempt !== previous) s.attempts.push(attempt);
+      // Consume an existing legacy approved attempt instead of creating a second live payment.
+      attempt.idempotencyKey = v.idempotencyKey;
+      attempt.state = v.outcome;
+      attempt.providerReference = v.providerReference;
+      attempt.evidence = v.evidence;
+      if (v.outcome === "sent") {
+        this.recordSent(s, o);
+        o.paymentConfirmation = {
+          actualAmount: amount(v.actualAmount!, o.quote.payoutCurrency),
+          paidAt: v.paidAt!,
+          providerReference: v.providerReference!,
+          confirmedBy: actor.id,
+          verification: "admin_attestation",
+        };
+      } else o.payoutStatus = "unknown";
+      this.audit(s, actor, "payout.admin_attested", o.id, {
+        attemptId: attempt.id,
+        fingerprint,
+        outcome: v.outcome,
+        actualAmount: v.actualAmount,
+        paidAt: v.paidAt,
+        providerReference: v.providerReference,
+      });
+      this.emit(s, "payout." + v.outcome, o.id, {
+        verification: "admin_attestation",
+      });
+      return this.orderView(o, actor);
+    });
+  }
+  /** Small, unscanned DEMO attachment stored in the existing mock state, never public object storage. */
+  async uploadReceiptFile(actor: Actor, orderId: string, input: unknown) {
+    authorize(actor, "receipt.upload");
+    const v = z
+      .object({
+        fileName: z
+          .string()
+          .min(1)
+          .max(120)
+          .regex(/^[^/\\\x00-\x1f]+\.(png|jpg|jpeg|pdf)$/i),
+        contentType: z.enum(["image/png", "image/jpeg", "application/pdf"]),
+        dataBase64: z
+          .string()
+          .min(4)
+          .max(2796204)
+          .regex(
+            /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
+          ),
+      })
+      .strict()
+      .parse(input);
+    const bytes = Buffer.from(v.dataBase64, "base64");
+    demand(
+      bytes.length > 0 &&
+        bytes.length <= 2 * 1024 * 1024 &&
+        bytes.toString("base64") === v.dataBase64,
+      "INVALID_FILE",
+      "Demo attachments must be at most 2 MiB",
+    );
+    const valid =
+      v.contentType === "image/png"
+        ? bytes.subarray(0, 8).toString("hex") === "89504e470d0a1a0a" &&
+          /\.png$/i.test(v.fileName)
+        : v.contentType === "image/jpeg"
+          ? bytes.subarray(0, 3).toString("hex") === "ffd8ff" &&
+            /\.jpe?g$/i.test(v.fileName)
+          : bytes.subarray(0, 5).toString() === "%PDF-" &&
+            /\.pdf$/i.test(v.fileName);
+    demand(
+      valid,
+      "INVALID_FILE",
+      "File signature, extension and type must match",
+    );
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    return this.store.transaction((s) => {
+      const o = this.order(s, orderId);
+      demand(
+        o.payoutStatus === "sent",
+        "INVALID_STATE",
+        "Confirm payment before attaching receipt",
+      );
+      o.receiptFile = {
+        ...v,
+        size: bytes.length,
+        sha256,
+        mode: "mock",
+        scanStatus: "not_scanned",
+      };
+      o.receiptStatus = "uploaded";
+      o.receipt = {
+        objectKey: `receipts/${o.id}/${sha256}.${v.contentType === "application/pdf" ? "pdf" : v.contentType === "image/png" ? "png" : "jpg"}`,
+        uploadedBy: actor.id,
+      };
+      this.audit(s, actor, "receipt.file_uploaded", o.id, {
+        sha256,
+        size: bytes.length,
+        replaced: !!s.audits.find(
+          (a) => a.targetId === o.id && a.action === "receipt.file_uploaded",
+        ),
+      });
+      return this.orderView(o, actor);
+    });
+  }
+  async downloadReceiptFile(actor: Actor, orderId: string) {
+    const s = await this.store.read();
+    const o = this.order(s, orderId);
+    authorize(actor, "order.read", o.customerId);
+    demand(
+      o.receiptFile,
+      "NOT_FOUND",
+      "No demo file attached; metadata alone is not a file",
+    );
+    return structuredClone(o.receiptFile);
   }
   async uploadReceipt(actor: Actor, orderId: string, objectKey: string) {
     authorize(actor, "receipt.upload");
@@ -725,6 +1079,11 @@ export class OfframpService {
         o.payoutStatus === "sent",
         "INVALID_STATE",
         "Receipt may be attached after payout is sent",
+      );
+      demand(
+        !o.receiptFile,
+        "RECEIPT_FILE_EXISTS",
+        "Replace an attached file through the receipt-file endpoint, not metadata",
       );
       o.receiptStatus = "uploaded";
       o.receipt = { objectKey, uploadedBy: actor.id };
@@ -753,7 +1112,8 @@ export class OfframpService {
         (a) => a.orderId === o.id && a.state === "sent",
       );
       demand(
-        attempt && attempt.makerId !== actor.id,
+        attempt &&
+          (actor.role === "merchant_admin" || attempt.makerId !== actor.id),
         "MAKER_CHECKER",
         "Independent financial verification required",
       );
@@ -779,7 +1139,8 @@ export class OfframpService {
         "Resolve open discrepancies with evidence before marking reconciled",
       );
       o.reconciled = true;
-      if (o.receipt) o.receiptStatus = "verified";
+      if (o.receipt && actor.role !== "merchant_admin")
+        o.receiptStatus = "verified";
       attempt.verifiedBy = actor.id;
       this.audit(s, actor, "reconciliation.matched", o.id, {
         evidence: v.evidence,
@@ -944,7 +1305,7 @@ export class OfframpService {
         "Requested refund required",
       );
       demand(
-        r.makerId !== actor.id,
+        actor.role === "merchant_admin" || r.makerId !== actor.id,
         "MAKER_CHECKER",
         "Maker cannot approve refund",
       );
@@ -1132,7 +1493,7 @@ export class OfframpService {
         "Draft settlement required",
       );
       demand(
-        st.makerId !== actor.id,
+        actor.role === "merchant_admin" || st.makerId !== actor.id,
         "MAKER_CHECKER",
         "Independent settlement checker required",
       );
@@ -1343,6 +1704,8 @@ export class OfframpService {
       ...structuredClone(o),
       quote: this.quoteView(o.quote, actor),
     } as Record<string, unknown>;
+    view.receiptFileAvailable = !!o.receiptFile;
+    delete view.receiptFile;
     if (actor.role === "customer") {
       delete view.conversion;
       if (o.receipt) view.receipt = { available: true };
@@ -1401,10 +1764,10 @@ export class OfframpService {
       mode: "MOCK",
       actor,
       pricingFixture: customer ? undefined : this.config,
-      commissions: ["finance", "auditor"].includes(actor.role)
+      commissions: ["merchant_admin", "finance", "auditor"].includes(actor.role)
         ? s.commissions.map((c) => ({ ...c, eligibility: eligibility(c) }))
         : undefined,
-      settlements: ["finance", "auditor"].includes(actor.role)
+      settlements: ["merchant_admin", "finance", "auditor"].includes(actor.role)
         ? s.settlements
         : undefined,
       batches: s.batches.filter(

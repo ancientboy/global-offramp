@@ -35,7 +35,9 @@ export function authorize(
   customerId?: string,
 ): void {
   demand(
-    !!actor?.id && (RULES[action]?.includes(actor.role) ?? false),
+    !!actor?.id &&
+      !!RULES[action] &&
+      (actor.role === "merchant_admin" || RULES[action].includes(actor.role)),
     "FORBIDDEN",
     "Operation is not allowed for this role",
   );
