@@ -112,6 +112,7 @@ function consume(bucket: Bucket, now: number, limit: number): void {
   bucket.count++;
 }
 interface Session {
+  workspace?: boolean;
   owner?: string;
   receiptBucket?: ReceiptBucket;
   receiptBlobs: Map<string, Uint8Array>;
@@ -506,8 +507,11 @@ const route = (
 const ROUTES: Route[] = [
   route("GET", "receipts", async (s, a) => ({
     receipts: await s.core.receipts.list(a),
-    storageMode:
-      s.receiptBucket && s.durable ? "r2_private" : "ephemeral_private",
+    storageMode: s.workspace
+      ? "filesystem_private"
+      : s.receiptBucket && s.durable
+        ? "r2_private"
+        : "ephemeral_private",
   })),
   route("POST", "receipts/upload", async (s, a, b) => {
     requireReceiptAdmin(a);
@@ -555,7 +559,11 @@ const ROUTES: Route[] = [
           sha256: f.sha256,
           objectKey,
           kind: input.kind,
-          storageMode: s.durable ? "r2_private" : "ephemeral_private",
+          storageMode: s.workspace
+            ? "filesystem_private"
+            : s.durable
+              ? "r2_private"
+              : "ephemeral_private",
           uploadedAt: projectedAt,
           uploadedBy: a.id,
           links: [],
@@ -569,8 +577,9 @@ const ROUTES: Route[] = [
           at: projectedAt,
         });
         demand(
-          encoder.encode(JSON.stringify(projected)).byteLength <=
-            (s.durable ? D1_MAX_STATE_BYTES : PREVIEW_LIMITS.maxStateBytes),
+          s.workspace ||
+            encoder.encode(JSON.stringify(projected)).byteLength <=
+              (s.durable ? D1_MAX_STATE_BYTES : PREVIEW_LIMITS.maxStateBytes),
           "STORAGE_CAPACITY",
           "Receipt metadata capacity reached",
         );
@@ -593,13 +602,21 @@ const ROUTES: Route[] = [
           sha256: f.sha256,
           objectKey,
           kind: input.kind,
-          storageMode: s.durable ? "r2_private" : "ephemeral_private",
+          storageMode: s.workspace
+            ? "filesystem_private"
+            : s.durable
+              ? "r2_private"
+              : "ephemeral_private",
         }),
       );
     }
     return {
       receipts,
-      storageMode: s.durable ? "r2_private" : "ephemeral_private",
+      storageMode: s.workspace
+        ? "filesystem_private"
+        : s.durable
+          ? "r2_private"
+          : "ephemeral_private",
     };
   }),
   route("POST", `receipts/${pathId}/recognition`, (s, a, b, id) =>
@@ -794,6 +811,63 @@ const ROUTES: Route[] = [
     s.core.submitBatch(a, id, b),
   ),
 ];
+
+/** Shared command adapter: no preview identity/session lookup. Caller MUST authenticate
+ * and apply its own route allowlist before calling. Used by the independent Node service. */
+export async function dispatchBusinessCommand(options: {
+  request: Request;
+  core: OfframpService;
+  actor: Actor;
+  bucket: ReceiptBucket;
+  owner: string;
+  now?: () => number;
+}): Promise<Response> {
+  try {
+    const { request, core, actor, bucket, owner } = options;
+    const pathname = new URL(request.url).pathname;
+    const matching = ROUTES.find(
+      (r) => r.method === request.method && r.pattern.test(pathname),
+    );
+    if (!matching) return json({ error: "NOT_FOUND" }, 404);
+    const session = {
+      core,
+      owner,
+      token: "",
+      receiptBucket: bucket,
+      receiptBlobs: new Map(),
+      durable: true,
+      workspace: true,
+    } as Session;
+    const body = request.method === "POST" ? await readBody(request) : {};
+    const value = await matching.run(
+      session,
+      actor,
+      body,
+      matching.pattern.exec(pathname)?.[1] ?? "",
+      options.now ?? Date.now,
+    );
+    if (pathname === "/api/dashboard" && !(value instanceof Response)) {
+      Object.assign(value as object, {
+        storageMode: "postgres_sandbox",
+        storageLimits: {
+          receiptMaxBytes: RECEIPT_MAX_BYTES,
+          resetEnabled: false,
+        },
+      });
+    }
+    const response = value instanceof Response ? value : json(value);
+    response.headers.delete("x-preview-mode");
+    response.headers.set("x-workspace-mode", "ACCOUNT_BETA_FUNDS_SANDBOX");
+    response.headers.set("vary", "Cookie");
+    return response;
+  } catch (error) {
+    const response = safeError(error);
+    response.headers.delete("x-preview-mode");
+    response.headers.set("vary", "Cookie");
+    response.headers.set("x-workspace-mode", "ACCOUNT_BETA_FUNDS_SANDBOX");
+    return response;
+  }
+}
 
 /** now is injectable only for tests; no environment or HTTP setting can enable real execution. */
 export function createPreviewWorker(options: { now?: () => number } = {}) {

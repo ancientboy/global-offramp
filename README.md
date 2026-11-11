@@ -118,3 +118,7 @@ API 的业务聚合当前以 PostgreSQL `runtime.state` 单行 JSON 文档持久
 源码可发布到经授权的代码仓库；代码公开不代表真实金融服务上线。私有在线演示仅承载合成数据，未申请金融账户或配置真实金融凭证。
 
 新回单资料库 API 目前由 Sites Worker 提供，不在旧 Nest 本地开发适配器上运行。OCR 资源由 npm 锁版本依赖在 prebuild 阶段生成，不提交用户样例。
+
+## 独立业务账号内测
+
+新增 /workspace 与独立 Node/PostgreSQL 服务，保留 / 公共模拟演示。账号、资金边界、迁移、启动、systemd、管理员 stdin 初始化和后续规范化计划见 [部署说明](deploy/workspace/README.md)。真实资金关闭，尚未接入邮箱验证、MFA或真实身份认证。

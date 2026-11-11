@@ -13,6 +13,11 @@
     "rootDir": ".",
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["packages/**/*.ts", "apps/api/**/*.ts", "scripts/**/*.ts"],
+  "include": [
+    "packages/**/*.ts",
+    "apps/api/**/*.ts",
+    "scripts/**/*.ts",
+    "apps/workspace/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

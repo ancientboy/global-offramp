@@ -24,6 +24,7 @@ export default function CustomerWallet({
   locked,
   resumeDraft,
   initialCurrency,
+  fundsDisabled = false,
   onTopup,
   onExchange,
   onOrder,
@@ -35,6 +36,7 @@ export default function CustomerWallet({
   locked: boolean;
   resumeDraft: boolean;
   initialCurrency: string;
+  fundsDisabled?: boolean;
   onTopup: (currency: string) => void;
   onExchange: (currency: string) => void;
   onOrder: (id: string) => void;
@@ -111,10 +113,10 @@ export default function CustomerWallet({
             <div className="wallet-primary-actions">
               <button
                 className="button outline"
-                disabled={locked}
+                disabled={locked || fundsDisabled}
                 onClick={() => onTopup(currency)}
               >
-                <Plus size={18} /> 模拟充值
+                <Plus size={18} /> {fundsDisabled ? "充值尚未开放" : "模拟充值"}
               </button>
               <button
                 className="button"

@@ -170,6 +170,12 @@ export class PostgresStore implements Store {
     );
   }
   async transaction<T>(work: (s: State) => T | Promise<T>): Promise<T> {
+    return this.transactionWithClient((s) => work(s));
+  }
+  /** Enrollment uses this same DB transaction for the account and business customer. */
+  async transactionWithClient<T>(
+    work: (s: State, c: SqlClient) => T | Promise<T>,
+  ): Promise<T> {
     const c = await this.pool.connect();
     try {
       await c.query("BEGIN");
@@ -183,7 +189,7 @@ export class PostgresStore implements Store {
       );
       const prior = result.rows[0].document as State;
       const next = structuredClone(prior);
-      const value = await work(next);
+      const value = await work(next, c);
       assertAppendOnly(prior, next);
       for (const journal of next.journals.slice(prior.journals.length)) {
         await c.query(

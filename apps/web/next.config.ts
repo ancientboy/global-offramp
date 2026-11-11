@@ -11,6 +11,12 @@ const config: NextConfig = {
         async rewrites() {
           return [
             {
+              source: "/workspace/api/:path*",
+              destination:
+                (process.env.WORKSPACE_INTERNAL_URL ??
+                  "http://127.0.0.1:4182") + "/workspace/api/:path*",
+            },
+            {
               source: "/api/:path*",
               destination:
                 (process.env.API_INTERNAL_URL ?? "http://127.0.0.1:3001") +

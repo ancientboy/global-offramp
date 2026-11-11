@@ -48,7 +48,7 @@ export interface PrivateReceipt {
   kind: "single" | "batch";
   uploadedAt: string;
   uploadedBy: string;
-  storageMode: "r2_private" | "ephemeral_private";
+  storageMode: "r2_private" | "ephemeral_private" | "filesystem_private";
   quarantine?: {
     reason: "multi_customer_detected" | "batch_scope_changed";
     at: string;

@@ -1,0 +1,24 @@
+[Unit]
+Description=Huitu private MOCK demonstration
+After=network.target
+
+[Service]
+Type=simple
+User=offramp
+Group=offramp
+WorkingDirectory=/opt/global-offramp/app/deploy/vps
+EnvironmentFile=/etc/global-offramp/runtime.env
+ExecStart=/opt/global-offramp/node/bin/node /opt/global-offramp/app/deploy/vps/server.mjs
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/global-offramp
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

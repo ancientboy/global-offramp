@@ -1,0 +1,68 @@
+{
+  "verified_at_utc": "2026-11-11T22:44:03.407446+00:00",
+  "checks": [
+    {
+      "command": "npm run check",
+      "exit_code": 0
+    },
+    {
+      "command": "npm run typecheck:sites && npm run test:sites",
+      "exit_code": 0,
+      "sites_tests": 52
+    },
+    {
+      "command": "npm run test:workspace",
+      "exit_code": 0,
+      "workspace_tests": 8
+    },
+    {
+      "command": "node --import tsx --test packages/core/test/route-catalog.test.ts",
+      "exit_code": 0,
+      "route_tests": 13
+    },
+    {
+      "command": "npm run build:workspace && npm run build:sites",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "live": {
+    "url": "https://bhcbtc.club/workspace",
+    "postgres": "16, dedicated instance and non-owner app role",
+    "username_admin_no_email": true,
+    "customer_order_and_receipt_isolation": true,
+    "csrf_rejected": true,
+    "logout_revokes_session": true,
+    "postgres_and_app_restart": true,
+    "backup_dump_and_receipts_restored_in_disposable_database": true,
+    "backup_timer": "every 6 hours",
+    "public_demo_preserved": true,
+    "static_js_resources_http_200": 8,
+    "other_sites_http_200": [
+      "smilepower.shop",
+      "beta.lumeword.com"
+    ]
+  },
+  "limits": [
+    "Browser host unavailable and native Chrome window inaccessible: no live visual/interactive browser acceptance claimed.",
+    "No email verification, password recovery, MFA, real KYC or real funds execution.",
+    "Business entities remain JSONB aggregate; accounts/sessions/audit and route drafts are relational.",
+    "Six-currency route catalog/drafts are integrated; existing sandbox quote/order engine remains CNY/USD.",
+    "Backups are server-local; no offsite replication configured."
+  ],
+  "source_sha256": {
+    "apps/workspace/src/auth.ts": "0f330f142581feb1e8c52a4840ec661117cf91fe879355d5c0f269a99960044c",
+    "apps/workspace/src/app.ts": "6e1ff6a78f2a21d2117220ab2305bd22f502eb3a796d4d41cddeaefa18ec8d52",
+    "apps/workspace/src/routes.ts": "9a22883ccbe7baeadf8207fa0b0fefe9a2d2f472b7d50b18a8be83fa3b50aed2",
+    "apps/workspace/src/main.ts": "7dd8157842dc855d9e7c9db44e056bac3300806b37e5a76ff3b59130076e96ff",
+    "packages/core/src/store.ts": "4525d6595832507b9cb2eacc55fa08b8df09ce553b5ad33ef44176f58064c9d9",
+    "packages/core/src/route-catalog.ts": "a6fa9f4cbfdffbd1fbc8adc46fb3d6242c115bb9c8fe4941c01794f86d4e158e",
+    "apps/web/app/workspace/page.tsx": "6f2fa27965e7102e83f0d8c0c18a30f29406344265eb645a0a07be1c80355496",
+    "apps/web/app/RouteSettings.tsx": "325407c6cd896a415733b365b7c12f66cb9df9045cdf1bef629b72f0ee81e33c",
+    "db/migrations/002_workspace.sql": "39d09fe70e583c5e045f3573ae19f8ff7ed38d9a9835af2ff5c7281a3f20b3c9",
+    "db/migrations/003_route_drafts.sql": "3f336e44984ff06beb4067301e41e4c05f3482abe12624d30523016c2376cf15"
+  }
+}

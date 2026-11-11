@@ -13,7 +13,7 @@
     "build:api": "tsc -p tsconfig.build.json",
     "start:api": "node dist/apps/api/src/main.js",
     "start:web": "next start apps/web -p 3000",
-    "test": "node --import tsx --test packages/core/test/*.test.ts apps/api/test/*.test.ts apps/web/test/*.test.ts",
+    "test": "node --import tsx --test packages/core/test/*.test.ts apps/api/test/*.test.ts apps/web/test/*.test.ts apps/workspace/test/*.test.ts",
     "test:db": "node scripts/db-test.mjs",
     "typecheck": "tsc --noEmit",
     "migrate": "node --import tsx scripts/migrate.ts",
@@ -28,7 +28,13 @@
     "prebuild": "npm run prepare:ocr",
     "prebuild:sites": "npm run prepare:ocr",
     "predev:web": "npm run prepare:ocr",
-    "test:ocr": "npm run prepare:ocr && node --import tsx scripts/test-local-ocr.ts"
+    "test:ocr": "npm run prepare:ocr && node --import tsx scripts/test-local-ocr.ts",
+    "dev:workspace": "node --import tsx apps/workspace/src/main.ts",
+    "build:workspace": "tsc -p tsconfig.build.json",
+    "start:workspace": "node dist/apps/workspace/src/main.js",
+    "workspace:migrate": "node --import tsx apps/workspace/src/cli.ts migrate",
+    "workspace:create-admin": "node --import tsx apps/workspace/src/cli.ts create-admin",
+    "test:workspace": "node --import tsx --test apps/workspace/test/*.test.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.1.3",

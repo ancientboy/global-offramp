@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   ArrowLeft,
@@ -77,7 +77,11 @@ import {
   type Audit,
 } from "./models";
 
+import { WorkspaceContext } from "./workspace-context";
+import RouteSettings from "./RouteSettings";
+
 type Page =
+  | "routes"
   | "wallet"
   | "profile"
   | "payment"
@@ -122,9 +126,11 @@ const navs: Record<ViewRole, [Page, string, Icon][]> = {
     ["payment", "结汇", CurrencyCircleDollar],
     ["orders", "订单", FileText],
     ["profile", "用户中心", User],
+    ["routes", "出款地区", Bank],
   ],
   admin: [
     ["overview", "经营概览", ChartBar],
+    ["routes", "路线配置", Bank],
     ["workbench", "出款工作台", Wallet],
     ["orders", "全部订单", FileText],
     ["receipts", "回单资料库", Files],
@@ -146,6 +152,7 @@ const navs: Record<ViewRole, [Page, string, Icon][]> = {
   ],
 };
 const titles: Record<Page, string> = {
+  routes: "人工代付路线",
   receipts: "回单资料库",
   overview: "经营概览",
   directory: "用户与商户",
@@ -168,6 +175,7 @@ const titles: Record<Page, string> = {
   settlements: "结算记录",
 };
 const subtitles: Record<Page, string> = {
+  routes: "首批六个法币方向，线下付款，汇率和费用按路线配置",
   receipts: "私有存储、本地识别、人工关联，原件不会自动分享给客户",
   overview: "按订单创建、登记付款分别统计，不同币种独立核算",
   directory: "查看个人与企业资料、账户和订单，不涉及真实身份认证",
@@ -200,7 +208,8 @@ const errorText = (e: unknown) =>
 const uid = () => crypto.randomUUID();
 
 export default function Home() {
-  const [actor, setActor] = useState<ActorKey>("customer-demo");
+  const workspace = useContext(WorkspaceContext);
+  const [actor, setActor] = useState<ActorKey>(() => workspace?.account.role === "merchant_admin" ? "admin-demo" : workspace?.account.kind === "company" ? "company-demo" : "customer-demo");
   const actorRef = useRef(actor);
   actorRef.current = actor;
   const role: ViewRole =
@@ -211,7 +220,7 @@ export default function Home() {
         : "admin";
   const finance = actor === "admin-demo";
   const maker = actor === "admin-demo";
-  const [page, setPage] = useState<Page>("wallet");
+  const [page, setPage] = useState<Page>(workspace?.account.role === "merchant_admin" ? "overview" : "wallet");
   const [dataState, setDataState] = useState<{
     actor: ActorKey;
     value: Dashboard;
@@ -268,7 +277,7 @@ export default function Home() {
   const orders = data?.orders ?? [],
     beneficiaries = data?.beneficiaries ?? [],
     customers = data?.customers ?? [];
-  const customerId = actor === "company-demo" ? "customer-2" : "customer-1";
+  const customerId = workspace ? (workspace.account.customerId ?? "") : actor === "company-demo" ? "customer-2" : "customer-1";
   const currentCustomer = customers.find((c) => c.id === customerId);
   const usableBeneficiaries = beneficiaries.filter(
     (b) =>
@@ -304,11 +313,11 @@ export default function Home() {
       signal?: AbortSignal,
       responseType: "json" | "blob" = "json",
     ): Promise<T> => {
-      const response = await fetch("/api/" + path, {
+      const response = await fetch((workspace ? "/workspace/api/" : "/api/") + path, {
         method: body === undefined ? "GET" : "POST",
         cache: "no-store",
         credentials: "same-origin",
-        headers: { "content-type": "application/json", "x-demo-actor": actor },
+        headers: { "content-type": "application/json", ...(workspace ? {} : { "x-demo-actor": actor }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: signal
           ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
@@ -319,6 +328,7 @@ export default function Home() {
           ? await response.blob()
           : await response.json().catch(() => null);
       if (!response.ok) {
+        if (workspace && response.status === 401) workspace.expired();
         if (result?.error === "SESSION_EXPIRED" && actorRef.current === actor) {
           // Never replay a mutation into a newly created session. Require a fresh, explicit dashboard read.
           reloadId.current += 1;
@@ -363,7 +373,7 @@ export default function Home() {
       if (result === null) throw new Error("API 未返回可读取的数据");
       return result as T;
     },
-    [actor],
+    [actor, workspace],
   );
 
   const receiptRequest = useCallback(
@@ -794,6 +804,7 @@ export default function Home() {
     });
   }
   function openTopup(currency: string) {
+    if (workspace) {setError("账号内测的充值渠道尚未开放"); return;}
     openCommand({
       title: "模拟充值 " + currency,
       description:
@@ -838,7 +849,7 @@ export default function Home() {
     value,
   });
   function resetSession() {
-    if (!canResetDemoSession(actor, health?.persistence)) return;
+    if (workspace || !canResetDemoSession(actor, health?.persistence)) return;
     openCommand({
       title: "重置当前会话演示数据？",
       description:
@@ -850,6 +861,7 @@ export default function Home() {
     });
   }
   function seedScenario() {
+    if (workspace) return;
     openCommand({
       title: "创建服务端 MOCK 场景",
       description:
@@ -983,7 +995,7 @@ export default function Home() {
             <Empty title={search ? "没有匹配的订单" : "还没有订单"}>
               {role === "customer"
                 ? "创建付款后，服务端订单将在这里显示。"
-                : "可以先创建 MOCK 场景，由同一管理员验证完整流程。"}
+                : workspace ? "账号内测的资金渠道尚未开放，订单仅用于沙箱记录。" : "可以先创建 MOCK 场景，由同一管理员验证完整流程。"}
             </Empty>
           )}
         </div>
@@ -1252,7 +1264,7 @@ export default function Home() {
           </div>
         </dl>
         <div className="ruleline" />
-        {admin ? (
+        {admin && !workspace ? (
           <>
             <div className="card-heading">
               <h3>付款处理</h3>
@@ -1608,7 +1620,7 @@ export default function Home() {
         <p className="muted small">
           支持 PNG、JPEG、PDF 多附件，单个最大 2
           MiB。新原件默认仅管理员可见；识别仅用于人工匹配，不证明真实付款。文件未经恶意软件扫描。
-          {health?.persistence === "d1_mock"
+          {workspace ? " 原件保存在服务器私有目录，客户只能下载管理员明确发布的脱敏副本。" : health?.persistence === "d1_mock"
             ? " 原件使用私有对象存储，记录按登录账号隔离。"
             : " 本地预览附件临时保存，会话失效后不可恢复。"}
         </p>
@@ -1995,7 +2007,7 @@ export default function Home() {
                 : "个人工作台"}
         </div>
         <nav aria-label="主导航">
-          {navs[role].map(([p, label, I]) => (
+          {navs[role].filter(([p])=>p!=="routes"||!!workspace).map(([p, label, I]) => (
             <button
               key={p}
               title={label}
@@ -2020,6 +2032,7 @@ export default function Home() {
             帮助与支持
           </button>
           <p>安全、清晰的每一笔付款</p>
+          {!workspace && <a href="/workspace">业务账号内测</a>}
           <span className="tiny">汇途 · MOCK 验证空间</span>
         </div>
       </aside>
@@ -2037,7 +2050,8 @@ export default function Home() {
             {title}
           </div>
           <div className="top-actions">
-            <span className="demo-badge">MOCK · 无真实资金</span>
+            <span className="demo-badge">{workspace ? "账号内测 / 资金沙箱" : "MOCK · 无真实资金"}</span>
+            {workspace ? <><span>{workspace.account.name}</span><button className="button text" onClick={() => void workspace.logout().catch(() => setError("退出失败，请重试"))}>退出</button></> : <>
             <select
               aria-label="演示角色切换"
               value={actor}
@@ -2049,7 +2063,7 @@ export default function Home() {
                   {label}
                 </option>
               ))}
-            </select>
+            </select></>}
             <button
               className="avatar"
               aria-label="刷新服务器数据"
@@ -2074,10 +2088,10 @@ export default function Home() {
               <Database size={13} />
               {storageLabel}
             </span>
-            <span className="connection-right">演示身份，无真实认证</span>
+            <span className="connection-right">{workspace ? role === "admin" ? "管理员用户名登录 · 资金渠道关闭" : "账号已登录 · 客户邮箱未验证 · 资金渠道关闭" : "演示身份，无真实认证"}</span>
           </div>
           <details className="environment-details">
-            <summary>{health?.persistence === "d1_mock" ? "演示数据已保存 · 存储与使用说明" : "临时演示数据 · 存储与使用说明"}</summary>
+            <summary>{workspace ? "账号内测：会话8小时到期；资金沙箱，充值及付款关闭" : health?.persistence === "d1_mock" ? "演示数据已保存 · 存储与使用说明" : "临时演示数据 · 存储与使用说明"}</summary>
           {health?.persistence === "d1_mock" && (
             <Note>
               已登录账户的虚构演示历史保存于
@@ -2100,11 +2114,11 @@ export default function Home() {
           <div className="page-heading">
             <div>
               <h1>{title}</h1>
-              <p>{subtitles[page]}</p>
+              <p>{workspace && ["wallet", "payment", "profile"].includes(page) ? "独立账号内测：资金沙箱，充值及付款渠道尚未开放" : subtitles[page]}</p>
             </div>
-            {role !== "customer" && <span className="date">SERVER-BACKED DEMO</span>}
+            {role !== "customer" && <span className="date">{workspace ? "账号内测 / 资金沙箱" : "SERVER-BACKED DEMO"}</span>}
           </div>
-          {support && (
+          {support && !workspace && (
             <div className="card support">
               <h2>从这里开始体验</h2>
               <p>
@@ -2142,6 +2156,7 @@ export default function Home() {
               </button>
             </div>
           )}
+          {support && workspace && <section className="card support"><h2>账号内测说明</h2><p>独立账号登录后仅显示所属客户或管理员工作台。新客户须等待管理员审核；资金渠道关闭，充值与付款不可用。回单原件仅管理员可见，客户只见明确发布给自己的副本。邮箱尚未验证，未接入 MFA 或找回密码。</p><button className="button text" onClick={() => setSupport(false)}>收起说明</button></section>}
           {!data ? (
             <div className="card">
               <Empty
@@ -2158,8 +2173,9 @@ export default function Home() {
             </div>
           ) : (
             <>
+              {page === "routes" && workspace && <RouteSettings admin={role==="admin"}/>}
               {page === "wallet" && role === "customer" && (
-                <CustomerWallet key={actor} balances={walletBalances} deposits={data.walletDeposits ?? []} orders={orders} customerId={customerId} locked={locked} resumeDraft={resumeDraft} initialCurrency={asset}
+                <CustomerWallet fundsDisabled={!!workspace} key={actor} balances={walletBalances} deposits={data.walletDeposits ?? []} orders={orders} customerId={customerId} locked={locked} resumeDraft={resumeDraft} initialCurrency={asset}
                   onTopup={openTopup} onExchange={(currency) => { if (!resumeDraft) editForm(() => setAsset(currency)); resumeExchange(); }}
                   onOrder={(id) => { setSelected(id); go("detail"); }} />
               )}
@@ -2173,7 +2189,7 @@ export default function Home() {
                       <h2>{currentCustomer?.name}</h2>
                       <p>
                         {actor === "company-demo" ? "商户企业账户" : "个人账户"}{" "}
-                        · 仅演示身份，不构成真实认证
+                        · {workspace ? "独立账号 · 未完成真实身份认证" : "仅演示身份，不构成真实认证"}
                       </p>
                     </div>
                     <Badge status={currentCustomer?.status} />
@@ -2184,7 +2200,7 @@ export default function Home() {
                     <button onClick={() => setProfileTab("security")}><span className="circle-icon"><Lock size={24}/></span><div><strong>安全与隐私</strong><small>登录、资料可见范围与演示边界</small></div><ArrowRight size={19}/></button>
                     <button onClick={() => setSupport(true)}><span className="circle-icon"><Question size={24}/></span><div><strong>帮助与演示说明</strong><small>资金、数据保存及回单使用说明</small></div><ArrowRight size={19}/></button>
                   </div> : <div className="profile-subheading"><button className="button text back-link" onClick={() => setProfileTab("home")}><ArrowLeft size={16}/> 返回用户中心</button><h2>{profileTab === "recipients" ? "收款人管理" : profileTab === "security" ? "安全与隐私" : "账户资料"}</h2></div>}
-                  {profileTab === "security" && <section className="card security-summary"><h3>账户与数据保护</h3><p>线上私有站通过 ChatGPT 登录控制访问。页面内个人、商户和管理员均为演示角色，不是独立的真实资金账户。</p><ul><li>已登录账户的历史与私有回单按账户隔离，商户仅能获取明确发布给自己的回单。</li><li>收款账户仅保存掩码资料，保存不代表真实身份或银行归属验证。</li><li>本演示不提供密码修改、双重验证设置或真实资金操作，请勿输入密码、完整证件或支付卡资料。</li></ul></section>}
+                  {profileTab === "security" && <section className="card security-summary"><h3>账户与数据保护</h3><p>{workspace ? "当前使用独立密码账号与安全会话。邮箱尚未验证，未接入 MFA 或找回密码；充值与付款关闭。" : "线上私有站通过 ChatGPT 登录控制访问。页面内个人、商户和管理员均为演示角色，不是独立的真实资金账户。"}</p><ul><li>已登录账户的历史与私有回单按账户隔离，商户仅能获取明确发布给自己的回单。</li><li>收款账户仅保存掩码资料，保存不代表真实身份或银行归属验证。</li><li>本演示不提供密码修改、双重验证设置或真实资金操作，请勿输入密码、完整证件或支付卡资料。</li></ul></section>}
                   {profileTab === "recipients" && (
                     <div className="profile-add">
                       <label>
@@ -3697,7 +3713,7 @@ export default function Home() {
                       }{" "}
                       笔结果待核实
                     </span>
-                    {maker && (
+                    {maker && !workspace && (
                       <div className="workspace-controls">
                         <button
                           className="button outline"
@@ -3707,7 +3723,7 @@ export default function Home() {
                           <Plus size={17} />
                           创建 MOCK 场景
                         </button>
-                        {canResetDemoSession(actor, health?.persistence) && (
+                        {(!workspace && canResetDemoSession(actor, health?.persistence)) && (
                           <button
                             className="button outline reset-session"
                             disabled={locked}
