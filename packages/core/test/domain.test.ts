@@ -224,9 +224,9 @@ test("underpaid, overpaid and expired deposits stay unallocated", async () => {
     );
   }
 });
-test("beneficiary requires independent approval before quoting", async () => {
+test("saved beneficiary is immediately quotable without approval", async () => {
   const h = harness();
-  const b = await h.service.createBeneficiary(maker, {
+  const b = await h.service.createBeneficiary(customer, {
     customerId: "customer-1",
     name: "New demo recipient",
     country: "CN",
@@ -234,18 +234,16 @@ test("beneficiary requires independent approval before quoting", async () => {
     accountToken: "mock-token",
     accountMasked: "**** 0008",
   });
-  await assert.rejects(
-    () =>
-      h.service.createQuote(customer, {
-        customerId: "customer-1",
-        beneficiaryId: b.id,
-        sourceCurrency: "USDT",
-        sourceAmount: "100",
-      }),
-    code("BENEFICIARY_BLOCKED"),
-  );
-  await h.service.approveBeneficiary(checker, b.id);
-  assert.equal((await h.store.read()).beneficiaries.at(-1)?.status, "approved");
+  assert.equal(b.status, "saved");
+  assert.equal(b.approvedBy, undefined);
+  const q = await h.service.createQuote(customer, {
+    customerId: "customer-1",
+    beneficiaryId: b.id,
+    sourceCurrency: "USDT",
+    sourceAmount: "100",
+  });
+  assert.equal(q.beneficiaryId, b.id);
+  assert.equal((await h.store.read()).audits[0].action, "beneficiary.saved");
 });
 test("maker checker identity separation even with finance role", async () => {
   const h = harness();
@@ -698,4 +696,36 @@ test("total-deposit mode honors customer fee override and rejects totals consume
         }),
       code("INVALID_AMOUNT"),
     );
+});
+
+test("beneficiary account display accepts only four masked stars and last four digits", async () => {
+  const h = harness();
+  const input = {
+    customerId: "customer-1",
+    name: "Synthetic recipient",
+    country: "CN",
+    currency: "CNY",
+    accountToken: "mock-last-four",
+  };
+  const before = await h.store.read();
+  for (const accountMasked of [
+    "6222021234568888",
+    "8888",
+    "**** 1234568888",
+    "**** 8888 9999",
+    "**** 8888\n",
+    "**** ABCD",
+  ]) {
+    await assert.rejects(
+      h.service.createBeneficiary(customer, { ...input, accountMasked }),
+      (error: any) => error.name === "ZodError",
+    );
+  }
+  assert.deepEqual(await h.store.read(), before);
+  const b = await h.service.createBeneficiary(customer, {
+    ...input,
+    accountMasked: "**** 8888",
+  });
+  assert.equal(b.accountMasked, "**** 8888");
+  assert.equal(b.status, "saved");
 });

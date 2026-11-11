@@ -21,12 +21,104 @@ export function assertAppendOnly(previous: State, next: State): void {
         `${name} cannot be rewritten`,
       );
   }
+  const priorReceipts = previous.privateReceipts ?? [];
+  const nextReceipts = next.privateReceipts ?? [];
+  demand(
+    nextReceipts.length >= priorReceipts.length,
+    "IMMUTABLE_RECORD",
+    "Receipt originals cannot be deleted",
+  );
+  for (let i = 0; i < priorReceipts.length; i++) {
+    const prior = priorReceipts[i];
+    const current = nextReceipts[i];
+    const {
+      recognition: _beforeRecognition,
+      kind: beforeKind,
+      quarantine: beforeQuarantine,
+      links: beforeLinks,
+      published: beforePublished,
+      batchPublished: beforeBatchPublished,
+      ...beforeIdentity
+    } = prior;
+    const {
+      recognition: _afterRecognition,
+      kind: afterKind,
+      quarantine: afterQuarantine,
+      links: afterLinks,
+      published: afterPublished,
+      batchPublished: afterBatchPublished,
+      ...afterIdentity
+    } = current;
+    demand(
+      beforeKind === afterKind ||
+        (beforeKind === "single" &&
+          afterKind === "batch" &&
+          (!beforePublished || !!afterQuarantine)),
+      "IMMUTABLE_RECORD",
+      "Receipt classification cannot become less private",
+    );
+    demand(
+      !beforeQuarantine ||
+        JSON.stringify(beforeQuarantine) === JSON.stringify(afterQuarantine),
+      "IMMUTABLE_RECORD",
+      "Receipt quarantine cannot be removed or rewritten",
+    );
+    demand(
+      JSON.stringify(beforeIdentity) === JSON.stringify(afterIdentity),
+      "IMMUTABLE_RECORD",
+      "Receipt original identity cannot be rewritten",
+    );
+    demand(
+      afterLinks.length >= beforeLinks.length &&
+        beforeLinks.every(
+          (link, j) => JSON.stringify(link) === JSON.stringify(afterLinks[j]),
+        ),
+      "IMMUTABLE_RECORD",
+      "Receipt associations cannot be deleted or rewritten",
+    );
+    demand(
+      !beforeBatchPublished ||
+        JSON.stringify(beforeBatchPublished) ===
+          JSON.stringify(afterBatchPublished),
+      "IMMUTABLE_RECORD",
+      "Published batch grants cannot be deleted or rewritten",
+    );
+    demand(
+      !beforePublished ||
+        JSON.stringify(beforePublished) === JSON.stringify(afterPublished),
+      "IMMUTABLE_RECORD",
+      "Published receipt grants cannot be deleted or rewritten",
+    );
+  }
+  const priorPricing = previous.pricingHistory ?? [];
+  demand(
+    (next.pricingHistory ?? []).length >= priorPricing.length &&
+      priorPricing.every(
+        (v, i) => JSON.stringify(v) === JSON.stringify(next.pricingHistory![i]),
+      ),
+    "IMMUTABLE_RECORD",
+    "Published pricing cannot be rewritten",
+  );
   for (const order of previous.orders) {
     const newer = next.orders.find((o) => o.id === order.id);
     demand(
       newer && JSON.stringify(order.quote) === JSON.stringify(newer.quote),
       "IMMUTABLE_QUOTE",
       "Order quote snapshots cannot change",
+    );
+    demand(
+      (order.receiptAttachmentIds ?? []).every(
+        (id, i) => newer.receiptAttachmentIds?.[i] === id,
+      ),
+      "IMMUTABLE_RECORD",
+      "Order receipt associations cannot be removed or rewritten",
+    );
+    demand(
+      newer.orderNumber === order.orderNumber &&
+        JSON.stringify(newer.payoutProviderSnapshot) ===
+          JSON.stringify(order.payoutProviderSnapshot),
+      "IMMUTABLE_PROVIDER",
+      "Order number and payout provider snapshots cannot change",
     );
   }
 }

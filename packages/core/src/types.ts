@@ -27,13 +27,53 @@ export interface Beneficiary {
   name: string;
   country: "CN" | "US";
   currency: "CNY" | "USD";
+  bankName?: string;
   accountMasked: string;
   accountToken: string;
-  status: "pending" | "approved" | "suspended";
+  status: "saved" | "pending" | "approved" | "suspended";
   createdBy: string;
   approvedBy?: string;
 }
+export interface PricingBaseline {
+  USDT_USD: string;
+  USDC_USD: string;
+  USD_CNY: string;
+  asOf: string;
+  expiresAt: string;
+}
+export interface PricingRoute {
+  enabled: boolean;
+  adjustmentMode: "fixed" | "percentage";
+  adjustmentDirection: "add" | "subtract";
+  adjustment: string;
+}
+export interface PricingVersion {
+  mode: "MOCK";
+  version: string;
+  baseline: PricingBaseline;
+  routes: Record<"CNY" | "USD", PricingRoute>;
+  rates: {
+    sourceCurrency: "USDT" | "USDC";
+    payoutCurrency: "CNY" | "USD";
+    referenceRate: string;
+    customerRate: string;
+  }[];
+  serviceFee: string;
+  channelFee: string;
+  publishedAt?: string;
+  publishedBy?: string;
+}
+export interface PayoutProvider {
+  id: string;
+  name: string;
+  status: "active" | "disabled";
+  scope: "official" | "third_party";
+  routes: ("CNY" | "USD")[];
+  isDefault: boolean;
+  updatedAt: string;
+}
 export interface Quote {
+  pricingSnapshot?: PricingVersion;
   id: string;
   customerId: string;
   beneficiaryId: string;
@@ -69,6 +109,11 @@ export type PayoutStatus =
   | "failed"
   | "cancelled";
 export interface Order {
+  receiptAttachmentIds?: string[];
+  orderNumber?: string;
+  payoutProviderSnapshot?: PayoutProvider;
+  fundingSource?: "deposit" | "wallet";
+  walletFundingStatus?: "reserved" | "consumed" | "released";
   id: string;
   customerId: string;
   quote: Quote;
@@ -78,6 +123,12 @@ export interface Order {
   payoutStatus: PayoutStatus;
   receiptStatus: "none" | "uploaded" | "verified";
   reconciled: boolean;
+  /** Business completion is separate from optional financial reconciliation. */
+  completion?: {
+    basis: "admin_attestation" | "mock_internal_record" | "financial_review";
+    completedAt: string;
+    completedBy: string;
+  };
   createdAt: string;
   depositEventId?: string;
   fundingExpiresAt?: string;
@@ -97,9 +148,15 @@ export interface Order {
     paidAt: string;
     providerReference: string;
     confirmedBy: string;
-    verification: "admin_attestation";
+    verification: "admin_attestation" | "mock_internal_record";
+    referenceKind?: "mock_internal" | "external";
+    internalRecordId?: string;
+    confirmedAt?: string;
+    statement?: string;
+    note?: string;
   };
   receiptFile?: {
+    privateOriginal?: boolean;
     fileName: string;
     contentType: string;
     dataBase64: string;
@@ -127,6 +184,8 @@ export interface PayoutAttempt {
   createdAt: string;
   providerReference?: string;
   evidence?: string;
+  referenceKind?: "mock_internal" | "external";
+  internalRecordId?: string;
   verifiedBy?: string;
 }
 export interface Journal {
@@ -214,6 +273,14 @@ export interface Batch {
   createdAt: string;
 }
 export interface BatchItem {
+  amountMode?: "principal" | "target_payout";
+  targetAmount?: string;
+  targetCurrency?: "CNY" | "USD";
+  recipientName?: string;
+  bankName?: string;
+  accountMasked?: string;
+  rowNumber?: number;
+  quoteId?: string;
   id: string;
   batchId: string;
   clientItemId: string;
@@ -225,6 +292,10 @@ export interface BatchItem {
   orderId?: string;
 }
 export interface State {
+  merchantImportDigests?: Record<string, string>;
+  privateReceipts?: import("./receipts").PrivateReceipt[];
+  pricingHistory?: PricingVersion[];
+  payoutProviders?: PayoutProvider[];
   customers: Customer[];
   beneficiaries: Beneficiary[];
   quotes: Quote[];

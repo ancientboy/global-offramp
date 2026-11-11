@@ -7,7 +7,41 @@ import {
   canResetDemoSession,
   quoteAmountInput,
   validQuoteAmount,
+  decimalUnits,
+  hasWalletFunds,
+  recipientUsable,
+  batchErrorLabel,
+  canQuickMockConfirm,
+  type Order,
 } from "../app/models";
+
+test("quick MOCK confirmation is limited to funded official normal states", () => {
+  const o = {
+    depositStatus: "confirmed",
+    payoutStatus: "draft",
+    payoutProviderSnapshot: { scope: "official", status: "active" },
+  } as Order;
+  assert.equal(canQuickMockConfirm(o), true);
+  for (const payoutStatus of ["approved", "awaiting_approval"])
+    assert.equal(canQuickMockConfirm({ ...o, payoutStatus }), true);
+  for (const payoutStatus of ["unknown", "failed", "sent", "cancelled"])
+    assert.equal(canQuickMockConfirm({ ...o, payoutStatus }), false);
+  assert.equal(canQuickMockConfirm({ ...o, depositStatus: "awaiting" }), false);
+  assert.equal(
+    canQuickMockConfirm({ ...o, payoutProviderSnapshot: undefined }),
+    false,
+  );
+  assert.equal(
+    canQuickMockConfirm({
+      ...o,
+      payoutProviderSnapshot: {
+        ...o.payoutProviderSnapshot!,
+        scope: "third_party",
+      },
+    }),
+    false,
+  );
+});
 
 test("money display preserves server decimal precision without numeric coercion", () => {
   assert.equal(money("1007.000000"), "1,007.00");
@@ -110,4 +144,31 @@ test("fiat accepts two decimals, stablecoin six, and invalid or zero amounts can
     assert.equal(validQuoteAmount("target_payout", value), false);
     assert.equal(validQuoteAmount("total_deposit", value), false);
   }
+});
+
+test("wallet display comparisons retain six decimals and reject malformed values", () => {
+  assert.equal(
+    decimalUnits("9007199254740993.000001"),
+    BigInt("9007199254740993000001"),
+  );
+  assert.equal(hasWalletFunds("1000.000001", "1000.000001"), true);
+  assert.equal(hasWalletFunds("1000.000000", "1000.000001"), false);
+  assert.equal(hasWalletFunds(undefined, "1"), false);
+  assert.equal(hasWalletFunds("NaN", "1"), false);
+  assert.throws(() => decimalUnits("1.0000001"));
+});
+
+test("saved and legacy saved recipients are selectable without claiming verification", () => {
+  for (const status of ["saved", "approved", "pending"])
+    assert.equal(recipientUsable(status), true);
+  for (const status of ["suspended", "unknown", ""])
+    assert.equal(recipientUsable(status), false);
+  assert.equal(
+    batchErrorLabel("Beneficiary unavailable or outside customer scope"),
+    "收款账户不存在、已停用，或不属于当前客户",
+  );
+  assert.equal(
+    batchErrorLabel("Recipient unavailable or belongs to another customer"),
+    "收款账户不存在、已停用，或不属于当前客户",
+  );
 });

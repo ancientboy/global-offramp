@@ -2,6 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { demand } from "./money";
 import { Actor, Role } from "./types";
 const RULES: Record<string, readonly Role[]> = {
+  "wallet.deposit": ["customer", "operations"],
+  "order.cancel": ["customer", "operations"],
   "mock.seed": ["operations"],
   "mock.deposit": ["operations"],
   "quote.create": ["customer", "operations"],

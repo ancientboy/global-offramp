@@ -5,8 +5,8 @@ fixture actors, fixed-point money, ledger and authorization logic through a
 Cloudflare-compatible `fetch(request, env)` ES module. It serves the exported
 Next client through `env.ASSETS` on all non-API paths. It is **not** the NestJS
 server or a deployed PostgreSQL backend. It has no provider integrations,
-real-money execution, raw TCP, durable object/file upload storage, queue consumer,
-persistent database, identity provider, or durable ledger.
+real-money execution, raw TCP, queue consumer,
+custom identity provider, or production ledger. D1 stores bounded synthetic snapshots when bound.
 
 Publish only inside the existing private Site. Site access control is supplied
 by the host and is separate from fixture roles. The `x-demo-actor` header selects
@@ -14,9 +14,8 @@ server-defined simulation actors; it is **not real user authentication**. Do not
 change Site access or existing project identities as part of the build. The
 publisher supplies the existing Site manifest and asset binding.
 
-Use synthetic data only. The UI must visibly warn not to enter real customer,
-account, payment, receipt or other private information. No assertion that the
-preview has real identity authentication or persistent private storage is valid.
+Use synthetic order/wallet data only. Private receipt uploads are allowed only for documents the administrator is authorized to process; never upload secrets or full identity/payment-card credentials. No assertion that the
+preview is a production payment or financial custody system is valid.
 
 ## Build and check
 
@@ -45,7 +44,47 @@ The equal-length byte comparison visits every byte without early exit; a JS
 runtime cannot promise native constant-time execution. No external request can
 submit a signed deposit webhook in this adapter.
 
-## Session behavior and bounds
+## D1 synthetic history
+
+The root hosting manifest declares `d1: "DB"`. Root `db/schema.ts` and
+`drizzle.config.ts` generate append-only SQL/snapshot/journal migrations using
+`npm run db:generate`. The build copies `drizzle/` to `dist/.openai/drizzle/`;
+the official Sites packager also includes it. Sites applies migrations before
+Worker publication. Requests never create or alter tables.
+
+The trusted Sites gateway supplies `oai-authenticated-user-id`. With DB bound,
+missing identity fails closed (401). Each visitor owns a separate synthetic
+snapshot; demo actors simulate roles only within that namespace. Do not expose
+the Worker outside Sites' authenticated gateway or trust arbitrary proxy headers.
+Cookie rotation, eviction, expiry, Worker reconstruction and deployment do not
+delete D1 records. Reloading dashboard restores that visitor's data and controls.
+The durable reset endpoint is disabled. Existing pre-upgrade memory sessions
+cannot be migrated automatically and do not become stored history retroactively.
+
+`D1MockStore` executes revision-based conditional SQL updates and retries only
+confirmed conflicts. The transaction commits wallet, order, journal, audit and
+idempotency state together. Callbacks must be pure domain work with no external
+side effects. An uncertain SQL write is never automatically retried. The existing
+core append-only assertions apply. This is a demo snapshot store, not a production
+ledger, backup policy, accounting database or unlimited archival guarantee.
+
+D1 snapshots are capped at **1 MiB per signed-in visitor**, below D1's row/string
+limit. Legacy inline attachments are capped at **256 KiB each** and count toward
+that total. Capacity rejection rolls back new changes and preserves existing data.
+No expiry/deletion job is implemented. Health reports `d1_mock`, storage bounds,
+and `schemaReady` after a real non-data schema query; missing schema returns 503.
+SQLite tests execute generated SQL, independent database connections, concurrent
+CAS/overspending, idempotent credits, immutable history, reconstruction, identity
+isolation, uncertain commit recovery, unknown payouts and attachment limits.
+These tests do not establish remote deployment, authentication-header stripping,
+backup/retention SLAs or actual hosted migration success. Verify hosted health
+and signed-in write/read before describing deployment as verified.
+
+## Local ephemeral session behavior and request bounds
+
+The following memory-retention details apply only when DB is absent. Cookie,
+origin, queue and rate controls remain active in D1 mode as well.
+
 
 - `GET /api/health` is stateless and never sets a cookie. It reports `mode: MOCK`,
   `realExecutionEnabled: false`, `persistence: session-memory`, `volatile: true`,
@@ -122,6 +161,6 @@ bundling with no Node globals.
 
 ## Single-admin and attachment update (2026-10-15)
 
-The current UI uses admin-demo for one merchant workbench. It exposes the core manual-payout and receipt-file contracts documented in docs/API.md. Receipt bytes are scoped synthetic state, not durable object storage: PNG/JPEG/PDF up to 2 MiB, unscanned, basic signature/type validation only. JSON body limit is 3 MiB, state limit 4 MiB per session and maximum 4 sessions per isolate. Multiple attachments can exhaust the state cap even when each file is individually within its limit; the transaction must fail without corrupting prior state.
+The current UI uses admin-demo for one operations workbench. New receipt-library routes use private R2 (BUCKET) for original bytes and D1 for metadata, hashes, recognition suggestions, and links. Originals default admin-only; a separately redacted single-customer copy can be explicitly published. Whole-batch originals can be explicitly published to the one company customer and actual submitted batch after scope validation; OCR completion is not required. Owner hashing prevents cross-visitor object access. Files are validated by extension, content type, signature and SHA256, capped at 2 MiB, and are not malware-scanned. Requests are limited to 3 MiB; UI uploads sequentially. A 500-item metadata cap and the aggregate D1 1 MiB cap apply. Missing R2 fails closed for durable uploads. Unknown metadata-commit outcomes preserve the object and same-hash retries deduplicate.
 
-Target-payout quote mode and the separate 30-minute order funding deadline are supported. Funding instructions are explicitly nonpayable, address null, network MOCK. No real wallet address/QR or blockchain payment is provided. Administrator payment confirmation is bookkeeping attestation, not an external bank verification.
+Without DB, uploads use bounded session-memory bytes and expire with the session. This is not a durable fallback. OCR runs in the browser with same-origin Tesseract assets and never calls external OCR APIs. Recognition never changes payment status.

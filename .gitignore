@@ -11,3 +11,6 @@ coverage/
 sites-dist/
 out/
 *.tsbuildinfo
+
+# Generated local OCR engine/model assets
+apps/web/public/ocr/

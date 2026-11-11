@@ -28,12 +28,36 @@ import {
   ClipboardText,
   Database,
 } from "@phosphor-icons/react";
+import MerchantOverview, {
+  matchesMerchantQueue,
+  type MerchantQueue,
+} from "./MerchantOverview";
+import OrderHistory from "./OrderHistory";
+import CustomerWallet from "./CustomerWallet";
+import CustomerOrders from "./CustomerOrders";
+import "./exchange-flow.css";
+import { customerOrderState } from "./customer-order-models";
+import "./customer-workspace.css";
+import { batchProgress, batchResultLabel } from "./batch-progress";
+import ReceiptLibrary from "./ReceiptLibrary";
+import MerchantBatchImport from "./MerchantBatchImport";
+import "./merchant-import.css";
+import PublishedReceipts from "./PublishedReceipts";
+import {
+  OverviewPanel,
+  PricingSettingsPanel,
+  PayoutProvidersPanel,
+  CustomerDirectoryPanel,
+  ReferralPartnersPanel,
+} from "./AdminPanels";
+import type { PricingInput, PricingVersion } from "./admin-models";
 import type { Icon } from "@phosphor-icons/react";
 import { Badge, Note, Steps, FeeRows, Empty, Modal, downloadCSV } from "./ui";
 import {
   money,
   quoteAmountInput,
   validQuoteAmount,
+  hasWalletFunds,
   canResetDemoSession,
   percentage,
   shortId,
@@ -46,10 +70,16 @@ import {
   type Dashboard,
   type Health,
   type BatchResult,
+  type BatchPreview,
+  batchErrorLabel,
+  recipientUsable,
+  canQuickMockConfirm,
   type Audit,
 } from "./models";
 
 type Page =
+  | "wallet"
+  | "profile"
   | "payment"
   | "recipients"
   | "orders"
@@ -62,13 +92,19 @@ type Page =
   | "partner"
   | "clients"
   | "commissions"
-  | "settlements";
+  | "settlements"
+  | "overview"
+  | "directory"
+  | "providers"
+  | "referrals"
+  | "receipts";
 type Field = {
   key: string;
   label: string;
   value: string;
   type?: "text" | "textarea" | "select" | "month";
   options?: [string, string][];
+  required?: boolean;
 };
 type Command = {
   title: string;
@@ -76,19 +112,26 @@ type Command = {
   path: string;
   base?: Record<string, string>;
   fields?: Field[];
+  review?: [string, string][];
   button: string;
   success: string;
 };
 const navs: Record<ViewRole, [Page, string, Icon][]> = {
   customer: [
-    ["payment", "付款", Wallet],
-    ["recipients", "收款人", User],
-    ["orders", "订单记录", FileText],
-    ["certification", "身份认证", ShieldCheck],
+    ["wallet", "钱包", Wallet],
+    ["payment", "结汇", CurrencyCircleDollar],
+    ["orders", "订单", FileText],
+    ["profile", "用户中心", User],
   ],
   admin: [
+    ["overview", "经营概览", ChartBar],
     ["workbench", "出款工作台", Wallet],
-    ["recipients", "收款人白名单", User],
+    ["orders", "全部订单", FileText],
+    ["receipts", "回单资料库", Files],
+    ["directory", "用户与商户", Users],
+    ["providers", "出款合作方", Bank],
+    ["referrals", "推广伙伴", Users],
+    ["recipients", "收款账户", User],
     ["certification", "客户审核", ShieldCheck],
     ["pricing", "汇率与费率", SlidersHorizontal],
     ["reconciliation", "财务对账", ClipboardText],
@@ -103,7 +146,14 @@ const navs: Record<ViewRole, [Page, string, Icon][]> = {
   ],
 };
 const titles: Record<Page, string> = {
-  payment: "创建付款",
+  receipts: "回单资料库",
+  overview: "经营概览",
+  directory: "用户与商户",
+  providers: "出款合作方",
+  referrals: "推广伙伴",
+  wallet: "钱包资产",
+  profile: "用户中心",
+  payment: "结汇",
   recipients: "收款人",
   orders: "订单记录",
   detail: "订单详情",
@@ -118,24 +168,31 @@ const titles: Record<Page, string> = {
   settlements: "结算记录",
 };
 const subtitles: Record<Page, string> = {
-  payment: "使用稳定币，向已验证的银行账户付款",
-  recipients: "管理可信任的收款账户，管理员审核后可用",
-  orders: "资金到账、换汇、出款与回单，分别追踪",
+  receipts: "私有存储、本地识别、人工关联，原件不会自动分享给客户",
+  overview: "按订单创建、登记付款分别统计，不同币种独立核算",
+  directory: "查看个人与企业资料、账户和订单，不涉及真实身份认证",
+  providers: "管理实际出款角色，与推广返佣伙伴完全分开",
+  referrals: "查看推广归属与服务费佣金，不承担订单出款",
+  wallet: "先模拟充值，再用可用余额结汇；资金状态一目了然",
+  profile: "管理演示身份与常用收款账户",
+  payment: "从钱包余额兑换法币，汇率、费用与到账金额透明列明",
+  recipients: "收款账户保存后即可使用，系统自动检查必填项、格式与币种",
+  orders: "付款确认即完成，回单可选补充，异常单独处理",
   detail: "每一步资金状态，都有清晰记录",
   certification: "来自服务端的演示客户审核状态",
-  workbench: "查看入金、登记线下付款、上传回单，一处完成",
-  pricing: "服务端样例配置与不可覆盖的报价快照",
-  reconciliation: "核对模拟渠道参考号、金额与证据",
+  workbench: "核对收款信息后确认完成，回单可后补，未知结果先核实",
+  pricing: "模拟基准加管理员调整，先预览再发布，新报价使用新版本",
+  reconciliation: "处理异常与历史待复核记录，正常完成订单无需再次核对",
   audit: "来自服务端的脱敏操作记录",
   partner: "查看服务费佣金与月度结算",
   clients: "仅显示已产生佣金记录的脱敏客户",
-  commissions: "按对账后的服务费计提，保留退款调整",
+  commissions: "按确认完成后的服务费计提，保留冻结期与退款调整",
   settlements: "服务端结算草稿与批准记录",
 };
 const actors: [ActorKey, string][] = [
   ["customer-demo", "客户 · 个人"],
-  ["company-demo", "客户 · 企业"],
-  ["admin-demo", "商家 · 管理员"],
+  ["company-demo", "商户 · 企业客户"],
+  ["admin-demo", "平台 · 运营管理员"],
   ["partner-demo", "合作伙伴"],
 ];
 const errorText = (e: unknown) =>
@@ -154,7 +211,7 @@ export default function Home() {
         : "admin";
   const finance = actor === "admin-demo";
   const maker = actor === "admin-demo";
-  const [page, setPage] = useState<Page>("payment");
+  const [page, setPage] = useState<Page>("wallet");
   const [dataState, setDataState] = useState<{
     actor: ActorKey;
     value: Dashboard;
@@ -171,10 +228,15 @@ export default function Home() {
   const [support, setSupport] = useState(false);
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState("single");
-  const [enteredAmount, setEnteredAmount] = useState("100000.00");
+  const [profileTab, setProfileTab] = useState("home");
+  const [resumeDraft, setResumeDraft] = useState(false);
+  const [batchChecked, setBatchChecked] = useState(false);
+  const [batchPreview, setBatchPreview] = useState<BatchPreview | null>(null);
+  const [merchantQueue, setMerchantQueue] = useState<MerchantQueue>("all");
+  const [enteredAmount, setEnteredAmount] = useState("1000.00");
   const [amountMode, setAmountMode] = useState<
     "total_deposit" | "target_payout"
-  >("target_payout");
+  >("total_deposit");
   const [asset, setAsset] = useState("USDT");
   const [market, setMarket] = useState("CNY");
   const [beneficiaryId, setBeneficiaryId] = useState("");
@@ -185,6 +247,7 @@ export default function Home() {
   const [checked, setChecked] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [selected, setSelected] = useState("");
+  const [receiptOrderId, setReceiptOrderId] = useState("");
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [command, setCommand] = useState<Command | null>(null);
@@ -207,21 +270,26 @@ export default function Home() {
     customers = data?.customers ?? [];
   const customerId = actor === "company-demo" ? "customer-2" : "customer-1";
   const currentCustomer = customers.find((c) => c.id === customerId);
-  const approvedBeneficiaries = beneficiaries.filter(
+  const usableBeneficiaries = beneficiaries.filter(
     (b) =>
       b.customerId === customerId &&
-      b.status === "approved" &&
+      recipientUsable(b.status) &&
       b.currency === market,
   );
   const recipient =
-    approvedBeneficiaries.find((b) => b.id === beneficiaryId) ??
-    approvedBeneficiaries[0];
+    usableBeneficiaries.find((b) => b.id === beneficiaryId) ??
+    usableBeneficiaries[0];
   const chosenBeneficiaryId = recipient?.id ?? "";
   const order = orders.find((o) => o.id === selected) ?? orders[0];
   const commissionRows = data?.commissions ?? [];
   const settlementRows = data?.settlements ?? [];
   const usable = connection === "connected" && !!data;
   const locked = busy || !usable;
+  const walletBalances =
+    data?.walletBalances?.filter((w) => w.customerId === customerId) ?? [];
+  const sourceBalance = walletBalances.find((w) => w.currency === asset);
+  const enoughBalance =
+    !!quote && hasWalletFunds(sourceBalance?.available, quote.totalDeposit);
   const remaining = quote
     ? Math.max(
         0,
@@ -234,6 +302,7 @@ export default function Home() {
       path: string,
       body?: unknown,
       signal?: AbortSignal,
+      responseType: "json" | "blob" = "json",
     ): Promise<T> => {
       const response = await fetch("/api/" + path, {
         method: body === undefined ? "GET" : "POST",
@@ -245,7 +314,10 @@ export default function Home() {
           ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
           : AbortSignal.timeout(15000),
       });
-      const result = await response.json().catch(() => null);
+      const result =
+        response.ok && responseType === "blob"
+          ? await response.blob()
+          : await response.json().catch(() => null);
       if (!response.ok) {
         if (result?.error === "SESSION_EXPIRED" && actorRef.current === actor) {
           // Never replay a mutation into a newly created session. Require a fresh, explicit dashboard read.
@@ -256,6 +328,7 @@ export default function Home() {
           setStep(1);
           setChecked(false);
           setBatch(null);
+          setBatchPreview(null);
           setBatchText("");
           setBatchKey("");
           setAudits(null);
@@ -263,6 +336,10 @@ export default function Home() {
           setToast("");
           setCommand(null);
           setCommandValues({});
+          setBeneficiaryId("");
+          setEnteredAmount("1000.00");
+          setResumeDraft(false);
+          setBatchChecked(false);
           setError(
             result.message ??
               "演示会话已失效，请刷新服务器数据以开始新的空白会话。",
@@ -281,10 +358,25 @@ export default function Home() {
             `API 请求失败 (${response.status})`,
         );
       }
+      if (actorRef.current !== actor)
+        throw new Error("身份已切换，请在当前入口重新操作");
       if (result === null) throw new Error("API 未返回可读取的数据");
       return result as T;
     },
     [actor],
+  );
+
+  const receiptRequest = useCallback(
+    async <T,>(path: string, init?: RequestInit): Promise<T> => {
+      const body =
+        init?.body === undefined ? undefined : JSON.parse(String(init.body));
+      return request<T>(
+        path.replace(/^\/?api\//, ""),
+        body,
+        init?.signal ?? undefined,
+      );
+    },
+    [request],
   );
 
   const reload = useCallback(async () => {
@@ -322,11 +414,15 @@ export default function Home() {
     setStep(1);
     setChecked(false);
     setBatch(null);
+    setBatchPreview(null);
     setBatchText("");
     setBatchKey("");
     setAudits(null);
     setAuditError("");
     setError("");
+    setResumeDraft(false);
+    setBatchChecked(false);
+    setReceiptOrderId("");
     void reload();
     return () => {
       reloadId.current += 1;
@@ -431,6 +527,27 @@ export default function Home() {
     return () => controller.abort();
   }, [page, usable, finance, actor, request, dataState]);
 
+  async function previewPricing(
+    input: PricingInput,
+  ): Promise<PricingVersion | null> {
+    if (busyRef.current || !usable) return null;
+    busyRef.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await request<PricingVersion>(
+        "admin/pricing/preview",
+        input,
+      );
+      return actorRef.current === actor ? result : null;
+    } catch (e) {
+      if (actorRef.current === actor) setError(errorText(e));
+      return null;
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }
   async function mutate<T>(
     path: string,
     body: unknown,
@@ -457,6 +574,7 @@ export default function Home() {
         setStep(1);
         setChecked(false);
         setBatch(null);
+        setBatchPreview(null);
         setBatchText("");
         setBatchKey("");
         setAudits(null);
@@ -472,6 +590,7 @@ export default function Home() {
       await reload();
       return result;
     } catch (e) {
+      if (actorRef.current !== actor) return null;
       setError(errorText(e));
       setCommandError(errorText(e));
       return null;
@@ -481,9 +600,20 @@ export default function Home() {
     }
   }
   function go(next: Page) {
+    if (page === "payment" && next !== "payment" && step >= 2) {
+      setStep(1);
+      setQuote(null);
+      setChecked(false);
+    }
+    if (next === "payment" && step === 2 && !quote) {
+      setStep(1);
+      setChecked(false);
+    }
     setPage(next);
     setFilter("all");
     setSearch("");
+    setMerchantQueue("all");
+    if (next === "profile") setProfileTab("home");
     setCommand(null);
     window.scrollTo(0, 0);
   }
@@ -501,7 +631,10 @@ export default function Home() {
     setBeneficiaryId("");
     setSupport(false);
     setQuote(null);
-    if (nextRole !== role) go(navs[nextRole][0][0]);
+    setMode("single");
+    setResumeDraft(false);
+    setBatchChecked(false);
+    go(navs[nextRole][0][0]);
   }
   function editForm(edit: () => void) {
     setQuote(null);
@@ -517,28 +650,64 @@ export default function Home() {
   }
   async function submitCommand() {
     if (!command) return;
-    const result = await mutate(
+    const payload = { ...command.base, ...commandValues };
+    if (command.path === "beneficiaries") {
+      payload.name = (payload.name ?? "").trim();
+      if (!payload.name || payload.name.length > 100) {
+        setCommandError("请填写收款人名称，最多 100 个字符。");
+        return;
+      }
+      if (!/^\*{4} \d{4}$/.test(payload.accountMasked ?? "")) {
+        setCommandError(
+          "演示账户请按 **** 8888 格式填写，仅保留四位尾号，不填写完整账号。",
+        );
+        return;
+      }
+    }
+    const result = await mutate<{ id?: string }>(
       command.path,
-      { ...command.base, ...commandValues },
+      payload,
       command.success,
     );
-    if (result !== null) setCommand(null);
+    if (result !== null) {
+      setCommand(null);
+      if (
+        command.path === "beneficiaries" &&
+        role === "customer" &&
+        result.id
+      ) {
+        setBeneficiaryId(result.id);
+        setQuote(null);
+        setChecked(false);
+        setQuoteVersion((v) => v + 1);
+      }
+      if (command.path === "wallet/deposits") {
+        setQuote(null);
+        setChecked(false);
+        setQuoteVersion((v) => v + 1);
+      }
+    }
   }
   async function createOrder() {
-    if (!quote || !checked || remaining === 0) return;
+    if (!quote || !checked || remaining === 0 || !enoughBalance) return;
     const result = await mutate<Order>(
       "orders",
-      { quoteId: quote.id, clientOrderId: "web_" + quote.id },
-      "订单已在服务端创建，等待 MOCK 入金事件。",
+      {
+        quoteId: quote.id,
+        clientOrderId: "web_" + quote.id,
+        fundingSource: "wallet",
+      },
+      "结汇订单已创建，对应模拟余额已冻结，无需再次充值。",
     );
     if (result) {
       setSelected(result.id);
+      setResumeDraft(false);
       setStep(3);
     }
   }
   function template(withErrors = false) {
     const available = beneficiaries.filter(
-      (b) => b.customerId === customerId && b.status === "approved",
+      (b) => b.customerId === customerId && recipientUsable(b.status),
     );
     const token = uid().slice(0, 8);
     return (
@@ -557,16 +726,105 @@ export default function Home() {
       { customerId, clientBatchId: key, csv: batchText },
       "服务端逐行校验完成，请核对有效行与错误行。",
     );
-    if (result) setBatch(result);
+    if (result) {
+      setBatch(result);
+      setBatchChecked(false);
+      setBatchPreview(null);
+    }
+  }
+  async function previewBatch() {
+    if (!batch) return;
+    setBatchPreview(null);
+    setBatchChecked(false);
+    const result = await mutate<BatchPreview>(
+      `batches/${batch.batch.id}/quote`,
+      {},
+      "批次模拟报价已生成，请核对分币种金额和费用。",
+    );
+    if (result) {
+      setBatchPreview(result);
+      setNow(Date.now());
+    }
   }
   async function submitBatch() {
-    if (!batch) return;
+    if (
+      !batch ||
+      !batchPreview ||
+      !batchChecked ||
+      batchRemaining === 0 ||
+      !batchEnough
+    )
+      return;
     const result = await mutate<BatchResult>(
       `batches/${batch.batch.id}/submit`,
-      {},
-      "有效行已创建订单。每笔订单仍需独立入金、出款与对账。",
+      {
+        fundingSource: "wallet",
+        quoteIds: batchPreview.quotes.map((q) => q.id),
+      },
+      "有效行已创建结汇订单并冻结模拟余额，可逐笔追踪出款与回单。",
     );
-    if (result) setBatch(result);
+    if (result) {
+      setBatch(result);
+      setBatchChecked(false);
+      setBatchPreview(null);
+    }
+  }
+  function addRecipient() {
+    openCommand({
+      title: "手动新增模拟收款账户",
+      description:
+        "保存后即可用于单笔或批量结汇，无需人工审核。系统仅检查必填项、账户尾号格式和地区币种匹配，不验证账户归属或银行信息。演示中请只填写虚构资料。",
+      path: "beneficiaries",
+      base: {
+        customerId,
+        country: market === "CNY" ? "CN" : "US",
+        currency: market,
+        accountToken: "mock-vault-" + uid(),
+      },
+      fields: [
+        { key: "name", label: "虚构收款人名称", value: "MOCK 新收款人" },
+        {
+          key: "accountMasked",
+          label: "虚构账户尾号（例如 **** 8888）",
+          value: "**** 8888",
+        },
+      ],
+      button: "保存并使用",
+      success: "收款账户已保存，可立即用于结汇；未进行真实银行账户验证。",
+    });
+  }
+  function openTopup(currency: string) {
+    openCommand({
+      title: "模拟充值 " + currency,
+      description:
+        "仅在当前演示账户记账，不连接区块链或托管服务，不提供真实地址。请勿转入任何真实资金。重复提交同一请求不会重复入账。",
+      path: "wallet/deposits",
+      base: { customerId, currency, idempotencyKey: "topup_" + uid() },
+      fields: [
+        {
+          key: "amount",
+          label: "模拟充值数量（最多 6 位小数）",
+          value: "20000.00",
+        },
+      ],
+      button: "确认模拟充值",
+      success: "模拟余额已入账，可继续结汇。原草稿保留，报价将重新获取。",
+    });
+  }
+  function goTopup() {
+    setResumeDraft(true);
+    setQuote(null);
+    setChecked(false);
+    setStep(1);
+    go("wallet");
+  }
+  function resumeExchange() {
+    setResumeDraft(false);
+    setStep(1);
+    setQuote(null);
+    setChecked(false);
+    setQuoteVersion((v) => v + 1);
+    go("payment");
   }
   const evidence = (value: string): Field => ({
     key: "evidence",
@@ -576,7 +834,7 @@ export default function Home() {
   });
   const reference = (value: string): Field => ({
     key: "providerReference",
-    label: "模拟渠道参考号",
+    label: "模拟渠道参考号（请手动填写 MOCK- 开头）",
     value,
   });
   function resetSession() {
@@ -605,7 +863,9 @@ export default function Home() {
   function orderTable() {
     const visible = orders.filter(
       (o) =>
-        (filter === "all" ||
+        (page !== "workbench" || matchesMerchantQueue(o, merchantQueue)) &&
+        (page === "workbench" ||
+          filter === "all" ||
           (filter === "pending"
             ? !["sent", "cancelled"].includes(o.payoutStatus)
             : o.payoutStatus === "sent")) &&
@@ -622,30 +882,34 @@ export default function Home() {
       <div className="card table-card">
         <div className="table-tools">
           <div className="tabs">
-            {[
-              ["pending", "待处理"],
-              ["sent", "已发送"],
-              ["all", "全部订单"],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                className={filter === value ? "active" : ""}
-                onClick={() => setFilter(value)}
-              >
-                {label}
-                <em>
-                  {
-                    orders.filter(
-                      (o) =>
-                        value === "all" ||
-                        (value === "sent"
-                          ? o.payoutStatus === "sent"
-                          : !["sent", "cancelled"].includes(o.payoutStatus)),
-                    ).length
-                  }
-                </em>
-              </button>
-            ))}
+            {page === "workbench" ? (
+              <strong>当前工作队列</strong>
+            ) : (
+              [
+                ["pending", "待处理"],
+                ["sent", "已发送"],
+                ["all", "全部订单"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  className={filter === value ? "active" : ""}
+                  onClick={() => setFilter(value)}
+                >
+                  {label}
+                  <em>
+                    {
+                      orders.filter(
+                        (o) =>
+                          value === "all" ||
+                          (value === "sent"
+                            ? o.payoutStatus === "sent"
+                            : !["sent", "cancelled"].includes(o.payoutStatus)),
+                      ).length
+                    }
+                  </em>
+                </button>
+              ))
+            )}
           </div>
           <input
             className="search"
@@ -683,7 +947,7 @@ export default function Home() {
                         if (page !== "workbench") go("detail");
                       }}
                     >
-                      <strong>{shortId(o.id)}</strong>
+                      <strong>{o.orderNumber ?? shortId(o.id)}</strong>
                     </button>
                     <small>
                       {o.quote.sourceCurrency} · {o.quote.configVersion}
@@ -706,7 +970,9 @@ export default function Home() {
                   </td>
                   <td>
                     <Badge status={o.receiptStatus}>
-                      {o.receiptStatus === "none" ? "待补充" : "已登记回单"}
+                      {o.receiptStatus === "none"
+                        ? "未附回单（可选）"
+                        : "已登记回单"}
                     </Badge>
                   </td>
                 </tr>
@@ -724,33 +990,33 @@ export default function Home() {
       </div>
     );
   }
-  async function uploadReceipt(orderId: string, file: File) {
-    if (busyRef.current) return;
-    if (
-      file.size > 2 * 1024 * 1024 ||
-      !["image/png", "image/jpeg", "application/pdf"].includes(file.type)
-    ) {
-      setError(
-        "请选择不超过 2 MB 的 PNG、JPEG 或 PDF 演示回单；较大截图请压缩后上传。",
-      );
-      return;
-    }
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      let binary = "";
-      for (const byte of bytes) binary += String.fromCharCode(byte);
-      await mutate(
-        `orders/${orderId}/receipt-file`,
-        {
-          fileName: file.name,
-          contentType: file.type,
-          dataBase64: btoa(binary),
-        },
-        "回单已上传，客户可在订单详情下载。付款状态不受影响。",
-      );
-    } catch (e) {
-      setError(errorText(e));
-    }
+  async function downloadPrivateReceipt(id: string, fileName: string) {
+    const blob = await request<Blob>(
+      `receipts/${id}/download`,
+      undefined,
+      undefined,
+      "blob",
+    );
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function downloadPublishedReceipt(id: string, fileName: string) {
+    const blob = await request<Blob>(
+      `published-receipts/${id}/download`,
+      undefined,
+      undefined,
+      "blob",
+    );
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   async function downloadReceipt(orderId: string) {
     try {
@@ -774,6 +1040,25 @@ export default function Home() {
     }
   }
   function fundingPanel(o: Order) {
+    if (o.fundingSource === "wallet")
+      return (
+        <>
+          <div className="deposit-number">
+            {money(o.quote.totalDeposit)} <span>{o.quote.sourceCurrency}</span>
+          </div>
+          <Note>
+            {o.walletFundingStatus === "released"
+              ? "这笔模拟冻结已释放回钱包，不再处理付款。"
+              : o.walletFundingStatus === "consumed"
+                ? "这笔模拟结汇余额已结算扣减，可查看付款与回单状态。"
+                : "已从模拟钱包冻结本笔本金与费用，无需再次转币。结果待核实时保持冻结，避免重复支出。"}
+          </Note>
+          <div className="demo-address">
+            <Lock size={19} />
+            <strong>MOCK ONLY · 无真实托管或资金操作</strong>
+          </div>
+        </>
+      );
     const funding = o.fundingInstruction;
     return (
       <>
@@ -828,12 +1113,45 @@ export default function Home() {
     return (
       <div className="card order-detail">
         <div className="card-heading">
-          <h2>订单 {shortId(o.id)}</h2>
+          <h2>订单 {o.orderNumber ?? shortId(o.id)}</h2>
           <Badge>
             <Lock size={13} /> 报价快照已锁定
           </Badge>
         </div>
-        <p className="record-id">{o.id}</p>
+        <p className="record-id">系统 ID：{o.id}</p>
+        {!admin && <div className={"customer-detail-state " + customerOrderState(o).tone}><strong>{customerOrderState(o).label}</strong><p>{customerOrderState(o).detail}</p></div>}
+        {o.payoutProviderSnapshot && (
+          <Note>
+            出款方：{o.payoutProviderSnapshot.name} ·{" "}
+            {o.payoutProviderSnapshot.scope === "official"
+              ? "官方自营"
+              : "模拟合作方"}
+            ，按下单时配置锁定，与推广返佣伙伴无关。
+          </Note>
+        )}
+        {o.paymentConfirmation && (
+          <Note>
+            {o.paymentConfirmation.referenceKind === "mock_internal"
+              ? "MOCK 内部确认记录："
+              : "人工登记的模拟付款："}
+            {o.paymentConfirmation.internalRecordId ??
+              o.paymentConfirmation.providerReference}{" "}
+            ·{" "}
+            {date(
+              o.paymentConfirmation.confirmedAt ?? o.paymentConfirmation.paidAt,
+            )}{" "}
+            · {money(o.paymentConfirmation.actualAmount)}{" "}
+            {o.quote.payoutCurrency}
+            {o.paymentConfirmation.confirmedBy &&
+              ` · 操作人 ${o.paymentConfirmation.confirmedBy}`}
+            。
+            {o.paymentConfirmation.referenceKind === "mock_internal"
+              ? "仅记录模拟确认，未执行真实付款、未做外部核验，不代表银行流水或收款到账。"
+              : "这不是银行返回的真实付款凭据。"}
+            {o.paymentConfirmation.note &&
+              ` 备注：${o.paymentConfirmation.note}`}
+          </Note>
+        )}
         <div className="summary-grid">
           <div>
             <small>收款人</small>
@@ -865,9 +1183,17 @@ export default function Home() {
             <Badge status={o.payoutStatus} />
           </div>
           <div>
-            <small>对账</small>
-            <Badge status={o.reconciled ? "verified" : "pending"}>
-              {o.reconciled ? "已核对一致" : "待核对"}
+            <small>订单结果</small>
+            <Badge
+              status={
+                o.completionStatus === "completed" ? "verified" : "pending"
+              }
+            >
+              {o.completionStatus === "completed"
+                ? "已完成"
+                : o.completionStatus === "pending_review"
+                  ? "历史记录待复核"
+                  : "处理中"}
             </Badge>
           </div>
         </div>
@@ -877,7 +1203,34 @@ export default function Home() {
           </Note>
         )}
         <FeeRows quote={o.quote} />
-        {!admin && o.depositStatus === "awaiting" && fundingPanel(o)}
+        {!admin &&
+          (o.depositStatus === "awaiting" || o.fundingSource === "wallet") &&
+          fundingPanel(o)}
+        {!admin &&
+          o.fundingSource === "wallet" &&
+          o.walletFundingStatus === "reserved" &&
+          o.payoutStatus === "draft" &&
+          o.conversionStatus === "pending" && (
+            <button
+              className="button outline"
+              disabled={locked}
+              onClick={() =>
+                openCommand({
+                  title: "取消这笔模拟结汇？",
+                  description:
+                    "仅未处理的订单可取消。服务端确认安全后会解除冻结并退回模拟可用余额，结果未知的订单不能取消。",
+                  path: `orders/${o.id}/cancel`,
+                  base: {
+                    reason: "MOCK: customer cancelled before processing",
+                  },
+                  button: "取消订单并释放余额",
+                  success: "模拟订单已取消，冻结余额已释放。",
+                })
+              }
+            >
+              取消结汇并释放余额
+            </button>
+          )}
         <dl className="details">
           <div>
             <dt>金额输入方式</dt>
@@ -902,7 +1255,7 @@ export default function Home() {
         {admin ? (
           <>
             <div className="card-heading">
-              <h3>人工出款流程</h3>
+              <h3>付款处理</h3>
               <Badge>{actors.find(([a]) => a === actor)?.[1]}</Badge>
             </div>
             <Steps
@@ -913,12 +1266,10 @@ export default function Home() {
                     ? 2
                     : 1
               }
-              labels={["确认入金", "线下付款", "确认与回单"]}
+              labels={["确认资金", "核对与确认", "完成 · 回单可选"]}
             />
             <Note>
-              一个管理员即可处理。在线下 OTC
-              或银行完成付款后，登记结果；回单可稍后上传。这里所有订单与资金均为
-              MOCK 演示。
+              官方自营模拟订单核对收款人、金额与执行方后即可确认，内部记录号由系统生成，备注选填。回单可后补；未知结果须先核实，不能重复确认。这里不执行真实付款。
             </Note>
             <div className="actions">
               {o.depositStatus === "awaiting" && (
@@ -948,39 +1299,87 @@ export default function Home() {
                       className="button"
                       disabled={locked}
                       onClick={() =>
-                        openCommand({
-                          title: "确认已付款",
-                          description:
-                            "请核对收款人和金额。此操作登记线下已完成的付款，不会发起转账。回单可以稍后补充。",
-                          path: `orders/${o.id}/manual-payout`,
-                          base: {
-                            idempotencyKey:
-                              "manual_" + o.id + "_" + (attempt?.id ?? "first"),
-                            outcome: "sent",
-                          },
-                          fields: [
-                            {
-                              key: "actualAmount",
-                              label:
-                                "实际付款金额（" +
-                                o.quote.payoutCurrency +
-                                "）",
-                              value: o.quote.payoutAmount,
-                            },
-                            {
-                              key: "paidAt",
-                              label: "付款时间（ISO，含时区）",
-                              value: new Date().toISOString(),
-                            },
-                            reference(""),
-                            evidence(""),
-                          ],
-                          button: "确认付款记录",
-                          success: "付款结果已登记，可上传回单或稍后补充。",
-                        })
+                        openCommand(
+                          canQuickMockConfirm(o)
+                            ? {
+                                title: "确认模拟付款",
+                                description:
+                                  "请核对以下信息。确认后系统生成唯一 MOCK 内部记录号，并记录操作人和时间，无需手填渠道号或核验内容。",
+                                path: `orders/${o.id}/mock-payout`,
+                                base: {
+                                  idempotencyKey:
+                                    "mock_" +
+                                    o.id +
+                                    "_" +
+                                    (attempt?.id ?? "first"),
+                                  expectedAmount: o.quote.payoutAmount,
+                                  beneficiaryId: o.quote.beneficiaryId,
+                                  payoutProviderId:
+                                    o.payoutProviderSnapshot!.id,
+                                },
+                                review: [
+                                  ["收款人", b?.name ?? o.quote.beneficiaryId],
+                                  [
+                                    "收款账户",
+                                    b?.accountMasked ?? "仅模拟账户",
+                                  ],
+                                  [
+                                    "模拟确认金额",
+                                    `${money(o.quote.payoutAmount)} ${o.quote.payoutCurrency}`,
+                                  ],
+                                  ["执行方", o.payoutProviderSnapshot!.name],
+                                ],
+                                fields: [
+                                  {
+                                    key: "note",
+                                    label: "备注（选填）",
+                                    value: "",
+                                    type: "textarea",
+                                    required: false,
+                                  },
+                                ],
+                                button: "核对无误，确认模拟付款",
+                                success:
+                                  "模拟确认已记录，内部编号已生成。未执行真实付款，回单可后补。",
+                              }
+                            : {
+                                title: "确认已付款",
+                                description:
+                                  "请核对收款人和金额。此操作登记线下已完成的付款，不会发起转账。回单可以稍后补充。",
+                                path: `orders/${o.id}/manual-payout`,
+                                base: {
+                                  idempotencyKey:
+                                    "manual_" +
+                                    o.id +
+                                    "_" +
+                                    (attempt?.id ?? "first"),
+                                  outcome: "sent",
+                                },
+                                fields: [
+                                  {
+                                    key: "actualAmount",
+                                    label:
+                                      "实际付款金额（" +
+                                      o.quote.payoutCurrency +
+                                      "）",
+                                    value: o.quote.payoutAmount,
+                                  },
+                                  {
+                                    key: "paidAt",
+                                    label: "付款时间（ISO，含时区）",
+                                    value: new Date().toISOString(),
+                                  },
+                                  reference(""),
+                                  evidence(""),
+                                ],
+                                button: "确认付款记录",
+                                success:
+                                  "付款结果已登记，可上传回单或稍后补充。",
+                              },
+                        )
                       }
                     >
-                      确认已付款
+                      {canQuickMockConfirm(o) ? "确认模拟付款" : "登记人工付款"}
                     </button>
                     <button
                       className="button outline"
@@ -1062,40 +1461,76 @@ export default function Home() {
                   </button>
                 </>
               )}
-              {o.payoutStatus === "sent" && !o.reconciled && (
-                <button
-                  className="button outline"
-                  disabled={locked}
-                  onClick={() =>
-                    openCommand({
-                      title: "核对付款记录",
-                      description:
-                        "核对实际金额和渠道参考号。不一致会进入差异队列。",
-                      path: `orders/${o.id}/reconcile`,
-                      fields: [
-                        reference(attempt?.providerReference ?? ""),
-                        {
-                          key: "actualAmount",
-                          label: "实际金额（" + o.quote.payoutCurrency + "）",
-                          value: o.quote.payoutAmount,
+              {o.payoutStatus === "sent" &&
+                o.paymentConfirmation &&
+                o.completionStatus !== "completed" && (
+                  <button
+                    className="button"
+                    disabled={locked}
+                    onClick={() =>
+                      void mutate(
+                        `orders/${o.id}/complete-recorded-payment`,
+                        {},
+                        "旧付款确认已同步为完成，佣金已按规则计提；没有再次付款。",
+                      )
+                    }
+                  >
+                    完成旧确认记录
+                  </button>
+                )}
+              {o.payoutStatus === "sent" &&
+                !o.reconciled &&
+                o.completionStatus !== "completed" && (
+                  <button
+                    className="button outline"
+                    disabled={locked}
+                    onClick={() =>
+                      openCommand({
+                        title: "核对付款记录",
+                        description:
+                          o.paymentConfirmation?.referenceKind ===
+                          "mock_internal"
+                            ? "核对 MOCK 内部记录号和金额，必须填写人工核对说明。此记录不等于银行流水或到账验证。"
+                            : "核对实际金额和渠道参考号。不一致会进入差异队列，必须填写人工核对说明。",
+                        path: `orders/${o.id}/reconcile`,
+                        base: {
+                          referenceKind:
+                            o.paymentConfirmation?.referenceKind ===
+                            "mock_internal"
+                              ? "mock_internal"
+                              : "external",
                         },
-                        evidence(""),
-                      ],
-                      button: "确认核对",
-                      success: "核对结果已保存。",
-                    })
-                  }
-                >
-                  核对付款记录
-                </button>
-              )}
+                        fields: [
+                          {
+                            ...reference(attempt?.providerReference ?? ""),
+                            label:
+                              o.paymentConfirmation?.referenceKind ===
+                              "mock_internal"
+                                ? "MOCK 内部记录号（不代表银行流水）"
+                                : "人工登记渠道参考号",
+                          },
+                          {
+                            key: "actualAmount",
+                            label: "实际金额（" + o.quote.payoutCurrency + "）",
+                            value: o.quote.payoutAmount,
+                          },
+                          evidence(""),
+                        ],
+                        button: "确认核对",
+                        success: "核对结果已保存。",
+                      })
+                    }
+                  >
+                    核对付款记录
+                  </button>
+                )}
             </div>
             {o.payoutStatus === "sent" && (
               <p className="success-text">
                 <CheckCircle size={18} />
-                {o.reconciled
-                  ? "付款已登记，金额已核对"
-                  : "付款已登记，待核对金额"}
+                {o.completionStatus === "completed"
+                  ? "已确认完成，回单可稍后补充，无需重复核对"
+                  : "历史付款已登记，尚待完成记录复核"}
               </p>
             )}
             <p className="muted small">
@@ -1135,27 +1570,23 @@ export default function Home() {
             <strong>付款截图 / 银行水单</strong>
             <p>
               {o.receiptStatus === "none"
-                ? "付款确认后可上传，也可稍后补充"
+                ? "回单可选，是否上传不影响订单完成"
                 : o.receiptFileAvailable
                   ? "回单文件已上传，可下载查看"
-                  : "仅有回单记录，文件待管理员补充"}
+                  : "已记录私有附件；公开给客户的副本另行人工确认"}
             </p>
           </div>
           {admin && (
-            <label className="button outline">
-              <Upload size={16} />
-              上传回单
-              <input
-                type="file"
-                accept="image/png,image/jpeg,application/pdf"
-                disabled={locked || o.payoutStatus !== "sent"}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = "";
-                  if (file) void uploadReceipt(o.id, file);
-                }}
-              />
-            </label>
+            <button
+              className="button outline"
+              disabled={locked}
+              onClick={() => {
+                setReceiptOrderId(o.id);
+                go("receipts");
+              }}
+            >
+              <Files size={16} /> 管理多份回单
+            </button>
           )}
           {o.receiptFileAvailable && (
             <button
@@ -1168,14 +1599,24 @@ export default function Home() {
             </button>
           )}
         </div>
+        <PublishedReceipts
+          key={actor + o.id}
+          orderId={o.id}
+          request={request}
+          onDownload={downloadPublishedReceipt}
+        />
         <p className="muted small">
-          演示上传仅支持 PNG、JPEG、PDF，最大 2
-          MB。仅使用虚构文件；文件未经安全扫描，演示会话失效后不可恢复。
+          支持 PNG、JPEG、PDF 多附件，单个最大 2
+          MiB。新原件默认仅管理员可见；识别仅用于人工匹配，不证明真实付款。文件未经恶意软件扫描。
+          {health?.persistence === "d1_mock"
+            ? " 原件使用私有对象存储，记录按登录账号隔离。"
+            : " 本地预览附件临时保存，会话失效后不可恢复。"}
         </p>
         <div className="ruleline" />
         <div className="card-heading">
           <h3>退款记录</h3>
           {maker &&
+            o.fundingSource !== "wallet" &&
             o.depositStatus === "confirmed" &&
             ((o.conversionStatus === "pending" &&
               ["draft", "cancelled"].includes(o.payoutStatus)) ||
@@ -1213,6 +1654,11 @@ export default function Home() {
               </button>
             )}
         </div>
+        {o.fundingSource === "wallet" && (
+          <Note>
+            钱包结汇仅支持未处理订单取消并释放冻结；已处理订单的退款流程尚未接入。结果未知或已换汇时不会自动释放余额。
+          </Note>
+        )}
         {!refunds.length ? (
           <p className="muted small">尚无退款申请。</p>
         ) : (
@@ -1272,15 +1718,17 @@ export default function Home() {
     );
   }
   function pricingPanel() {
-    const p = data?.pricingFixture,
-      route = p?.routes[pricingMarket];
+    const p = data?.pricingCurrent;
+    const rate = p?.rates.find(
+      (r) => r.sourceCurrency === "USDT" && r.payoutCurrency === pricingMarket,
+    );
     return (
       <div className="card pricing-panel">
         <div className="card-heading">
-          <h2>汇率与费率</h2>
-          <Badge>只读样例配置</Badge>
+          <h2>当前客户汇率</h2>
+          <Badge>MOCK</Badge>
         </div>
-        {!p || !route ? (
+        {!p || !rate ? (
           <Empty title="当前身份无定价配置视图" />
         ) : (
           <>
@@ -1290,31 +1738,32 @@ export default function Home() {
                 value={pricingMarket}
                 onChange={(e) => setPricingMarket(e.target.value)}
               >
-                {Object.keys(p.routes).map((currency) => (
-                  <option key={currency}>{currency}</option>
-                ))}
+                <option>CNY</option>
+                <option>USD</option>
               </select>
             </label>
             <dl className="details">
               <div>
-                <dt>客户汇率</dt>
-                <dd>{route.customerRate}</dd>
+                <dt>1 USDT 客户汇率</dt>
+                <dd>
+                  {rate.customerRate} {rate.payoutCurrency}
+                </dd>
               </div>
               <div>
-                <dt>参考汇率</dt>
-                <dd>{route.referenceRate}</dd>
+                <dt>模拟参考基准</dt>
+                <dd>{rate.referenceRate}</dd>
               </div>
               <div>
-                <dt>成本汇率</dt>
-                <dd>{route.costRate}</dd>
-              </div>
-              <div className="divided">
                 <dt>默认服务费</dt>
-                <dd>{money(p.serviceFee)} 稳定币</dd>
+                <dd>{money(p.serviceFee)} 来源币种</dd>
               </div>
               <div>
-                <dt>渠道费</dt>
-                <dd>{money(p.channelFee)} 稳定币</dd>
+                <dt>通道手续费</dt>
+                <dd>{money(p.channelFee)} 来源币种</dd>
+              </div>
+              <div>
+                <dt>基准有效至</dt>
+                <dd>{date(p.baseline.expiresAt)}</dd>
               </div>
               <div>
                 <dt>配置版本</dt>
@@ -1322,14 +1771,18 @@ export default function Home() {
               </div>
             </dl>
             <Note>
-              <Lock size={15} />{" "}
-              订单保留原报价快照。客户级服务费覆盖以实际服务器报价为准。
+              {Date.parse(p.baseline.expiresAt) <= now
+                ? "模拟基准已过期，新报价已停用，请更新并发布配置。"
+                : "已锁定报价和订单保留原快照。客户专属服务费优先于默认费率。"}
             </Note>
+            <button
+              className="button outline full"
+              onClick={() => go("pricing")}
+            >
+              管理汇率与费率
+            </button>
           </>
         )}
-        <p className="muted small">
-          费率发布接口尚未实现。本面板只展示服务端配置，不提供保存或发布按钮。
-        </p>
       </div>
     );
   }
@@ -1471,7 +1924,7 @@ export default function Home() {
         </div>
         {!commissionRows.length && (
           <Empty title="尚无佣金记录">
-            关联订单发送并通过对账后，才会由服务端按规则计提。
+            关联订单确认完成后，由服务端幂等计提；观察期、异常冻结和退款调整仍适用。
           </Empty>
         )}
         <Note>
@@ -1483,25 +1936,27 @@ export default function Home() {
   const title =
     page === "payment"
       ? step === 2
-        ? "确认付款"
+        ? "确认结汇"
         : step === 3
-          ? "等待稳定币到账"
-          : "创建付款"
+          ? "结汇已提交"
+          : "结汇"
       : page === "certification" && role === "admin"
         ? "客户审核"
         : page === "recipients" && role === "admin"
-          ? "收款人白名单"
+          ? "收款账户"
           : titles[page];
   const storageLabel =
-    health?.persistence === "session-memory"
-      ? "会话内存 · 最多30分钟/实例重启失效 · 勿输入真实资料"
-      : health?.persistence === "memory"
-        ? "内存模式 · 重启 API 后清空"
-        : health?.persistence === "postgres"
-          ? "PostgreSQL · 服务端持久化"
-          : health
-            ? health.persistence + " · 服务端存储"
-            : "存储状态待确认";
+    health?.persistence === "d1_mock"
+      ? "D1 持久演示记录 · 按已登录账户隔离 · 勿输入真实资料"
+      : health?.persistence === "session-memory"
+        ? "会话内存 · 最多30分钟/实例重启失效 · 勿输入真实资料"
+        : health?.persistence === "memory"
+          ? "内存模式 · 重启 API 后清空"
+          : health?.persistence === "postgres"
+            ? "PostgreSQL · 服务端持久化"
+            : health
+              ? health.persistence + " · 服务端存储"
+              : "存储状态待确认";
   const visibleBatch =
     batch && data?.batches?.some((b) => b.id === batch.batch.id)
       ? {
@@ -1510,8 +1965,19 @@ export default function Home() {
             data.batchItems?.filter((i) => i.batchId === batch.batch.id) ?? [],
         }
       : batch;
+  const batchRemaining = batchPreview
+    ? Math.max(0, Math.floor((Date.parse(batchPreview.expiresAt) - now) / 1000))
+    : 0;
+  const batchEnough =
+    !!batchPreview &&
+    batchPreview.totals.every((t) =>
+      hasWalletFunds(
+        walletBalances.find((w) => w.currency === t.currency)?.available,
+        t.totalDeposit,
+      ),
+    );
   return (
-    <div className="app">
+    <div className={"app " + (role === "customer" ? "customer-workspace" : "")}>
       <aside className="sidebar">
         <button className="brand" onClick={() => go(navs[role][0][0])}>
           <img src="/brand-mark.png" alt="" />
@@ -1524,7 +1990,9 @@ export default function Home() {
             ? "管理后台"
             : role === "partner"
               ? "合作伙伴"
-              : "支付工作台"}
+              : actor === "company-demo"
+                ? "商户工作台"
+                : "个人工作台"}
         </div>
         <nav aria-label="主导航">
           {navs[role].map(([p, label, I]) => (
@@ -1532,7 +2000,10 @@ export default function Home() {
               key={p}
               title={label}
               className={
-                page === p || (p === "orders" && page === "detail")
+                page === p ||
+                (p === "orders" && page === "detail") ||
+                (p === "profile" &&
+                  ["recipients", "certification"].includes(page))
                   ? "active"
                   : ""
               }
@@ -1560,7 +2031,7 @@ export default function Home() {
                 ? "管理后台"
                 : role === "partner"
                   ? "合作伙伴"
-                  : "付款"}
+                  : "结汇"}
             </span>
             <b>/</b>
             {title}
@@ -1605,6 +2076,16 @@ export default function Home() {
             </span>
             <span className="connection-right">演示身份，无真实认证</span>
           </div>
+          <details className="environment-details">
+            <summary>{health?.persistence === "d1_mock" ? "演示数据已保存 · 存储与使用说明" : "临时演示数据 · 存储与使用说明"}</summary>
+          {health?.persistence === "d1_mock" && (
+            <Note>
+              已登录账户的虚构演示历史保存于
+              D1，跨会话和实例重启保留，账号之间隔离。总记录上限 1
+              MiB；回单原件另存私有 R2，单份不超过 2
+              MiB。容量满时保留原记录并停止新增。资金与订单仍为演示；仅上传有权处理的凭证，不上传密码、完整证件或支付卡资料。
+            </Note>
+          )}
           {health?.persistence === "session-memory" && (
             <div className="session-warning" role="note">
               <Lock size={17} />
@@ -1615,45 +2096,28 @@ export default function Home() {
               </span>
             </div>
           )}
+          </details>
           <div className="page-heading">
             <div>
               <h1>{title}</h1>
               <p>{subtitles[page]}</p>
             </div>
-            {page === "payment" && step === 1 ? (
-              <div className="segmented">
-                <button
-                  disabled={busy}
-                  className={actor === "customer-demo" ? "active" : ""}
-                  onClick={() => changeActor("customer-demo")}
-                >
-                  个人
-                </button>
-                <button
-                  disabled={busy}
-                  className={actor === "company-demo" ? "active" : ""}
-                  onClick={() => changeActor("company-demo")}
-                >
-                  企业
-                </button>
-              </div>
-            ) : (
-              <span className="date">SERVER-BACKED DEMO</span>
-            )}
+            {role !== "customer" && <span className="date">SERVER-BACKED DEMO</span>}
           </div>
           {support && (
             <div className="card support">
               <h2>从这里开始体验</h2>
               <p>
-                客户：输入目标法币金额或稳定币总额 → 核对报价 →
-                创建订单与查看入金指引。管理员：确认入金 → 线下付款后确认 →
-                上传回单 → 核对记录。伙伴：查看同一服务端产生的佣金与观察期。
+                客户：钱包模拟充值 → 输入稳定币或目标法币金额 → 核对报价与收款人
+                →
+                冻结余额创建结汇订单。商户可批量导入校验。平台管理员：查看待处理订单
+                → 核对后确认模拟付款 → 可选补充回单。推广伙伴：查看同一服务端产生的佣金与观察期。出款合作方由管理员独立管理。
               </p>
               <Note>
                 只使用虚构资料。所有资金相关按钮仅调用 MOCK
                 后端；不支持真实充值、换汇或付款。内存模式在 API
-                重启后清空；会话内存最多保留 30
-                分钟，实例重启也会失效。实际存储模式见页面连接状态。
+                重启后清空；会话内存最多保留 30 分钟，实例重启也会失效。D1
+                模式按已登录账户保存演示历史，浏览器会话到期不清空记录；只用于演示，不是生产金融账本。实际存储模式见页面连接状态。
               </Note>
               <button className="button text" onClick={() => setSupport(false)}>
                 收起说明
@@ -1694,231 +2158,467 @@ export default function Home() {
             </div>
           ) : (
             <>
-              {page === "payment" && role === "customer" && (
+              {page === "wallet" && role === "customer" && (
+                <CustomerWallet key={actor} balances={walletBalances} deposits={data.walletDeposits ?? []} orders={orders} customerId={customerId} locked={locked} resumeDraft={resumeDraft} initialCurrency={asset}
+                  onTopup={openTopup} onExchange={(currency) => { if (!resumeDraft) editForm(() => setAsset(currency)); resumeExchange(); }}
+                  onOrder={(id) => { setSelected(id); go("detail"); }} />
+              )}
+              {page === "profile" && role === "customer" && (
                 <>
-                  <Steps active={step} />
-                  {step === 1 ? (
-                    <div className="payment-layout">
+                  <section className="profile-overview">
+                    <div className="circle-icon">
+                      <User size={27} />
+                    </div>
+                    <div>
+                      <h2>{currentCustomer?.name}</h2>
+                      <p>
+                        {actor === "company-demo" ? "商户企业账户" : "个人账户"}{" "}
+                        · 仅演示身份，不构成真实认证
+                      </p>
+                    </div>
+                    <Badge status={currentCustomer?.status} />
+                  </section>
+                  {profileTab === "home" ? <div className="profile-menu">
+                    <button onClick={() => setProfileTab("recipients")}><span className="circle-icon"><Bank size={24}/></span><div><strong>收款人管理</strong><small>{beneficiaries.length} 个已保存账户 · 添加后即可使用</small></div><ArrowRight size={19}/></button>
+                    <button onClick={() => setProfileTab("certification")}><span className="circle-icon"><User size={24}/></span><div><strong>账户资料</strong><small>查看{actor === "company-demo" ? "企业" : "个人"}演示资料与账户状态</small></div><ArrowRight size={19}/></button>
+                    <button onClick={() => setProfileTab("security")}><span className="circle-icon"><Lock size={24}/></span><div><strong>安全与隐私</strong><small>登录、资料可见范围与演示边界</small></div><ArrowRight size={19}/></button>
+                    <button onClick={() => setSupport(true)}><span className="circle-icon"><Question size={24}/></span><div><strong>帮助与演示说明</strong><small>资金、数据保存及回单使用说明</small></div><ArrowRight size={19}/></button>
+                  </div> : <div className="profile-subheading"><button className="button text back-link" onClick={() => setProfileTab("home")}><ArrowLeft size={16}/> 返回用户中心</button><h2>{profileTab === "recipients" ? "收款人管理" : profileTab === "security" ? "安全与隐私" : "账户资料"}</h2></div>}
+                  {profileTab === "security" && <section className="card security-summary"><h3>账户与数据保护</h3><p>线上私有站通过 ChatGPT 登录控制访问。页面内个人、商户和管理员均为演示角色，不是独立的真实资金账户。</p><ul><li>已登录账户的历史与私有回单按账户隔离，商户仅能获取明确发布给自己的回单。</li><li>收款账户仅保存掩码资料，保存不代表真实身份或银行归属验证。</li><li>本演示不提供密码修改、双重验证设置或真实资金操作，请勿输入密码、完整证件或支付卡资料。</li></ul></section>}
+                  {profileTab === "recipients" && (
+                    <div className="profile-add">
+                      <label>
+                        新增账户地区
+                        <select
+                          aria-label="新增账户地区"
+                          value={market}
+                          onChange={(e) =>
+                            editForm(() => setMarket(e.target.value))
+                          }
+                        >
+                          <option value="CNY">中国大陆 · CNY</option>
+                          <option value="USD">美国 · USD</option>
+                        </select>
+                      </label>
+                      <button
+                        className="button"
+                        onClick={addRecipient}
+                        disabled={locked}
+                      >
+                        <Plus size={17} />
+                        新增模拟收款账户
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+              {page === "payment" && role === "customer" && (
+                <div className="exchange-flow">
+                  {step === 1 && actor === "company-demo" && (
+                    <div
+                      className="tabs light exchange-mode"
+                      aria-label="结汇方式"
+                    >
+                      <button
+                        className={mode === "single" ? "active" : ""}
+                        disabled={busy}
+                        onClick={() => {
+                          setMode("single");
+                          setChecked(false);
+                        }}
+                      >
+                        单笔结汇
+                      </button>
+                      <button
+                        className={mode === "batch" ? "active" : ""}
+                        disabled={busy}
+                        onClick={() => {
+                          setMode("batch");
+                          setBatchChecked(false);
+                        }}
+                      >
+                        批量结汇
+                      </button>
+                    </div>
+                  )}
+                  <Steps
+                    active={
+                      mode === "batch"
+                        ? batchPreview
+                          ? 3
+                          : visibleBatch?.items.some(
+                                (i) => i.status === "created",
+                              ) &&
+                              !visibleBatch.items.some(
+                                (i) => i.status === "valid",
+                              )
+                            ? 4
+                            : visibleBatch
+                              ? 2
+                              : 1
+                        : step
+                    }
+                    labels={
+                      mode === "batch"
+                        ? ["上传表格", "校验结果", "核对报价", "提交完成"]
+                        : ["填写结汇", "核对报价", "提交完成"]
+                    }
+                  />
+                  {step === 1 && mode === "single" ? (
+                    <div className="payment-layout exchange-single">
                       <section className="payment-form">
-                        <div className="tabs light">
+                        <h2>结汇金额</h2>
+                        <div
+                          className="amount-mode"
+                          role="group"
+                          aria-label="金额输入方式"
+                        >
                           <button
-                            className={mode === "single" ? "active" : ""}
-                            onClick={() => setMode("single")}
+                            type="button"
+                            disabled={busy}
+                            aria-pressed={amountMode === "target_payout"}
+                            className={
+                              amountMode === "target_payout" ? "active" : ""
+                            }
+                            onClick={() =>
+                              editForm(() => setAmountMode("target_payout"))
+                            }
                           >
-                            单笔付款
+                            按到账金额
                           </button>
                           <button
-                            className={mode === "batch" ? "active" : ""}
-                            onClick={() => setMode("batch")}
+                            type="button"
+                            disabled={busy}
+                            aria-pressed={amountMode === "total_deposit"}
+                            className={
+                              amountMode === "total_deposit" ? "active" : ""
+                            }
+                            onClick={() =>
+                              editForm(() => setAmountMode("total_deposit"))
+                            }
                           >
-                            批量付款
-                          </button>
-                          <button
-                            className="end"
-                            onClick={() => setMode("batch")}
-                          >
-                            <Upload size={17} />
-                            导入表格
+                            按支付总额
                           </button>
                         </div>
-                        {mode === "single" ? (
-                          <>
-                            <h2>付款信息</h2>
-                            <div
-                              className="amount-mode"
-                              role="group"
-                              aria-label="金额输入方式"
+                        <label>
+                          {amountMode === "total_deposit"
+                            ? "支付总额（含费用）"
+                            : "目标出款金额"}
+                          <div className="input-unit amount">
+                            <input
+                              aria-label={
+                                amountMode === "total_deposit"
+                                  ? "支付总额（含费用）"
+                                  : "目标出款金额"
+                              }
+                              inputMode="decimal"
+                              placeholder={
+                                amountMode === "target_payout"
+                                  ? market === "CNY"
+                                    ? "例如 100000"
+                                    : "例如 50000"
+                                  : "例如 1000"
+                              }
+                              value={enteredAmount}
+                              disabled={busy}
+                              onChange={(e) =>
+                                editForm(() => setEnteredAmount(e.target.value))
+                              }
+                            />
+                            <select
+                              aria-label={
+                                amountMode === "target_payout"
+                                  ? "出款币种"
+                                  : "稳定币"
+                              }
+                              value={
+                                amountMode === "target_payout" ? market : asset
+                              }
+                              disabled={busy}
+                              onChange={(e) =>
+                                editForm(() => {
+                                  if (amountMode === "target_payout") {
+                                    setMarket(e.target.value);
+                                    setBeneficiaryId("");
+                                  } else setAsset(e.target.value);
+                                })
+                              }
                             >
-                              <button
-                                type="button"
-                                disabled={busy}
-                                aria-pressed={amountMode === "target_payout"}
-                                className={
-                                  amountMode === "target_payout" ? "active" : ""
-                                }
-                                onClick={() =>
-                                  editForm(() => setAmountMode("target_payout"))
-                                }
-                              >
-                                目标出款金额
-                              </button>
-                              <button
-                                type="button"
-                                disabled={busy}
-                                aria-pressed={amountMode === "total_deposit"}
-                                className={
-                                  amountMode === "total_deposit" ? "active" : ""
-                                }
-                                onClick={() =>
-                                  editForm(() => setAmountMode("total_deposit"))
-                                }
-                              >
-                                支付总额（含费用）
-                              </button>
-                            </div>
-                            <label>
-                              {amountMode === "total_deposit"
-                                ? "支付总额（含费用）"
-                                : "目标出款金额"}
-                              <div className="input-unit amount">
-                                <input
-                                  aria-label={
-                                    amountMode === "total_deposit"
-                                      ? "支付总额（含费用）"
-                                      : "目标出款金额"
-                                  }
-                                  inputMode="decimal"
-                                  placeholder={
-                                    amountMode === "target_payout"
-                                      ? market === "CNY"
-                                        ? "例如 100000 人民币"
-                                        : "例如 50000 美元"
-                                      : "例如 1000 USDT"
-                                  }
-                                  value={enteredAmount}
-                                  disabled={busy}
-                                  onChange={(e) =>
-                                    editForm(() =>
-                                      setEnteredAmount(e.target.value),
-                                    )
-                                  }
-                                />
-                                <select
-                                  aria-label={
-                                    amountMode === "target_payout"
-                                      ? "出款币种"
-                                      : "稳定币"
-                                  }
-                                  value={
-                                    amountMode === "target_payout"
-                                      ? market
-                                      : asset
-                                  }
-                                  disabled={busy}
-                                  onChange={(e) =>
-                                    editForm(() =>
-                                      amountMode === "target_payout"
-                                        ? setMarket(e.target.value)
-                                        : setAsset(e.target.value),
-                                    )
-                                  }
-                                >
-                                  {amountMode === "target_payout" ? (
-                                    <>
-                                      <option>CNY</option>
-                                      <option>USD</option>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <option>USDT</option>
-                                      <option>USDC</option>
-                                    </>
-                                  )}
-                                </select>
-                              </div>
-                            </label>
-                            <div className="form-grid">
-                              <label>
-                                支付稳定币
-                                <select
-                                  aria-label="支付稳定币"
-                                  value={asset}
-                                  disabled={busy}
-                                  onChange={(e) =>
-                                    editForm(() => setAsset(e.target.value))
-                                  }
-                                >
+                              {amountMode === "target_payout" ? (
+                                <>
+                                  <option>CNY</option>
+                                  <option>USD</option>
+                                </>
+                              ) : (
+                                <>
                                   <option>USDT</option>
                                   <option>USDC</option>
-                                </select>
-                              </label>
-                              <label>
-                                网络
-                                <select aria-label="网络" value="MOCK" disabled>
-                                  <option>MOCK · 模拟网络</option>
-                                </select>
-                              </label>
-                              <label>
-                                收款地区
-                                <select
-                                  aria-label="收款地区"
-                                  value={market}
-                                  disabled={busy}
-                                  onChange={(e) =>
-                                    editForm(() => {
-                                      setMarket(e.target.value);
-                                      setBeneficiaryId("");
-                                    })
-                                  }
-                                >
-                                  <option value="CNY">中国大陆 · CNY</option>
-                                  <option value="USD">美国 · USD</option>
-                                </select>
-                              </label>
-                            </div>
-                            <div className="card-heading recipient-heading">
-                              <h2>收款人</h2>
-                              <button
-                                className="link"
-                                onClick={() => go("recipients")}
+                                </>
+                              )}
+                            </select>
+                          </div>
+                        </label>
+                        <div className="exchange-currency-row">
+                          {amountMode === "target_payout" ? (
+                            <label>
+                              支付稳定币
+                              <select
+                                aria-label="支付稳定币"
+                                value={asset}
+                                disabled={busy}
+                                onChange={(e) =>
+                                  editForm(() => setAsset(e.target.value))
+                                }
                               >
-                                管理白名单
-                              </button>
-                            </div>
-                            <div className="recipient-select">
-                              <div className="person-mark">示</div>
-                              <div>
-                                <select
-                                  aria-label="选择收款人"
-                                  value={chosenBeneficiaryId}
-                                  disabled={
-                                    !approvedBeneficiaries.length || busy
-                                  }
-                                  onChange={(e) =>
-                                    editForm(() =>
-                                      setBeneficiaryId(e.target.value),
-                                    )
-                                  }
-                                >
-                                  {!approvedBeneficiaries.length && (
-                                    <option value="">暂无已审核收款人</option>
-                                  )}
-                                  {approvedBeneficiaries.map((b) => (
-                                    <option key={b.id} value={b.id}>
-                                      {b.name}
-                                    </option>
-                                  ))}
-                                </select>
-                                <p>
-                                  {recipient
-                                    ? recipient.accountMasked +
-                                      " · " +
-                                      recipient.currency
-                                    : "请先新增并由管理员审核白名单"}
-                                </p>
-                              </div>
-                              <ShieldCheck size={22} className="teal" />
-                            </div>
-                            <div className="purpose">
-                              <Note>
-                                {amountMode === "total_deposit"
-                                  ? "支付总额已包含服务费与通道费，扣除费用后的本金用于兑换。"
-                                  : "输入希望支付的法币金额，服务端反算应转入的稳定币总额（含费用）。收款银行如另收费，以实际渠道规则为准。"}
-                              </Note>
-                            </div>
-                            <p className="subtle">
-                              <Info size={16} />
-                              报价、费用与到账金额均由服务端计算
+                                <option>USDT</option>
+                                <option>USDC</option>
+                              </select>
+                            </label>
+                          ) : (
+                            <label>
+                              收款地区 / 币种
+                              <select
+                                aria-label="收款地区"
+                                value={market}
+                                disabled={busy}
+                                onChange={(e) =>
+                                  editForm(() => {
+                                    setMarket(e.target.value);
+                                    setBeneficiaryId("");
+                                  })
+                                }
+                              >
+                                <option value="CNY">中国大陆 · CNY</option>
+                                <option value="USD">美国 · USD</option>
+                              </select>
+                            </label>
+                          )}
+                          <div className="exchange-available">
+                            <span>钱包可用余额</span>
+                            <strong>
+                              {money(sourceBalance?.available ?? "0")} {asset}
+                            </strong>
+                            <button
+                              className="link"
+                              disabled={busy}
+                              onClick={goTopup}
+                            >
+                              充值
+                            </button>
+                          </div>
+                        </div>
+                        <div className="card-heading recipient-heading">
+                          <h2>收款人</h2>
+                          <button
+                            className="link"
+                            disabled={busy}
+                            onClick={() => {
+                              go("profile");
+                              setProfileTab("recipients");
+                            }}
+                          >
+                            管理账户
+                          </button>
+                        </div>
+                        <div className="recipient-select">
+                          <div className="person-mark">
+                            <User size={22} />
+                          </div>
+                          <div>
+                            <select
+                              aria-label="选择收款人"
+                              value={chosenBeneficiaryId}
+                              disabled={!usableBeneficiaries.length || busy}
+                              onChange={(e) =>
+                                editForm(() => setBeneficiaryId(e.target.value))
+                              }
+                            >
+                              {!usableBeneficiaries.length && (
+                                <option value="">暂无可用收款账户</option>
+                              )}
+                              {usableBeneficiaries.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {b.name}
+                                </option>
+                              ))}
+                            </select>
+                            <p>
+                              {recipient
+                                ? `${recipient.accountMasked} · ${recipient.currency}`
+                                : "添加收款账户后即可使用"}
                             </p>
-                            <div className="bottom-note">
-                              <FileText size={20} />
-                              付款截图或水单可后补，不阻塞订单付款
-                            </div>
-                          </>
+                          </div>
+                          <Bank size={22} className="teal" />
+                        </div>
+                        <div className="actions exchange-recipient-actions">
+                          <button
+                            className="link"
+                            disabled={locked}
+                            onClick={addRecipient}
+                          >
+                            <Plus size={16} />
+                            新增收款账户
+                          </button>
+                          <span className="muted small">
+                            保存即用 · 仅格式校验
+                          </span>
+                        </div>
+                        <details className="exchange-details">
+                          <summary>费用与演示规则</summary>
+                          <p>
+                            {amountMode === "total_deposit"
+                              ? "支付总额包含服务费与通道费，扣除费用后的本金用于兑换。"
+                              : "按目标到账金额反算稳定币本金及费用；收款银行如另收费，以实际渠道规则为准。"}
+                          </p>
+                          <p>
+                            报价由服务端计算。仅使用 MOCK
+                            网络与虚构账户，不执行真实付款；收款账户保存不代表身份、账户归属或合规验证。
+                          </p>
+                          <p>
+                            付款回单可后补，不阻塞付款。历史订单与回单可在“订单”查看。
+                          </p>
+                        </details>
+                      </section>
+                      <aside
+                        className="quote-panel exchange-quote"
+                        aria-label="本次报价"
+                      >
+                        <div className="card-heading">
+                          <h2>本次报价</h2>
+                          {quote ? (
+                            <Badge status={remaining ? "valid" : "error"}>
+                              {remaining
+                                ? `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")} 有效`
+                                : "已过期"}
+                            </Badge>
+                          ) : (
+                            <span className="muted small">MOCK</span>
+                          )}
+                        </div>
+                        <p className="quote-label">收款人预计到账</p>
+                        <div className="quote-amount">
+                          {quote
+                            ? symbol(quote.payoutCurrency) +
+                              money(quote.payoutAmount)
+                            : "—"}
+                          <span>{quote?.payoutCurrency ?? market}</span>
+                        </div>
+                        {quote ? (
+                          <FeeRows quote={quote} />
                         ) : (
-                          <>
+                          <div className="quote-placeholder">
+                            <p>
+                              {quoteBusy
+                                ? "正在获取服务器报价…"
+                                : "填写金额并选择可用收款人"}
+                            </p>
+                          </div>
+                        )}
+                        {quoteError && <Note danger>{quoteError}</Note>}
+                        {quote && !enoughBalance && (
+                          <Note danger>
+                            余额不足，需 {money(quote.totalDeposit)}{" "}
+                            {quote.sourceCurrency}。充值后草稿会保留。
+                          </Note>
+                        )}
+                        <button
+                          className="button full big"
+                          disabled={
+                            locked ||
+                            quoteBusy ||
+                            !enoughBalance ||
+                            !quote ||
+                            remaining === 0 ||
+                            currentCustomer?.status !== "approved"
+                          }
+                          onClick={() => {
+                            setStep(2);
+                            setChecked(false);
+                            window.scrollTo(0, 0);
+                          }}
+                        >
+                          下一步，核对结汇 <ArrowRight size={20} />
+                        </button>
+                        {quote && remaining === 0 && (
+                          <button
+                            className="button outline full"
+                            disabled={locked || quoteBusy}
+                            onClick={() => setQuoteVersion((v) => v + 1)}
+                          >
+                            报价过期，重新获取
+                          </button>
+                        )}
+                        {quoteError && (
+                          <button
+                            className="button text full"
+                            disabled={locked || quoteBusy}
+                            onClick={() => setQuoteVersion((v) => v + 1)}
+                          >
+                            重试报价
+                          </button>
+                        )}
+                        {quote && !enoughBalance && (
+                          <button
+                            className="button outline full"
+                            disabled={busy}
+                            onClick={goTopup}
+                          >
+                            前往钱包充值 <ArrowRight size={17} />
+                          </button>
+                        )}
+                        {currentCustomer?.status !== "approved" && (
+                          <Note danger>
+                            当前客户尚未通过审核，无法创建报价。
+                          </Note>
+                        )}
+                        <p className="center muted small exchange-disclaimer">
+                          下一步仍需确认，暂不冻结余额
+                        </p>
+                        <details className="exchange-details">
+                          <summary>报价来源</summary>
+                          <p>
+                            {quote?.configVersion ?? "MOCK 报价源"} ·
+                            样例费率，不构成实时市场报价。
+                          </p>
+                        </details>
+                      </aside>
+                    </div>
+                  ) : step === 1 && mode === "batch" ? (
+                    <section className="card exchange-batch">
+                      {!visibleBatch ? (
+                        <>
+                          {currentCustomer?.kind === "company" && (
+                            <MerchantBatchImport
+                              customerId={customerId}
+                              customerName={currentCustomer?.name ?? "当前商户"}
+                              disabled={locked}
+                              onImport={async (rows, clientBatchId) => {
+                                const result = await mutate<BatchResult>(
+                                  "batches/merchant",
+                                  { customerId, clientBatchId, rows },
+                                  "服务端逐行校验完成，请核对目标到账金额、有效行和错误行。",
+                                );
+                                if (result) {
+                                  setBatch(result);
+                                  setBatchChecked(false);
+                                  setBatchPreview(null);
+                                  setBatchKey(clientBatchId);
+                                }
+                                return !!result;
+                              }}
+                            />
+                          )}
+                          <details
+                            className="legacy-batch-import"
+                            open={
+                              currentCustomer?.kind !== "company"
+                                ? true
+                                : undefined
+                            }
+                          >
+                            <summary>兼容旧版收款账户 ID CSV</summary>
                             <div className="card-heading">
-                              <h2>批量付款</h2>
+                              <h2>旧版本金 CSV</h2>
                               <button
                                 className="link"
                                 onClick={() =>
@@ -1938,7 +2638,7 @@ export default function Home() {
                               批量 CSV 的 sourceAmount
                               始终表示兑换本金，费用另加。 CSV 将提交给隔离 MOCK
                               API 校验与保存。仅导入虚构资料；最多 100
-                              行、100KB，使用当前客户的白名单 ID。
+                              行、100KB，使用当前客户已保存的收款账户 ID。
                             </Note>
                             <div className="upload-zone">
                               <Upload size={28} />
@@ -1960,6 +2660,7 @@ export default function Home() {
                                     }
                                     setBatchText(await f.text());
                                     setBatch(null);
+                                    setBatchPreview(null);
                                     setBatchKey("");
                                     setToast(
                                       "CSV 已在浏览器读取，点击下方按钮提交服务端校验。",
@@ -1981,6 +2682,7 @@ export default function Home() {
                                 onChange={(e) => {
                                   setBatchText(e.target.value);
                                   setBatch(null);
+                                  setBatchPreview(null);
                                   setBatchKey("");
                                 }}
                               />
@@ -2001,276 +2703,545 @@ export default function Home() {
                                 onClick={() => {
                                   setBatchText(template(true));
                                   setBatch(null);
+                                  setBatchPreview(null);
                                   setBatchKey("");
                                 }}
                               >
                                 载入含错误样例
                               </button>
                             </div>
-                            {visibleBatch && (
-                              <div className="batch-results">
-                                <h3>
-                                  逐行校验 ·{" "}
-                                  {
-                                    visibleBatch.items.filter(
-                                      (i) => i.status === "valid",
-                                    ).length
-                                  }{" "}
-                                  笔可提交
-                                </h3>
-                                {visibleBatch.items.map((item, i) => (
+                          </details>
+                        </>
+                      ) : batchPreview ? (
+                        <>
+                          <div className="card-heading exchange-stage-heading">
+                            <div>
+                              <h2>核对批次报价</h2>
+                              <p className="muted small">
+                                {batchPreview.quotes.length} 笔有效行 ·{" "}
+                                {visibleBatch.batch.clientBatchId}
+                              </p>
+                            </div>
+                            <Badge status={batchRemaining ? "valid" : "error"}>
+                              {batchRemaining
+                                ? `${batchRemaining} 秒有效`
+                                : "报价已过期"}
+                            </Badge>
+                          </div>
+                          <div className="exchange-batch-totals">
+                            {batchPreview.totals
+                              .filter((t) =>
+                                batchPreview.quotes.some(
+                                  (q) => q.sourceCurrency === t.currency,
+                                ),
+                              )
+                              .map((t) => (
+                                <section
+                                  className="exchange-currency-total"
+                                  key={t.currency}
+                                >
+                                  <h3>{t.currency}</h3>
+                                  <dl className="details">
+                                    <div>
+                                      <dt>兑换本金</dt>
+                                      <dd>
+                                        {money(t.sourceAmount)} {t.currency}
+                                      </dd>
+                                    </div>
+                                    <div>
+                                      <dt>服务费</dt>
+                                      <dd>
+                                        {money(t.serviceFee)} {t.currency}
+                                      </dd>
+                                    </div>
+                                    <div>
+                                      <dt>通道费</dt>
+                                      <dd>
+                                        {money(t.channelFee)} {t.currency}
+                                      </dd>
+                                    </div>
+                                    <div className="divided">
+                                      <dt>确认后冻结总额</dt>
+                                      <dd>
+                                        <strong>
+                                          {money(t.totalDeposit)} {t.currency}
+                                        </strong>
+                                      </dd>
+                                    </div>
+                                    <div>
+                                      <dt>钱包可用余额</dt>
+                                      <dd>
+                                        {money(
+                                          walletBalances.find(
+                                            (w) => w.currency === t.currency,
+                                          )?.available ?? "0",
+                                        )}{" "}
+                                        {t.currency}
+                                      </dd>
+                                    </div>
+                                  </dl>
+                                </section>
+                              ))}
+                          </div>
+                          <details
+                            className="exchange-details exchange-quote-lines"
+                            open
+                          >
+                            <summary>
+                              逐笔收款人、到账金额与费用 ·{" "}
+                              {batchPreview.quotes.length} 笔
+                            </summary>
+                            <div className="table-scroll">
+                              <table>
+                                <thead>
+                                  <tr>
+                                    <th>参考号 / 收款人</th>
+                                    <th>预计到账</th>
+                                    <th>汇率</th>
+                                    <th>费用</th>
+                                    <th>支付总额</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {batchPreview.quotes.map((q) => (
+                                    <tr key={q.id}>
+                                      <td>
+                                        <strong>{q.clientItemId}</strong>
+                                        <small>
+                                          {beneficiaries.find(
+                                            (b) => b.id === q.beneficiaryId,
+                                          )?.name ??
+                                            visibleBatch.items.find(
+                                              (i) => i.id === q.itemId,
+                                            )?.recipientName ??
+                                            "收款人"}{" "}
+                                          ·{" "}
+                                          {beneficiaries.find(
+                                            (b) => b.id === q.beneficiaryId,
+                                          )?.accountMasked ??
+                                            visibleBatch.items.find(
+                                              (i) => i.id === q.itemId,
+                                            )?.accountMasked}
+                                        </small>
+                                      </td>
+                                      <td>
+                                        {money(q.payoutAmount)}{" "}
+                                        {q.payoutCurrency}
+                                      </td>
+                                      <td>
+                                        1 {q.sourceCurrency} = {q.customerRate}{" "}
+                                        {q.payoutCurrency}
+                                      </td>
+                                      <td>
+                                        <small>
+                                          服务费 {money(q.serviceFee)}{" "}
+                                          {q.sourceCurrency}
+                                        </small>
+                                        <small>
+                                          通道费 {money(q.channelFee)}{" "}
+                                          {q.sourceCurrency}
+                                        </small>
+                                      </td>
+                                      <td>
+                                        {money(q.totalDeposit)}{" "}
+                                        {q.sourceCurrency}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </details>
+                          {visibleBatch.items.some(
+                            (i) => i.status === "error",
+                          ) && (
+                            <Note>
+                              {
+                                visibleBatch.items.filter(
+                                  (i) => i.status === "error",
+                                ).length
+                              }{" "}
+                              行校验未通过，不参与本次报价，也不会创建订单。
+                            </Note>
+                          )}
+                          {!batchEnough && (
+                            <Note danger>
+                              部分币种余额不足，暂不能提交。前往钱包充值后可返回重新报价。
+                            </Note>
+                          )}
+                          {batchRemaining === 0 && (
+                            <Note danger>
+                              报价已过期，请重新获取并核对后再确认。
+                            </Note>
+                          )}
+                          <p className="exchange-freeze-note">
+                            <Lock size={17} />
+                            确认后冻结以上本金与费用。不同币种独立核算，未知付款结果保持冻结。
+                          </p>
+                          <label className="checkbox">
+                            <input
+                              type="checkbox"
+                              checked={batchChecked}
+                              disabled={
+                                locked || !batchEnough || !batchRemaining
+                              }
+                              onChange={(e) =>
+                                setBatchChecked(e.target.checked)
+                              }
+                            />
+                            我已核对有效行、每笔收款人、报价与费用
+                          </label>
+                          <div className="actions exchange-batch-actions">
+                            <button
+                              className="button"
+                              disabled={
+                                locked ||
+                                !batchChecked ||
+                                !batchEnough ||
+                                !batchRemaining
+                              }
+                              onClick={() => void submitBatch()}
+                            >
+                              {busy ? "正在提交…" : "确认并冻结模拟余额"}
+                              <ArrowRight size={18} />
+                            </button>
+                            <button
+                              className="button outline"
+                              disabled={locked}
+                              onClick={() => void previewBatch()}
+                            >
+                              重新获取报价
+                            </button>
+                            {!batchEnough && (
+                              <button
+                                className="button outline"
+                                disabled={busy}
+                                onClick={() => {
+                                  setBatchPreview(null);
+                                  setBatchChecked(false);
+                                  goTopup();
+                                }}
+                              >
+                                前往钱包充值
+                              </button>
+                            )}
+                            <button
+                              className="button text"
+                              disabled={busy}
+                              onClick={() => {
+                                setBatchPreview(null);
+                                setBatchChecked(false);
+                              }}
+                            >
+                              <ArrowLeft size={16} />
+                              返回校验结果
+                            </button>
+                          </div>
+                          <p className="muted small">
+                            仅为 MOCK
+                            模拟报价与付款，提交时服务端会再次检查余额和有效期。
+                          </p>
+                        </>
+                      ) : visibleBatch.items.some(
+                          (i) => i.status === "created",
+                        ) &&
+                        !visibleBatch.items.some(
+                          (i) => i.status === "valid",
+                        ) ? (
+                        <div className="exchange-batch-success">
+                          <div className="circle-icon">
+                            <CheckCircle size={34} />
+                          </div>
+                          <h2>批次已提交</h2>
+                          <p>
+                            {
+                              visibleBatch.items.filter(
+                                (i) => i.status === "created",
+                              ).length
+                            }{" "}
+                            笔订单已创建，对应模拟余额已冻结。
+                          </p>
+                          <p className="muted small">
+                            {visibleBatch.batch.clientBatchId}
+                          </p>
+                          <Note>
+                            提交不代表付款完成。处理进度、失败或待确认结果及回单，请在订单中查看。
+                          </Note>
+                          {visibleBatch.items.some(
+                            (i) => i.status === "error",
+                          ) && (
+                            <details className="exchange-details">
+                              <summary>
+                                {
+                                  visibleBatch.items.filter(
+                                    (i) => i.status === "error",
+                                  ).length
+                                }{" "}
+                                行未创建订单，查看原因
+                              </summary>
+                              {visibleBatch.items
+                                .filter((i) => i.status === "error")
+                                .map((item) => (
                                   <div className="batch-row" key={item.id}>
-                                    <span
-                                      className={
-                                        "line-number " +
-                                        (item.status === "error" ? "error" : "")
-                                      }
-                                    >
-                                      {i + 1}
-                                    </span>
                                     <div>
                                       <strong>
                                         {item.clientItemId || "缺少参考号"}
                                       </strong>
                                       <small>
-                                        {item.errors.join("；") ||
-                                          (item.orderId
-                                            ? "订单 " + shortId(item.orderId)
-                                            : money(item.sourceAmount) +
-                                              " " +
-                                              item.sourceCurrency +
-                                              " 本金")}
+                                        {item.errors
+                                          .map(batchErrorLabel)
+                                          .join("；")}
                                       </small>
                                     </div>
-                                    <Badge status={item.status} />
                                   </div>
                                 ))}
-                                <div className="actions">
-                                  <button
-                                    className="button"
-                                    disabled={
-                                      locked ||
-                                      !visibleBatch.items.some(
-                                        (i) => i.status === "valid",
-                                      )
-                                    }
-                                    onClick={() => void submitBatch()}
-                                  >
-                                    仅提交校验通过的行
-                                  </button>
-                                  <button
-                                    className="button outline"
-                                    onClick={() =>
-                                      downloadCSV("汇途-批次逐行结果.csv", [
-                                        [
-                                          "clientItemId",
-                                          "status",
-                                          "errors",
-                                          "orderId",
-                                        ],
-                                        ...visibleBatch.items.map((i) => [
-                                          i.clientItemId,
-                                          i.status,
-                                          i.errors.join("; "),
-                                          i.orderId ?? "",
-                                        ]),
-                                      ])
-                                    }
-                                  >
-                                    下载逐行结果
-                                  </button>
-                                </div>
-                                <p className="muted small">
-                                  提交时由服务端创建报价和订单，重复提交不会重复生成订单。
-                                </p>
-                              </div>
-                            )}
-                            {!!data.batches?.length && (
-                              <div className="batch-history">
-                                <h3>服务端批次记录</h3>
-                                {data.batches.map((b) => (
-                                  <button
-                                    className="batch-history-row"
-                                    key={b.id}
-                                    onClick={() =>
-                                      setBatch({
-                                        batch: b,
-                                        items:
-                                          data.batchItems?.filter(
-                                            (i) => i.batchId === b.id,
-                                          ) ?? [],
-                                      })
-                                    }
-                                  >
-                                    <Files size={18} />
-                                    <span>{b.clientBatchId}</span>
-                                    <ArrowRight size={16} />
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </section>
-                      <aside className="quote-panel">
-                        <div className="card-heading">
-                          <h2>
-                            {mode === "batch" ? "批量付款说明" : "本次报价"}
-                          </h2>
-                          <span className="small muted">
-                            {quote && mode === "single" ? (
-                              <>
-                                <Clock size={13} />{" "}
-                                <b className="teal">
-                                  {String(Math.floor(remaining / 60)).padStart(
-                                    2,
-                                    "0",
-                                  )}
-                                  :{String(remaining % 60).padStart(2, "0")}
-                                </b>
-                              </>
-                            ) : (
-                              "服务端快照"
-                            )}
-                          </span>
-                        </div>
-                        {mode === "single" ? (
-                          <>
-                            <p className="quote-label">收款人预计到账</p>
-                            <div className="quote-amount">
-                              {quote
-                                ? symbol(quote.payoutCurrency) +
-                                  money(quote.payoutAmount)
-                                : "—"}
-                              <span>{market}</span>
-                            </div>
-                            <div className="ruleline" />
-                            {quote ? (
-                              <FeeRows quote={quote} />
-                            ) : (
-                              <div className="quote-placeholder">
-                                <p>
-                                  {quoteBusy
-                                    ? "正在获取服务器报价…"
-                                    : "填写金额并选择可用收款人"}
-                                </p>
-                                <p>费用与汇率确认后将在这里列明。</p>
-                              </div>
-                            )}
-                            {quoteError && <Note danger>{quoteError}</Note>}
-                            <p className="subtle">
-                              <Info size={16} />
-                              {amountMode === "total_deposit"
-                                ? "费用已包含在支付总额内"
-                                : "已按目标法币金额反算稳定币总额"}
-                            </p>
+                              <button
+                                className="button outline"
+                                disabled={busy}
+                                onClick={() => {
+                                  setBatch(null);
+                                  setBatchPreview(null);
+                                  setBatchChecked(false);
+                                  setBatchKey("");
+                                }}
+                              >
+                                修改错误行并重新上传
+                              </button>
+                            </details>
+                          )}
+                          <div className="actions">
                             <button
-                              className="button full big"
-                              disabled={
-                                locked ||
-                                quoteBusy ||
-                                !quote ||
-                                remaining === 0 ||
-                                currentCustomer?.status !== "approved"
-                              }
+                              className="button"
+                              onClick={() => go("orders")}
+                            >
+                              前往订单查看 <ArrowRight size={18} />
+                            </button>
+                            <button
+                              className="button outline"
+                              disabled={busy}
                               onClick={() => {
-                                setStep(2);
-                                setChecked(false);
-                                window.scrollTo(0, 0);
+                                setBatch(null);
+                                setBatchPreview(null);
+                                setBatchChecked(false);
+                                setBatchKey("");
+                                setBatchText("");
                               }}
                             >
-                              下一步，确认付款 <ArrowRight size={20} />
+                              创建新批次
                             </button>
-                            {quote && remaining === 0 && (
-                              <button
-                                className="button outline full"
-                                onClick={() => setQuoteVersion((v) => v + 1)}
-                              >
-                                报价过期，重新获取
-                              </button>
-                            )}
-                            {quoteError && (
-                              <button
-                                className="button text full"
-                                onClick={() => setQuoteVersion((v) => v + 1)}
-                              >
-                                重试报价
-                              </button>
-                            )}
-                            <p className="center muted small">
-                              确认报价后创建订单，超时需重新报价
-                            </p>
-                            {currentCustomer?.status !== "approved" && (
-                              <Note danger>
-                                当前客户尚未通过审核，无法创建报价。
-                              </Note>
-                            )}
-                            <small className="quote-source">
-                              {quote?.configVersion ?? "MOCK 报价源"}
-                              <br />
-                              样例费率，不构成实时市场报价
-                            </small>
-                          </>
-                        ) : (
-                          <>
-                            <div className="circle-icon">
-                              <Files size={34} />
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="card-heading exchange-stage-heading">
+                            <div>
+                              <h2>核对校验结果</h2>
+                              <p className="muted small">
+                                {visibleBatch.batch.clientBatchId}
+                              </p>
                             </div>
-                            <h3>逐笔校验，清晰可追踪</h3>
-                            <ul className="clean-list">
-                              <li>服务端校验白名单和客户范围</li>
-                              <li>跨批次参考号去重，避免重复订单</li>
-                              <li>提交时为有效行创建报价与订单</li>
-                              <li>订单生成后仍需逐笔入金与出款</li>
-                            </ul>
-                            <Note>
-                              不同币种不会混合合计。批次创建不代表付款成功。
-                            </Note>
-                          </>
-                        )}
-                      </aside>
-                    </div>
+                            <button
+                              className="link"
+                              disabled={busy}
+                              onClick={() => {
+                                setBatch(null);
+                                setBatchPreview(null);
+                                setBatchChecked(false);
+                                setBatchKey("");
+                              }}
+                            >
+                              <ArrowLeft size={16} />
+                              更换文件 / 修改后重传
+                            </button>
+                          </div>
+                          <div className="batch-statline exchange-validation-counts">
+                            <span>共 {visibleBatch.items.length} 行</span>
+                            <span className="teal">
+                              通过{" "}
+                              {
+                                visibleBatch.items.filter(
+                                  (i) => i.status === "valid",
+                                ).length
+                              }
+                            </span>
+                            <span
+                              className={
+                                visibleBatch.items.some(
+                                  (i) => i.status === "error",
+                                )
+                                  ? "red"
+                                  : ""
+                              }
+                            >
+                              待修改{" "}
+                              {
+                                visibleBatch.items.filter(
+                                  (i) => i.status === "error",
+                                ).length
+                              }
+                            </span>
+                            {visibleBatch.items.some(
+                              (i) => i.status === "created",
+                            ) && (
+                              <button
+                                className="link"
+                                onClick={() => go("orders")}
+                              >
+                                已提交{" "}
+                                {
+                                  visibleBatch.items.filter(
+                                    (i) => i.status === "created",
+                                  ).length
+                                }{" "}
+                                笔，查看订单
+                              </button>
+                            )}
+                          </div>
+                          <div className="exchange-validation-list">
+                            {visibleBatch.items.map((item, i) => (
+                              <div className="batch-row" key={item.id}>
+                                <span
+                                  className={
+                                    "line-number " +
+                                    (item.status === "error" ? "error" : "")
+                                  }
+                                >
+                                  {item.rowNumber ?? i + 1}
+                                </span>
+                                <div>
+                                  <strong>
+                                    {item.clientItemId || "缺少参考号"}
+                                  </strong>
+                                  <small>
+                                    {item.errors
+                                      .map(batchErrorLabel)
+                                      .join("；") ||
+                                      (item.orderId
+                                        ? "订单 " + shortId(item.orderId)
+                                        : item.targetAmount
+                                          ? `${item.recipientName ?? "收款人"} · ${item.bankName ?? ""} · ${item.accountMasked ?? ""} · 目标到账 ${money(item.targetAmount)} ${item.targetCurrency}`
+                                          : `${money(item.sourceAmount)} ${item.sourceCurrency} 本金`)}
+                                  </small>
+                                </div>
+                                <Badge status={item.status}>
+                                  {item.status === "created"
+                                    ? "已创建订单"
+                                    : undefined}
+                                </Badge>
+                              </div>
+                            ))}
+                          </div>
+                          <p className="muted small">
+                            仅通过校验的行进入报价。错误行可修改后重新上传，不会创建订单。
+                          </p>
+                          <div className="actions exchange-batch-actions">
+                            <button
+                              className="button"
+                              disabled={
+                                locked ||
+                                !visibleBatch.items.some(
+                                  (i) => i.status === "valid",
+                                )
+                              }
+                              onClick={() => void previewBatch()}
+                            >
+                              下一步，获取批次报价 <ArrowRight size={18} />
+                            </button>
+                            <button
+                              className="button outline"
+                              onClick={() =>
+                                downloadCSV("汇途-批次逐行结果.csv", [
+                                  [
+                                    "clientItemId",
+                                    "status",
+                                    "errors",
+                                    "orderId",
+                                    "payoutStatus",
+                                    "completionStatus",
+                                    "receiptStatus",
+                                  ],
+                                  ...visibleBatch.items.map((i) => [
+                                    i.clientItemId,
+                                    i.status,
+                                    i.errors.map(batchErrorLabel).join("; "),
+                                    i.orderId ?? "",
+                                    orders.find((o) => o.id === i.orderId)
+                                      ?.payoutStatus ?? "",
+                                    orders.find((o) => o.id === i.orderId)
+                                      ?.completionStatus ?? "",
+                                    orders.find((o) => o.id === i.orderId)
+                                      ?.receiptStatus ?? "",
+                                  ]),
+                                ])
+                              }
+                            >
+                              <Download size={17} />
+                              下载逐行结果
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </section>
                   ) : step === 2 && quote ? (
-                    <div className="confirm-layout">
-                      <section>
-                        <div className="mobile-quote">
+                    <section className="exchange-confirm">
+                      <div className="mobile-quote exchange-confirm-summary">
+                        <div className="card-heading">
                           <p>收款人预计到账 · {quote.payoutCurrency}</p>
-                          <strong>
-                            {symbol(quote.payoutCurrency)}
-                            {money(quote.payoutAmount)}
-                          </strong>
-                          <span>
-                            <Clock size={17} />
-                            报价有效期{" "}
-                            <b>
-                              {String(Math.floor(remaining / 60)).padStart(
-                                2,
-                                "0",
-                              )}
-                              :{String(remaining % 60).padStart(2, "0")}
-                            </b>
+                          <Badge status={remaining ? "valid" : "error"}>
+                            {remaining
+                              ? `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")} 有效`
+                              : "报价已过期"}
+                          </Badge>
+                        </div>
+                        <strong>
+                          {symbol(quote.payoutCurrency)}
+                          {money(quote.payoutAmount)}
+                        </strong>
+                      </div>
+                      <div className="card confirm-card">
+                        <div className="card-heading">
+                          <span className="muted">收款人</span>
+                          <span className="success-text">
+                            <Bank size={18} />
+                            已保存 · 仅格式校验
                           </span>
                         </div>
-                        <div className="card confirm-card">
-                          <div className="card-heading">
-                            <span className="muted">收款人</span>
-                            <span className="success-text">
-                              <ShieldCheck size={19} />
-                              服务端白名单已验证
-                            </span>
-                          </div>
-                          <h2>{recipient?.name}</h2>
-                          <p>
-                            {recipient?.accountMasked}
-                            <br />
-                            {quote.payoutCurrency === "CNY"
-                              ? "中国大陆"
-                              : "美国"}{" "}
-                            · {quote.payoutCurrency}
-                          </p>
-                          <div className="ruleline" />
-                          <h3>付款明细</h3>
-                          <FeeRows quote={quote} />
+                        <h2>
+                          {beneficiaries.find(
+                            (b) => b.id === quote.beneficiaryId,
+                          )?.name ?? "收款人"}
+                        </h2>
+                        <p>
+                          {
+                            beneficiaries.find(
+                              (b) => b.id === quote.beneficiaryId,
+                            )?.accountMasked
+                          }{" "}
+                          ·{" "}
+                          {quote.payoutCurrency === "CNY" ? "中国大陆" : "美国"}{" "}
+                          · {quote.payoutCurrency}
+                        </p>
+                        <div className="ruleline" />
+                        <FeeRows quote={quote} />
+                        <div className="wallet-inline">
+                          <span>钱包可用余额</span>
+                          <strong>
+                            {money(
+                              walletBalances.find(
+                                (w) => w.currency === quote.sourceCurrency,
+                              )?.available ?? "0",
+                            )}{" "}
+                            {quote.sourceCurrency}
+                          </strong>
+                        </div>
+                        <p className="exchange-freeze-note">
+                          <Lock size={18} />
+                          确认后冻结 {money(quote.totalDeposit)}{" "}
+                          {quote.sourceCurrency}
+                          （含本金与费用）。未知付款结果保持冻结，避免重复支出。
+                        </p>
+                        <details className="exchange-details">
+                          <summary>报价与演示详情</summary>
                           <dl className="details">
                             <div>
                               <dt>金额输入方式</dt>
@@ -2281,124 +3252,88 @@ export default function Home() {
                               </dd>
                             </div>
                             <div>
-                              <dt>网络</dt>
-                              <dd>MOCK · 无真实充值地址</dd>
-                            </div>
-                            <div>
                               <dt>报价版本</dt>
                               <dd>{quote.configVersion}</dd>
                             </div>
-                          </dl>
-                          <div className="receipt-info">
-                            <FileText size={30} />
                             <div>
-                              <strong>本金与手续费分别列明</strong>
-                              <p>
-                                应入金 {money(quote.totalDeposit)}{" "}
-                                {quote.sourceCurrency}，其中本金{" "}
-                                {money(quote.sourceAmount)}
-                              </p>
+                              <dt>到期时间</dt>
+                              <dd>{date(quote.expiresAt)}</dd>
                             </div>
-                          </div>
-                          <label className="checkbox">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              disabled={busy}
-                              onChange={(e) => setChecked(e.target.checked)}
-                            />
-                            我已核对模拟收款账户、费用与总额
-                          </label>
-                          {remaining === 0 && (
-                            <Note danger>
-                              报价已过期，请返回重新获取。服务器也会校验有效期。
-                            </Note>
-                          )}
-                          <button
-                            className="button full big"
-                            disabled={locked || !checked || remaining === 0}
-                            onClick={() => void createOrder()}
-                          >
-                            {busy ? "正在创建…" : "确认报价，创建 MOCK 订单"}{" "}
-                            <ArrowRight size={20} />
-                          </button>
-                          <div className="actions centered">
-                            <button
-                              className="button text"
-                              disabled={busy}
-                              onClick={() => {
-                                setStep(1);
-                                setQuote(null);
-                              }}
-                            >
-                              <ArrowLeft size={16} />
-                              返回修改 / 重新报价
-                            </button>
-                          </div>
-                        </div>
-                      </section>
-                      <aside className="confirm-aside">
-                        <div className="circle-icon">
-                          <ShieldCheck size={34} />
-                        </div>
-                        <h2>核对后，再确认</h2>
-                        <p>
-                          这份报价由服务端生成。到账金额、本金、服务费和渠道费都已列明。
-                        </p>
-                        <Note>
-                          只有模拟网络与虚构账户。任何按钮都不会执行真实充值或付款。
-                        </Note>
-                      </aside>
-                    </div>
-                  ) : order ? (
-                    <div className="deposit-layout">
-                      <section className="card">
-                        <div className="circle-icon">
-                          <Wallet size={32} />
-                        </div>
-                        <h2>等待稳定币到账</h2>
-                        <p>订单 {shortId(order.id)} · MOCK 网络</p>
-                        {fundingPanel(order)}
-                        <div className="actions">
-                          <button
-                            className="button"
-                            onClick={() => go("detail")}
-                          >
-                            查看订单状态
-                          </button>
-                          <button
-                            className="button outline"
+                          </dl>
+                          <p>
+                            MOCK
+                            模拟网络，无真实充值地址或付款。报价由服务端生成并在提交时再次核验有效期。
+                          </p>
+                        </details>
+                        <label className="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={checked}
                             disabled={busy}
-                            onClick={() => void reload()}
+                            onChange={(e) => setChecked(e.target.checked)}
+                          />
+                          我已核对模拟收款账户、费用与总额
+                        </label>
+                        {!enoughBalance && (
+                          <>
+                            <Note danger>
+                              可用余额不足，请先充值。当前草稿会保留。
+                            </Note>
+                            <button
+                              className="button outline full"
+                              disabled={busy}
+                              onClick={goTopup}
+                            >
+                              前往钱包
+                            </button>
+                          </>
+                        )}
+                        {remaining === 0 && (
+                          <Note danger>报价已过期，请返回重新获取并核对。</Note>
+                        )}
+                        <button
+                          className="button full big"
+                          disabled={
+                            locked ||
+                            !checked ||
+                            remaining === 0 ||
+                            !enoughBalance
+                          }
+                          onClick={() => void createOrder()}
+                        >
+                          {busy ? "正在提交…" : "确认结汇并冻结模拟余额"}
+                          <ArrowRight size={20} />
+                        </button>
+                        <div className="actions centered">
+                          <button
+                            className="button text"
+                            disabled={busy}
+                            onClick={() => {
+                              setStep(1);
+                              setQuote(null);
+                              setChecked(false);
+                            }}
                           >
-                            刷新数据
+                            <ArrowLeft size={16} />
+                            返回修改 / 重新报价
                           </button>
                         </div>
-                      </section>
-                      <aside className="quote-panel">
-                        <h2>订单状态</h2>
-                        <dl className="details">
-                          <div>
-                            <dt>稳定币入金</dt>
-                            <dd>
-                              <Badge status={order.depositStatus} />
-                            </dd>
-                          </div>
-                          <div>
-                            <dt>法币出款</dt>
-                            <dd>
-                              <Badge status={order.payoutStatus} />
-                            </dd>
-                          </div>
-                          <div>
-                            <dt>付款回单</dt>
-                            <dd>
-                              <Badge status={order.receiptStatus} />
-                            </dd>
-                          </div>
-                        </dl>
+                      </div>
+                    </section>
+                  ) : step === 3 && order && order.id === selected ? (
+                    <section className="card exchange-order-success">
+                      <div className="circle-icon">
+                        <CheckCircle size={34} />
+                      </div>
+                      <h2>结汇订单已提交</h2>
+                      <p>订单 {shortId(order.id)} · MOCK 模拟</p>
+                      {fundingPanel(order)}
+                      <div className="actions">
+                        <button className="button" onClick={() => go("detail")}>
+                          查看订单状态 <ArrowRight size={18} />
+                        </button>
                         <button
-                          className="button outline full"
+                          className="button outline"
                           disabled={busy}
                           onClick={() => {
                             setStep(1);
@@ -2406,22 +3341,41 @@ export default function Home() {
                             setChecked(false);
                           }}
                         >
-                          再创建一笔付款
+                          再创建一笔结汇
                         </button>
-                      </aside>
-                    </div>
+                        <button
+                          className="button text"
+                          onClick={() => go("orders")}
+                        >
+                          全部订单与回单
+                        </button>
+                      </div>
+                    </section>
                   ) : (
-                    <Empty title="订单数据不可用，请刷新" />
+                    <Empty title="请重新核对结汇信息">
+                      <button
+                        className="button"
+                        disabled={busy}
+                        onClick={() => {
+                          setStep(1);
+                          setQuote(null);
+                          setChecked(false);
+                        }}
+                      >
+                        返回填写结汇
+                      </button>
+                    </Empty>
                   )}
-                </>
+                </div>
               )}
-              {page === "recipients" && (
+              {(page === "recipients" ||
+                (page === "profile" && profileTab === "recipients")) && (
                 <>
                   <div className="section-actions">
                     <Note>
-                      只显示当前身份有权限读取的账户。新增项必须经过管理员审核。
+                      保存后即可用于结汇，无需人工审核。系统自动检查必填项、格式、地区和币种；不会核验真实账户归属。
                     </Note>
-                    {(role === "customer" || maker) && (
+                    {maker && (
                       <button
                         className="button"
                         disabled={
@@ -2430,9 +3384,9 @@ export default function Home() {
                         }
                         onClick={() =>
                           openCommand({
-                            title: "新增 MOCK 白名单收款人",
+                            title: "新增模拟收款账户",
                             description:
-                              "创建中国大陆 CNY 路线的虚构账户（尾号 8888）。仅使用虚构名称和账户引用，不收集银行账号。管理员审核通过后才可报价。",
+                              "创建中国大陆 CNY 路线的虚构账户（尾号 8888）。保存后即可使用，无需人工审核，仅检查字段和格式；不收集或验证真实银行账号。",
                             path: "beneficiaries",
                             base: {
                               country: "CN",
@@ -2461,8 +3415,8 @@ export default function Home() {
                                 value: "MOCK 新收款人",
                               },
                             ],
-                            button: "提交白名单审核",
-                            success: "收款人已保存为待审核，须由管理员确认。",
+                            button: "保存收款账户",
+                            success: "收款账户已保存，即可用于结汇。",
                           })
                         }
                       >
@@ -2478,7 +3432,15 @@ export default function Home() {
                           <div className="circle-icon">
                             <Bank size={27} />
                           </div>
-                          <Badge status={b.status} />
+                          <Badge
+                            status={
+                              recipientUsable(b.status) ? "valid" : "suspended"
+                            }
+                          >
+                            {recipientUsable(b.status)
+                              ? "已保存 · 可使用"
+                              : "已停用"}
+                          </Badge>
                         </div>
                         <h2>{b.name}</h2>
                         <p>{b.accountMasked}</p>
@@ -2486,30 +3448,31 @@ export default function Home() {
                           {b.country === "CN" ? "中国大陆" : "美国"} ·{" "}
                           {b.currency}
                         </span>
-                        <p className="record-id">白名单 ID · {b.id}</p>
+                        <p className="record-id">收款账户 ID · {b.id}</p>
                         <div className="ruleline" />
                         <div className="actions">
-                          {finance && b.status === "pending" ? (
+                          {role === "customer" && recipientUsable(b.status) && (
                             <button
                               className="button outline"
-                              disabled={locked || b.createdBy === actor}
-                              onClick={() =>
-                                void mutate(
-                                  `beneficiaries/${b.id}/approve`,
-                                  {},
-                                  "白名单已通过服务端管理员审核。",
-                                )
-                              }
+                              disabled={locked}
+                              onClick={() => {
+                                setMarket(b.currency);
+                                setBeneficiaryId(b.id);
+                                setMode("single");
+                                setStep(1);
+                                setQuote(null);
+                                setChecked(false);
+                                go("payment");
+                              }}
                             >
-                              管理员审核通过
+                              用于结汇 <ArrowRight size={16} />
                             </button>
-                          ) : (
-                            <span className="muted small">
-                              {b.status === "approved"
-                                ? "已通过审核，可用于报价"
-                                : "等待管理员审核"}
-                            </span>
                           )}
+                          <span className="muted small">
+                            {recipientUsable(b.status)
+                              ? "无需人工审核，未做真实账户验证"
+                              : "账户已停用，无法用于新结汇"}
+                          </span>
                         </div>
                       </div>
                     ))}
@@ -2521,7 +3484,8 @@ export default function Home() {
                   )}
                 </>
               )}
-              {page === "certification" && (
+              {(page === "certification" ||
+                (page === "profile" && profileTab === "certification")) && (
                 <>
                   {role === "admin" && maker && (
                     <div className="actions">
@@ -2641,14 +3605,72 @@ export default function Home() {
                   )}
                 </>
               )}
-              {page === "orders" && orderTable()}
+              {page === "orders" &&
+                (role === "admin" ? (
+                  <OrderHistory
+                    orders={orders}
+                    customers={customers}
+                    beneficiaries={beneficiaries}
+                    persistence={health?.persistence}
+                    onOpen={(id) => {
+                      setSelected(id);
+                      go("detail");
+                    }}
+                  />
+                ) : (
+                  <CustomerOrders key={actor} data={data} request={request} onDownload={downloadPublishedReceipt}
+                    onOpen={(id) => { setSelected(id); go("detail"); }}
+                    onResumeBatch={(id) => {
+                      const selectedBatch = data.batches?.find((b) => b.id === id && b.customerId === customerId);
+                      if (!selectedBatch) return;
+                      setBatch({batch:selectedBatch,items:data.batchItems?.filter((i) => i.batchId === id) ?? []});
+                      setBatchPreview(null); setBatchChecked(false); setBatchKey(selectedBatch.clientBatchId);
+                      setMode("batch"); setStep(1); setQuote(null); setChecked(false); go("payment");
+                    }} />
+                ))}
+              {page === "overview" && (
+                <OverviewPanel
+                  orders={orders}
+                  persistence={health?.persistence}
+                  onNavigate={(next) => go(next as Page)}
+                />
+              )}
+              {page === "directory" && (
+                <CustomerDirectoryPanel
+                  customers={customers}
+                  beneficiaries={beneficiaries}
+                  orders={orders}
+                  onOpenOrder={(id) => {
+                    setSelected(id);
+                    go("detail");
+                  }}
+                />
+              )}
+              {page === "referrals" && (
+                <ReferralPartnersPanel
+                  customers={customers}
+                  commissions={commissionRows}
+                  settlements={settlementRows}
+                />
+              )}
+              {page === "providers" && (
+                <PayoutProvidersPanel
+                  providers={data.payoutProviders ?? []}
+                  busy={locked}
+                  onSave={(input) =>
+                    mutate(
+                      "admin/payout-providers",
+                      input,
+                      "出款合作方配置已保存，新订单按新默认分配。历史归属保持不变。",
+                    )
+                  }
+                />
+              )}
               {page === "detail" && (
                 <>
                   <button
                     className="button text back"
-                    onClick={() =>
-                      go(role === "customer" ? "orders" : "workbench")
-                    }
+                    onClick={() => go("orders")}
                   >
                     <ArrowLeft size={16} />
                     返回订单记录
@@ -2658,6 +3680,14 @@ export default function Home() {
               )}
               {page === "workbench" && (
                 <>
+                  <MerchantOverview
+                    orders={orders}
+                    selectedQueue={merchantQueue}
+                    onSelectQueue={(queue) => {
+                      setMerchantQueue(queue);
+                      setFilter("all");
+                    }}
+                  />
                   <div className="workspace-actions">
                     <span className="muted small">
                       同一后端 · {orders.length} 笔订单 ·{" "}
@@ -2702,7 +3732,7 @@ export default function Home() {
                         <ShieldCheck size={24} />
                         <h3>统一商家工作台</h3>
                         <p>
-                          管理员线下付款后直接确认结果，上传截图或水单。未知结果先核实，禁止重复付款。
+                          官方自营模拟订单核对后即可确认，系统自动生成内部记录；回单可后补。未知结果先核实，禁止重复确认。
                         </p>
                         <Note>
                           所有操作受服务端控制。客户、商家和伙伴入口仅用于演示，不能替代正式登录。
@@ -2712,67 +3742,49 @@ export default function Home() {
                   </div>
                 </>
               )}
+              {page === "receipts" && role === "admin" && (
+                <ReceiptLibrary
+                  key={actor}
+                  orders={orders}
+                  request={receiptRequest}
+                  onChanged={reload}
+                  download={downloadPrivateReceipt}
+                  initialOrderId={receiptOrderId}
+                />
+              )}
               {page === "pricing" && (
-                <div className="admin-layout">
-                  <section>{pricingPanel()}</section>
-                  <aside className="card">
-                    <h2>订单报价快照</h2>
-                    {order ? (
-                      <>
-                        <p>以下值读取自订单锁定快照。</p>
-                        <dl className="details">
-                          <div>
-                            <dt>订单</dt>
-                            <dd>{shortId(order.id)}</dd>
-                          </div>
-                          <div>
-                            <dt>配置版本</dt>
-                            <dd>{order.quote.configVersion}</dd>
-                          </div>
-                          <div>
-                            <dt>客户汇率</dt>
-                            <dd>{order.quote.customerRate}</dd>
-                          </div>
-                          <div>
-                            <dt>到账金额</dt>
-                            <dd>
-                              {money(order.quote.payoutAmount)}{" "}
-                              {order.quote.payoutCurrency}
-                            </dd>
-                          </div>
-                          <div>
-                            <dt>应入金总额</dt>
-                            <dd>
-                              {money(order.quote.totalDeposit)}{" "}
-                              {order.quote.sourceCurrency}
-                            </dd>
-                          </div>
-                        </dl>
-                      </>
-                    ) : (
-                      <Empty title="尚无订单报价快照" />
-                    )}
-                    <Note>
-                      成本价、参考价和客户价分别保存。定价参数仅为 MOCK
-                      fixture。
-                    </Note>
-                  </aside>
-                </div>
+                <PricingSettingsPanel
+                  current={data.pricingCurrent}
+                  history={data.pricingHistory ?? []}
+                  busy={locked}
+                  persistence={health?.persistence}
+                  onPreview={previewPricing}
+                  onPublish={(input) =>
+                    mutate(
+                      "admin/pricing/publish",
+                      input,
+                      "费率版本已发布。新报价使用新配置，原报价和订单快照不变。",
+                    )
+                  }
+                />
               )}
               {page === "reconciliation" && (
                 <>
                   <div className="stat-grid">
                     <div className="card stat">
                       <div>
-                        <span>待核对</span>
+                        <span>历史待复核</span>
                         <strong>
                           {
                             orders.filter(
-                              (o) => o.payoutStatus === "sent" && !o.reconciled,
+                              (o) =>
+                                o.payoutStatus === "sent" &&
+                                !o.reconciled &&
+                                o.completionStatus !== "completed",
                             ).length
                           }
                         </strong>
-                        <small>已登记发送的订单</small>
+                        <small>不含正常确认完成的订单</small>
                       </div>
                     </div>
                     <div className="card stat">
@@ -2792,7 +3804,7 @@ export default function Home() {
                         <strong>
                           {orders.filter((o) => o.reconciled).length}
                         </strong>
-                        <small>服务端证据校验通过</small>
+                        <small>人工核对记录，不代表银行认证</small>
                       </div>
                     </div>
                   </div>
@@ -2932,7 +3944,7 @@ export default function Home() {
                           </div>
                           <div>
                             <h2>每笔服务费，清晰可查</h2>
-                            <p>单层推荐 · 对账后计提 · 服务端观察期</p>
+                            <p>单层推荐 · 完成后计提 · 服务端观察期</p>
                           </div>
                           <div className="partner-banner-note">
                             <ShieldCheck size={20} />
@@ -3210,7 +4222,10 @@ export default function Home() {
             <button
               key={p}
               className={
-                page === p || (p === "orders" && page === "detail")
+                page === p ||
+                (p === "orders" && page === "detail") ||
+                (p === "profile" &&
+                  ["recipients", "certification"].includes(page))
                   ? "active"
                   : ""
               }
@@ -3235,6 +4250,16 @@ export default function Home() {
           onClose={() => setCommand(null)}
         >
           <p>{command.description}</p>
+          {command.review && (
+            <dl className="details">
+              {command.review.map(([label, value]) => (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -3246,7 +4271,7 @@ export default function Home() {
                 {field.label}
                 {field.type === "select" ? (
                   <select
-                    required
+                    required={field.required !== false}
                     disabled={busy}
                     value={commandValues[field.key] ?? ""}
                     onChange={(e) =>
@@ -3264,7 +4289,7 @@ export default function Home() {
                   </select>
                 ) : field.type === "textarea" ? (
                   <textarea
-                    required
+                    required={field.required !== false}
                     disabled={busy}
                     maxLength={500}
                     rows={3}
@@ -3278,7 +4303,7 @@ export default function Home() {
                   />
                 ) : (
                   <input
-                    required
+                    required={field.required !== false}
                     disabled={busy}
                     type={field.type === "month" ? "month" : "text"}
                     maxLength={500}

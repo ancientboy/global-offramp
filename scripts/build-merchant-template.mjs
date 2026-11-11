@@ -1,0 +1,37 @@
+import fs from 'node:fs/promises';
+import {Workbook, SpreadsheetFile} from '@oai/artifact-tool';
+const outputDir=process.argv[2];
+if(!outputDir) throw new Error('Pass absolute output directory; run with Codex primary runtime and artifact-tool available.');
+await fs.mkdir(outputDir,{recursive:true});
+const workbook=Workbook.create();
+const sheet=workbook.worksheets.add('批量结汇');
+sheet.showGridLines=false;
+sheet.getRange('A1:G2').values=[['姓名','银行','银行卡号','到账金额','到账币种','支付币种（选填）','商户行号（选填）'],['演示收款人（请替换）','演示银行（非真实银行）','0012345678901234567',7200,'CNY','USDT','']];
+sheet.getRange('A1:G101').format.font={name:'Arial',size:11};
+sheet.getRange('A1:G1').format={fill:'#24334B',font:{name:'Arial',bold:true,color:'#FFFFFF'},rowHeight:34,verticalAlignment:'center'};
+sheet.getRange('A2:G101').format.rowHeight=26;
+sheet.getRange('A2:C101').setNumberFormat('@');
+sheet.getRange('D2:D101').setNumberFormat('0.00');
+sheet.getRange('E2:G101').setNumberFormat('@');
+sheet.getRange('A1:A101').format.columnWidth=28;
+sheet.getRange('B1:B101').format.columnWidth=34;
+sheet.getRange('C1:C101').format.columnWidth=29;
+sheet.getRange('D1:D101').format.columnWidth=19;
+sheet.getRange('E1:E101').format.columnWidth=16;
+sheet.getRange('F1:G101').format.columnWidth=25;
+sheet.getRange('A2:G2').format.fill='#FFF7DF';
+sheet.getRange('E2:E101').dataValidation={rule:{type:'list',values:['CNY','USD']}};
+sheet.getRange('F2:F101').dataValidation={rule:{type:'list',values:['USDT','USDC']}};
+sheet.freezePanes.freezeRows(1);
+const notes=workbook.worksheets.add('填写说明');notes.showGridLines=false;
+const lines=[['批量结汇模板填写说明'],['一个文件仅对应当前选择的一个商户；不要增加商户编号列。'],['请替换第2行的虚构示例，或删除示例后从第2行开始填写；最多100笔。'],['姓名、银行、银行卡号、到账金额、到账币种必填。不要修改表头。'],['银行卡号是文本，不是金额。整列已设为文本，保留前导0和长账号。'],['粘贴时使用文本。数值型卡号、科学计数法和公式将被拒绝，无法恢复已丢失的数字。'],['到账金额是收款人预计收到的法币金额，须大于0且最多两位小数。'],['到账币种填写CNY或USD；支付币种填写USDT或USDC，留空默认USDT。'],['系统根据到账金额反算稳定币本金，费用另计；请以导入后的报价为准。'],['商户行号选填，限50位字母、数字、短横线或下划线；相同商户内不可重复。'],['留空行号时自动生成唯一编号；同一笔业务请勿在不同文件中重复提交。'],['上传后先在浏览器本地显示脱敏预览；点击确认导入才发送给模拟服务。'],['错误行不会创建收款人或订单；有效行仍需核对报价并单独确认提交。'],['本演示仅保存银行卡末4位和随机演示令牌，不保存完整卡号，不连接银行或真实付款。'],['请勿上传真实个人或银行资料。所有示例均为虚构。']];
+notes.getRange(`A1:A${lines.length}`).values=lines;
+notes.getRange(`A1:A${lines.length}`).format={font:{name:'Arial',size:11},columnWidth:110,rowHeight:30};
+notes.getRange('A1').format.font={name:'Arial',size:15,bold:true};
+workbook.recalculate();
+console.log((await workbook.inspect({kind:'table',range:'批量结汇!A1:G2',include:'values,formulas',tableMaxRows:2,tableMaxCols:7})).ndjson);
+console.log((await workbook.inspect({kind:'match',searchTerm:'#REF!|#DIV/0!|#VALUE!|#NAME\\?|#NUM!',options:{useRegex:true,maxResults:10}})).ndjson);
+for(const [sheetName,range,name] of [['批量结汇','A1:G5','template'],['填写说明','A1:A15','instructions']]){
+ const preview=await workbook.render({sheetName,range,scale:1.5,format:'png'});await fs.writeFile(`${outputDir}/${name}.png`,new Uint8Array(await preview.arrayBuffer()));
+}
+const xlsx=await SpreadsheetFile.exportXlsx(workbook);await xlsx.save(`${outputDir}/merchant-batch-template.xlsx`);

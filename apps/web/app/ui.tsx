@@ -104,7 +104,7 @@ export function FeeRows({ quote: q }: { quote: Quote }) {
         </dd>
       </div>
       <div className="divided">
-        <dt>应入金总额</dt>
+        <dt>稳定币总额（含费用）</dt>
         <dd>
           <strong>
             {money(q.totalDeposit)} {q.sourceCurrency}

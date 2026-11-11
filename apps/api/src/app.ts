@@ -121,6 +121,24 @@ class OperationsController {
   @Get("audit") audit(@Req() r: DemoRequest) {
     return this.core.auditTrail(r.actor);
   }
+  @Post("admin/pricing/preview") previewPricing(
+    @Req() r: DemoRequest,
+    @Body() b: unknown,
+  ) {
+    return this.core.previewPricing(r.actor, b);
+  }
+  @Post("admin/pricing/publish") publishPricing(
+    @Req() r: DemoRequest,
+    @Body() b: unknown,
+  ) {
+    return this.core.publishPricing(r.actor, b);
+  }
+  @Post("admin/payout-providers") payoutProvider(
+    @Req() r: DemoRequest,
+    @Body() b: unknown,
+  ) {
+    return this.core.upsertPayoutProvider(r.actor, b);
+  }
   @Post("customers") customer(@Req() r: DemoRequest, @Body() b: unknown) {
     return this.core.createCustomer(r.actor, b);
   }
@@ -146,6 +164,19 @@ class OperationsController {
   @Post("quotes") quote(@Req() r: DemoRequest, @Body() b: unknown) {
     return this.core.createQuote(r.actor, b);
   }
+  @Post("wallet/deposits") walletDeposit(
+    @Req() r: DemoRequest,
+    @Body() b: unknown,
+  ) {
+    return this.core.depositWallet(r.actor, b);
+  }
+  @Post("orders/:id/cancel") cancelOrder(
+    @Req() r: DemoRequest,
+    @Param("id") id: string,
+    @Body() b: unknown,
+  ) {
+    return this.core.cancelOrder(r.actor, id, b);
+  }
   @Post("orders") order(@Req() r: DemoRequest, @Body() b: unknown) {
     return this.core.createOrder(r.actor, b);
   }
@@ -155,6 +186,19 @@ class OperationsController {
     @Body() b: unknown,
   ) {
     return this.core.confirmManualPayout(r.actor, id, b);
+  }
+  @Post("orders/:id/complete-recorded-payment") completeRecordedPayment(
+    @Req() r: DemoRequest,
+    @Param("id") id: string,
+  ) {
+    return this.core.completeRecordedPayment(r.actor, id);
+  }
+  @Post("orders/:id/mock-payout") mockPayout(
+    @Req() r: DemoRequest,
+    @Param("id") id: string,
+    @Body() b: unknown,
+  ) {
+    return this.core.confirmMockPayout(r.actor, id, b);
   }
   @Post("orders/:id/receipt-file") receiptFile(
     @Req() r: DemoRequest,
@@ -260,14 +304,24 @@ class OperationsController {
   ) {
     return this.core.cancelSettlement(r.actor, id, b.reason);
   }
+  @Post("batches/merchant") merchantBatch(@Req() r: DemoRequest, @Body() b: unknown) {
+    return this.core.importMerchantBatch(r.actor, b);
+  }
   @Post("batches") batch(@Req() r: DemoRequest, @Body() b: any) {
     return this.core.importBatch(r.actor, b.customerId, b.clientBatchId, b.csv);
+  }
+  @Post("batches/:id/quote") quoteBatch(
+    @Req() r: DemoRequest,
+    @Param("id") id: string,
+  ) {
+    return this.core.quoteBatch(r.actor, id);
   }
   @Post("batches/:id/submit") submitBatch(
     @Req() r: DemoRequest,
     @Param("id") id: string,
+    @Body() b: unknown,
   ) {
-    return this.core.submitBatch(r.actor, id);
+    return this.core.submitBatch(r.actor, id, b);
   }
   @Post("webhooks/mock-deposit") deposit(
     @Req() r: DemoRequest,

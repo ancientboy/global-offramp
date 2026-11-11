@@ -594,9 +594,10 @@ test("merchant admin completes target quote, payment and scoped demo receipt wit
   });
   assert.equal(upload.response.status, 200);
   assert.equal(upload.body.receiptFileAvailable, true);
+  assert.equal((await call(worker, `/api/orders/${o.id}/receipt-file`, { cookie, actor: "customer-demo" })).response.status, 403);
   const download = await call(worker, `/api/orders/${o.id}/receipt-file`, {
     cookie,
-    actor: "customer-demo",
+    actor: "admin-demo",
   });
   assert.equal(download.response.status, 200);
   assert.equal(download.body.dataBase64, file.dataBase64);
@@ -643,9 +644,10 @@ test("two MiB demo receipt works within bounded session and larger file is rejec
     body: file,
   });
   assert.equal(result.response.status, 200);
+  assert.equal((await call(worker, `/api/orders/${o.id}/receipt-file`, { cookie, actor: "customer-demo" })).response.status, 403);
   const download = await call(worker, `/api/orders/${o.id}/receipt-file`, {
     cookie,
-    actor: "customer-demo",
+    actor: "admin-demo",
   });
   assert.equal(download.body.size, 2 * 1024 * 1024);
   const denied = await call(worker, `/api/orders/${o.id}/receipt-file`, {
@@ -656,4 +658,249 @@ test("two MiB demo receipt works within bounded session and larger file is rejec
     },
   });
   assert.equal(denied.response.status, 409);
+});
+
+test("wallet HTTP flow credits once, freezes exact quote and cancels without a second deposit", async () => {
+  const worker = createPreviewWorker();
+  const { cookie } = await bootstrap(worker, "customer-demo");
+  const options = { cookie, actor: "customer-demo" };
+  const credit = {
+    customerId: "customer-1",
+    currency: "USDT",
+    amount: "1000",
+    idempotencyKey: "wallet-http",
+  };
+  const a = await call(worker, "/api/wallet/deposits", {
+    ...options,
+    body: credit,
+  });
+  assert.equal(a.response.status, 200);
+  const duplicate = await call(worker, "/api/wallet/deposits", {
+    ...options,
+    body: credit,
+  });
+  assert.equal(duplicate.body.duplicate, true);
+  const q = await call(worker, "/api/quotes", {
+    ...options,
+    body: {
+      customerId: "customer-1",
+      beneficiaryId: "beneficiary-cn",
+      sourceCurrency: "USDT",
+      sourceAmount: "100",
+    },
+  });
+  const o = await call(worker, "/api/orders", {
+    ...options,
+    body: {
+      quoteId: q.body.id,
+      clientOrderId: "wallet-order-http",
+      fundingSource: "wallet",
+    },
+  });
+  assert.equal(o.response.status, 200);
+  assert.equal(o.body.fundingInstruction, undefined);
+  const d = await call(worker, "/api/dashboard", options);
+  assert.equal(d.body.walletBalances[0].frozen, "107.000000");
+  assert.equal(d.body.walletBalances[0].available, "893.000000");
+  const legacy = await call(worker, `/api/demo/orders/${o.body.id}/deposit`, {
+    cookie,
+    actor: "admin-demo",
+    body: {},
+  });
+  assert.equal(legacy.body.error, "WALLET_FUNDED");
+  const cancel = await call(worker, `/api/orders/${o.body.id}/cancel`, {
+    ...options,
+    body: { reason: "Cancel untouched mock order" },
+  });
+  assert.equal(cancel.body.walletFundingStatus, "released");
+  const cross = await call(worker, "/api/wallet/deposits", {
+    cookie,
+    actor: "company-demo",
+    body: credit,
+  });
+  assert.equal(cross.response.status, 403);
+});
+
+for (const [actor, customerId] of [
+  ["customer-demo", "customer-1"],
+  ["company-demo", "customer-2"],
+]) {
+  test(`${actor}: save recipient then wallet single and bulk exchange without review`, async () => {
+    const worker = createPreviewWorker();
+    const { cookie } = await bootstrap(worker, actor);
+    const options = { actor, cookie };
+    const saved = await call(worker, "/api/beneficiaries", {
+      ...options,
+      body: {
+        customerId,
+        name: "Synthetic recipient",
+        country: "CN",
+        currency: "CNY",
+        accountToken: "mock-token",
+        accountMasked: "**** 4321",
+      },
+    });
+    assert.equal(saved.response.status, 200);
+    assert.equal(saved.body.status, "saved");
+    assert.equal(saved.body.approvedBy, undefined);
+    const deposit = await call(worker, "/api/wallet/deposits", {
+      ...options,
+      body: {
+        customerId,
+        currency: "USDT",
+        amount: "1000",
+        idempotencyKey: "credit",
+      },
+    });
+    assert.equal(deposit.response.status, 200);
+    const quote = await call(worker, "/api/quotes", {
+      ...options,
+      body: {
+        customerId,
+        beneficiaryId: saved.body.id,
+        sourceCurrency: "USDT",
+        sourceAmount: "100",
+      },
+    });
+    assert.equal(quote.response.status, 200);
+    const order = await call(worker, "/api/orders", {
+      ...options,
+      body: {
+        quoteId: quote.body.id,
+        clientOrderId: "single",
+        fundingSource: "wallet",
+      },
+    });
+    assert.equal(order.response.status, 200);
+    const batch = await call(worker, "/api/batches", {
+      ...options,
+      body: {
+        customerId,
+        clientBatchId: "bulk",
+        csv: `clientItemId,beneficiaryId,sourceCurrency,sourceAmount\na,${saved.body.id},USDT,100\nb,${saved.body.id},USDT,100`,
+      },
+    });
+    assert.equal(batch.response.status, 200);
+    assert.ok(batch.body.items.every((i: any) => i.status === "valid"));
+    const preview = await call(
+      worker,
+      `/api/batches/${batch.body.batch.id}/quote`,
+      { ...options, body: {} },
+    );
+    assert.equal(preview.response.status, 200);
+    const submitted = await call(
+      worker,
+      `/api/batches/${batch.body.batch.id}/submit`,
+      {
+        ...options,
+        body: {
+          fundingSource: "wallet",
+          quoteIds: preview.body.quotes.map((q: any) => q.id),
+        },
+      },
+    );
+    assert.equal(submitted.response.status, 200);
+    const dashboard = await call(worker, "/api/dashboard", options);
+    assert.equal(dashboard.body.orders.length, 3);
+    assert.equal(
+      dashboard.body.beneficiaries.find((b: any) => b.id === saved.body.id)
+        .status,
+      "saved",
+    );
+  });
+}
+
+test("official MOCK confirmation HTTP path needs no external reference, is idempotent and preserves unknown lock", async () => {
+  const worker = createPreviewWorker();
+  const start = await bootstrap(worker);
+  const opts = { cookie: start.cookie, actor: "admin-demo" };
+  await call(worker, "/api/demo/scenario", {
+    ...opts,
+    body: { idempotencyKey: "quick-confirm-test" },
+  });
+  const { body } = await call(worker, "/api/dashboard", opts);
+  const o = body.orders.find((x: any) => x.payoutStatus === "draft");
+  const input = {
+    idempotencyKey: "quick-one",
+    expectedAmount: o.quote.payoutAmount,
+    beneficiaryId: o.quote.beneficiaryId,
+    payoutProviderId: o.payoutProviderSnapshot.id,
+    note: "",
+  };
+  const endpoint = `/api/orders/${o.id}/mock-payout`;
+  const results = await Promise.all([
+    call(worker, endpoint, { ...opts, body: input }),
+    call(worker, endpoint, { ...opts, body: input }),
+  ]);
+  for (const r of results) assert.equal(r.response.status, 200);
+  assert.equal(results[0].body.completionStatus, "completed");
+  assert.equal(results[0].body.reconciled, false);
+  const completed = await call(worker, `/api/orders/${o.id}/complete-recorded-payment`, { ...opts, body: {} });
+  assert.equal(completed.response.status, 200);
+  assert.equal(completed.body.completionStatus, "completed");
+  assert.equal(completed.body.reconciled, false);
+  const forbiddenCompletion = await call(worker, `/api/orders/${o.id}/complete-recorded-payment`, { ...opts, actor: "customer-demo", body: {} });
+  assert.equal(forbiddenCompletion.response.status, 403);
+  const record = results[0].body.paymentConfirmation;
+  assert.equal(record.referenceKind, "mock_internal");
+  assert.equal(record.verification, "mock_internal_record");
+  assert.match(record.internalRecordId, /^MOCK-INTERNAL-/);
+  assert.equal(
+    record.internalRecordId,
+    results[1].body.paymentConfirmation.internalRecordId,
+  );
+  assert.equal(record.confirmedBy, "admin-demo");
+  assert.equal(
+    (
+      await call(worker, endpoint, {
+        ...opts,
+        actor: "customer-demo",
+        body: input,
+      })
+    ).response.status,
+    403,
+  );
+  assert.equal(
+    (
+      await call(worker, endpoint, {
+        ...opts,
+        body: { ...input, expectedAmount: "1" },
+      })
+    ).response.status,
+    409,
+  );
+  assert.notEqual(
+    (
+      await call(worker, `/api/orders/${o.id}/reconcile`, {
+        ...opts,
+        body: {
+          providerReference: record.internalRecordId,
+          actualAmount: o.quote.payoutAmount,
+          evidence: "",
+        },
+      })
+    ).response.status,
+    200,
+  );
+  const next = body.orders.find((x: any) => x.payoutStatus === "approved");
+  const uncertain = await call(worker, `/api/orders/${next.id}/manual-payout`, {
+    ...opts,
+    body: {
+      idempotencyKey: "unknown-test",
+      outcome: "unknown",
+      evidence: "MOCK test: result cannot be determined",
+    },
+  });
+  assert.equal(uncertain.response.status, 200);
+  const blocked = await call(worker, `/api/orders/${next.id}/mock-payout`, {
+    ...opts,
+    body: {
+      ...input,
+      idempotencyKey: "block-unknown",
+      expectedAmount: next.quote.payoutAmount,
+      beneficiaryId: next.quote.beneficiaryId,
+      payoutProviderId: next.payoutProviderSnapshot.id,
+    },
+  });
+  assert.equal(blocked.response.status, 409);
 });

@@ -169,9 +169,13 @@ test("receipt is optional, order-scoped, signature checked, size limited and not
     }),
   );
   await h.service.uploadReceiptFile(admin, o.id, file);
-  const download = await h.service.downloadReceiptFile(customer, o.id);
+  await assert.rejects(h.service.downloadReceiptFile(customer, o.id), /administrator private/);
+  const download = await h.service.downloadReceiptFile(admin, o.id);
   assert.equal(download.dataBase64, file.dataBase64);
   assert.equal(download.scanStatus, "not_scanned");
+  // Existing pre-upgrade single-order shared attachments remain readable.
+  await h.store.transaction(s => { delete s.orders.find(x => x.id === o.id)!.receiptFile!.privateOriginal; });
+  assert.equal((await h.service.downloadReceiptFile(customer, o.id)).dataBase64, file.dataBase64);
   await assert.rejects(
     h.service.downloadReceiptFile(ACTORS["company-demo"], o.id),
   );

@@ -123,7 +123,7 @@ export class MockScenarioService {
           )!;
           if (o.conversionStatus === "pending")
             await this.core.recordConversion(ACTORS["checker-demo"], o.id, {
-              providerReference: "demo-fx-" + o.id,
+              providerReference: "MOCK-FX-" + o.id,
               actualRate: o.quote.customerRate,
               evidence:
                 "MOCK fixture: external allocation record; no conversion occurred",
@@ -146,7 +146,7 @@ export class MockScenarioService {
             if (a.state === "approved")
               await this.core.recordPayout(ACTORS["maker-demo"], a.id, {
                 outcome: "sent",
-                providerReference: "demo-provider-" + o.id,
+                providerReference: "MOCK-PAYOUT-" + o.id,
                 evidence:
                   "MOCK fixture: simulated portal success; no money sent",
               });
@@ -155,7 +155,7 @@ export class MockScenarioService {
             )!;
             if (o.payoutStatus === "sent" && !o.reconciled)
               await this.core.reconcile(ACTORS["checker-demo"], o.id, {
-                providerReference: "demo-provider-" + o.id,
+                providerReference: "MOCK-PAYOUT-" + o.id,
                 actualAmount: o.quote.payoutAmount,
                 evidence: "MOCK fixture: simulated independent statement match",
               });

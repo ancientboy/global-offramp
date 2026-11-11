@@ -1,0 +1,396 @@
+/* Progressive exchange: one task per stage, with server quote values unchanged. */
+.exchange-flow {
+  max-width: 1120px;
+}
+.exchange-flow .exchange-mode {
+  display: inline-flex;
+  gap: 6px;
+  margin: 0 0 20px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f5f8f8;
+}
+.exchange-flow .exchange-mode button {
+  min-height: 40px;
+  padding: 9px 25px;
+  border: 0;
+  border-radius: 7px;
+}
+.exchange-flow .exchange-mode button.active {
+  background: #fff;
+  box-shadow: 0 1px 4px #153b2e12;
+}
+.exchange-flow .steps {
+  margin-top: 0;
+  margin-bottom: 26px;
+}
+.exchange-flow .payment-layout {
+  grid-template-columns: minmax(0, 1.12fr) minmax(340px, 0.88fr);
+  gap: 32px;
+}
+.exchange-flow .payment-form > h2 {
+  margin: 0 0 14px;
+  font-size: 18px;
+}
+.exchange-flow .amount-mode {
+  margin-bottom: 18px;
+}
+.exchange-flow .amount-mode button {
+  padding: 10px 14px;
+}
+.exchange-flow .payment-form > label {
+  margin: 0 0 16px;
+}
+.exchange-currency-row {
+  display: grid;
+  grid-template-columns: minmax(145px, 0.85fr) minmax(0, 1.15fr);
+  align-items: center;
+  gap: 18px;
+}
+.exchange-currency-row label {
+  margin: 0;
+}
+.exchange-available {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px 10px;
+  min-width: 0;
+  font-size: 12px;
+}
+.exchange-available > span {
+  width: 100%;
+  color: var(--muted);
+  text-align: right;
+}
+.exchange-available strong {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.exchange-flow .recipient-heading {
+  margin: 26px 0 12px;
+}
+.exchange-flow .recipient-heading h2 {
+  font-size: 18px;
+}
+.exchange-flow .exchange-recipient-actions {
+  justify-content: space-between;
+  gap: 10px;
+  margin: 12px 0 22px;
+}
+.exchange-details {
+  border-top: 1px solid var(--line);
+  margin: 16px 0 0;
+  padding: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.exchange-details summary {
+  cursor: pointer;
+  font-weight: 550;
+  color: #5b7079;
+}
+.exchange-details[open] summary {
+  margin-bottom: 12px;
+}
+.exchange-details p {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.exchange-flow .exchange-quote {
+  padding: 22px;
+}
+.exchange-flow .exchange-quote .card-heading {
+  margin-bottom: 22px;
+}
+.exchange-flow .exchange-quote .quote-amount {
+  font-size: 37px;
+  margin-bottom: 20px;
+  overflow-wrap: anywhere;
+}
+.exchange-flow .exchange-quote .details {
+  margin: 0 0 20px;
+}
+.exchange-flow .exchange-quote .details > div {
+  padding: 9px 0;
+}
+.exchange-flow .exchange-quote .button.big {
+  margin-top: 12px;
+  padding: 14px 18px;
+}
+.exchange-flow .exchange-disclaimer {
+  margin: 12px 0 0;
+}
+.exchange-flow .exchange-batch {
+  padding: 26px;
+}
+.exchange-flow .merchant-import-panel {
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+.exchange-flow .merchant-import-panel h3 {
+  font-size: 20px;
+}
+.exchange-flow .merchant-import-panel .field {
+  padding: 24px;
+  margin: 20px 0;
+  background: #f7faf9;
+}
+.exchange-flow .merchant-import-panel input[type="file"] {
+  margin-top: 8px;
+  padding: 9px;
+  background: #fff;
+}
+.exchange-flow .merchant-local-result {
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--soft);
+  overflow-wrap: anywhere;
+}
+.exchange-flow .merchant-import-panel .exchange-details {
+  margin-bottom: 20px;
+}
+.exchange-flow .legacy-batch-import {
+  margin: 22px 0 0;
+}
+.exchange-stage-heading {
+  align-items: flex-start;
+}
+.exchange-stage-heading h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.exchange-stage-heading p {
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+}
+.exchange-flow .exchange-validation-counts {
+  display: flex;
+  gap: 12px 24px;
+  padding: 16px 20px;
+  margin: 22px 0 8px;
+  border-radius: 9px;
+  background: #f5f8f8;
+}
+.exchange-validation-list {
+  max-height: 510px;
+  overflow-y: auto;
+}
+.exchange-flow .batch-row {
+  gap: 14px;
+}
+.exchange-flow .batch-row > div {
+  min-width: 0;
+}
+.exchange-flow .batch-row strong,
+.exchange-flow .batch-row small {
+  overflow-wrap: anywhere;
+}
+.exchange-flow .batch-row .badge {
+  flex-shrink: 0;
+}
+.exchange-batch-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin: 24px 0;
+}
+.exchange-currency-total {
+  padding: 20px;
+  border: 1px solid #dbe9e4;
+  border-radius: 10px;
+  background: #f4faf7;
+}
+.exchange-currency-total h3 {
+  margin: 0 0 14px;
+  font-size: 17px;
+}
+.exchange-currency-total .details {
+  margin: 0;
+}
+.exchange-flow .exchange-quote-lines {
+  margin: 24px 0;
+}
+.exchange-quote-lines table {
+  min-width: 740px;
+}
+.exchange-quote-lines td {
+  vertical-align: top;
+}
+.exchange-quote-lines td small {
+  display: block;
+  margin-top: 4px;
+}
+.exchange-freeze-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 15px;
+  border-radius: 8px;
+  background: #f3f7f7;
+  color: #4f6670;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.exchange-freeze-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.exchange-batch-actions {
+  margin-top: 20px;
+}
+.exchange-batch-success {
+  max-width: 720px;
+  margin: 10px auto;
+}
+.exchange-batch-success > .circle-icon,
+.exchange-order-success > .circle-icon {
+  margin-bottom: 22px;
+}
+.exchange-batch-success h2,
+.exchange-order-success h2 {
+  margin: 0 0 12px;
+  font-size: 24px;
+}
+.exchange-batch-success > p,
+.exchange-order-success > p {
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.exchange-confirm {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.exchange-confirm .exchange-confirm-summary {
+  padding: 24px 28px;
+}
+.exchange-confirm-summary .card-heading {
+  margin-bottom: 10px;
+}
+.exchange-confirm-summary .card-heading p {
+  margin: 0;
+}
+.exchange-confirm-summary .badge {
+  flex-shrink: 0;
+}
+.exchange-confirm .confirm-card {
+  padding: 25px 28px 18px;
+}
+.exchange-confirm .confirm-card > .card-heading {
+  margin-bottom: 12px;
+}
+.exchange-confirm .wallet-inline {
+  margin: 16px 0;
+}
+.exchange-confirm .checkbox {
+  align-items: flex-start;
+}
+.exchange-confirm .checkbox input {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.exchange-order-success {
+  max-width: 760px;
+  margin: 0 auto;
+}
+@media (max-width: 1000px) {
+  .exchange-flow .payment-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.9fr);
+    gap: 22px;
+  }
+  .exchange-flow .exchange-quote {
+    padding: 20px;
+  }
+}
+@media (max-width: 760px) {
+  .exchange-flow .payment-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  .exchange-flow .exchange-mode {
+    display: flex;
+    width: 100%;
+  }
+  .exchange-flow .exchange-mode button {
+    flex: 1;
+    justify-content: center;
+    min-width: 0;
+  }
+  .exchange-flow .steps {
+    gap: 5px;
+    margin-bottom: 24px;
+  }
+  .exchange-flow .steps > div {
+    font-size: 11px;
+    gap: 5px;
+  }
+  .exchange-flow .steps > div > span {
+    width: 23px;
+    height: 23px;
+    flex-shrink: 0;
+  }
+  .exchange-flow .steps > b {
+    min-width: 5px;
+  }
+  .exchange-flow .exchange-quote {
+    position: static;
+    border: 1px solid #e1ece7;
+    border-radius: 10px;
+    padding: 20px;
+  }
+  .exchange-flow .exchange-batch {
+    padding: 20px 16px;
+  }
+  .exchange-stage-heading {
+    flex-wrap: wrap;
+  }
+  .exchange-flow .merchant-import-panel .section-heading {
+    flex-direction: column;
+  }
+  .exchange-flow .merchant-import-panel .section-heading a {
+    width: 100%;
+    justify-content: center;
+  }
+  .exchange-flow .merchant-import-panel .field {
+    padding: 18px;
+  }
+  .exchange-flow .exchange-validation-counts {
+    gap: 10px 16px;
+    padding: 14px;
+  }
+  .exchange-flow .exchange-batch-totals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .exchange-flow .exchange-batch-actions .button {
+    width: 100%;
+    justify-content: center;
+  }
+  .exchange-flow .batch-row {
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .exchange-flow .batch-row .badge {
+    font-size: 10px;
+    padding: 4px 7px;
+  }
+  .exchange-confirm .exchange-confirm-summary,
+  .exchange-confirm .confirm-card {
+    padding: 22px 18px;
+  }
+  .exchange-confirm .exchange-confirm-summary strong {
+    font-size: 38px;
+    overflow-wrap: anywhere;
+  }
+  .exchange-confirm-summary .card-heading {
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .exchange-flow .exchange-order-success {
+    padding: 24px 18px;
+  }
+}

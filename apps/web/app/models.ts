@@ -34,6 +34,26 @@ export interface Quote {
 }
 export interface Order {
   id: string;
+  orderNumber?: string;
+  payoutProviderSnapshot?: {
+    id: string;
+    name: string;
+    scope: "official" | "third_party";
+    routes: string[];
+    status?: string;
+  };
+  paymentConfirmation?: {
+    paidAt: string;
+    actualAmount: string;
+    providerReference: string;
+    verification: string;
+    referenceKind?: string;
+    internalRecordId?: string;
+    confirmedAt?: string;
+    confirmedBy?: string;
+    statement?: string;
+    note?: string;
+  };
   customerId: string;
   clientOrderId: string;
   quote: Quote;
@@ -43,8 +63,18 @@ export interface Order {
   receiptStatus: string;
   receiptFileAvailable?: boolean;
   reconciled: boolean;
+  completionStatus?: "completed" | "pending_review" | "in_progress";
+  completionBasis?:
+    "admin_attestation" | "mock_internal_record" | "financial_review" | null;
+  completion?: {
+    basis: "admin_attestation" | "mock_internal_record" | "financial_review";
+    completedAt: string;
+    completedBy: string;
+  };
   createdAt: string;
   batchId?: string;
+  fundingSource?: "wallet" | "deposit";
+  walletFundingStatus?: "reserved" | "consumed" | "released";
   fundingExpiresAt?: string;
   fundingInstruction?: {
     mode: "mock";
@@ -63,6 +93,8 @@ export interface Customer {
   name: string;
   kind: "personal" | "company";
   status: string;
+  serviceFeeOverride?: string;
+  partnerId?: string;
 }
 export interface Beneficiary {
   id: string;
@@ -81,6 +113,8 @@ export interface Attempt {
   makerId: string;
   checkerId?: string;
   providerReference?: string;
+  referenceKind?: string;
+  internalRecordId?: string;
 }
 export interface Refund {
   id: string;
@@ -102,6 +136,7 @@ export interface Discrepancy {
 }
 export interface Commission {
   id: string;
+  partnerId?: string;
   customerAlias?: string;
   currency: string;
   base: string;
@@ -129,6 +164,13 @@ export interface Batch {
   createdAt: string;
 }
 export interface BatchItem {
+  targetAmount?: string;
+  targetCurrency?: string;
+  amountMode?: "principal" | "target_payout";
+  recipientName?: string;
+  bankName?: string;
+  accountMasked?: string;
+  rowNumber?: number;
   id: string;
   batchId: string;
   clientItemId: string;
@@ -138,6 +180,20 @@ export interface BatchItem {
   status: "valid" | "error" | "created";
   errors: string[];
   orderId?: string;
+}
+export interface BatchPreview {
+  batch: Batch;
+  quotes: (Quote & { itemId: string; clientItemId: string })[];
+  totals: {
+    currency: string;
+    sourceAmount: string;
+    serviceFee: string;
+    channelFee: string;
+    totalDeposit: string;
+    available: string;
+  }[];
+  createdAt: string;
+  expiresAt: string;
 }
 export interface BatchResult {
   batch: Batch;
@@ -168,7 +224,38 @@ export interface Pricing {
     }
   >;
 }
+export interface WalletBalance {
+  customerId: string;
+  currency: "USDT" | "USDC";
+  available: string;
+  frozen: string;
+}
+export interface WalletDeposit {
+  id: string;
+  customerId: string;
+  currency: "USDT" | "USDC";
+  amount: string;
+  at: string;
+}
 export interface Dashboard {
+  walletRates?: {
+    sourceCurrency?: string;
+    payoutCurrency: string;
+    customerRate: string;
+    configVersion: string;
+    baselineAsOf?: string;
+    baselineExpiresAt?: string;
+    baselineSource?: string;
+    stale?: boolean;
+  }[];
+  pricingExpired?: boolean;
+  storageLimits?: {
+    maxStateBytes: number;
+    receiptMaxBytes: number;
+    resetEnabled: boolean;
+  } | null;
+  walletBalances?: WalletBalance[];
+  walletDeposits?: WalletDeposit[];
   mode: string;
   customers?: Customer[];
   beneficiaries?: Beneficiary[];
@@ -181,6 +268,9 @@ export interface Dashboard {
   batches?: Batch[];
   batchItems?: BatchItem[];
   pricingFixture?: Pricing;
+  pricingCurrent?: import("./admin-models").PricingVersion;
+  pricingHistory?: import("./admin-models").PricingVersion[];
+  payoutProviders?: import("./admin-models").PayoutProvider[];
 }
 export interface Health {
   status: string;
@@ -295,5 +385,57 @@ export function validQuoteAmount(
       ? /^(0|[1-9]\d{0,19})(\.\d{1,2})?$/
       : /^(0|[1-9]\d{0,19})(\.\d{1,6})?$/
     ).test(value) && /[1-9]/.test(value)
+  );
+}
+
+/** Compare six-decimal server strings without converting monetary values to floats. */
+export function decimalUnits(value: string): bigint {
+  if (!/^\d+(\.\d{1,6})?$/.test(value))
+    throw new Error("Invalid decimal amount");
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(whole) * BigInt("1000000") + BigInt(fraction.padEnd(6, "0"));
+}
+export function hasWalletFunds(
+  available: string | undefined,
+  required: string,
+): boolean {
+  try {
+    return decimalUnits(available ?? "0") >= decimalUnits(required);
+  } catch {
+    return false;
+  }
+}
+
+export function batchErrorLabel(message: string): string {
+  return (
+    (
+      {
+        "Spreadsheet formula prefix rejected": "不接受公式前缀，请填写纯文本",
+        "Invalid row fields": "字段格式有误，请对照模板检查",
+        "Duplicate clientItemId": "本批次业务参考号重复",
+        "Client item already imported for this customer":
+          "该业务参考号已导入，避免重复提交",
+        "Beneficiary not whitelisted": "收款账户不可用，或不属于当前客户",
+        "Beneficiary unavailable or outside customer scope":
+          "收款账户不存在、已停用，或不属于当前客户",
+        "Recipient unavailable or belongs to another customer":
+          "收款账户不存在、已停用，或不属于当前客户",
+        "Invalid amount precision or value": "金额须大于 0，最多 6 位小数",
+      } as Record<string, string>
+    )[message] ?? message
+  );
+}
+
+/** Saved recipients are usable after format validation; this is not bank verification. */
+export function recipientUsable(status: string): boolean {
+  return ["saved", "approved", "pending"].includes(status);
+}
+
+export function canQuickMockConfirm(order: Order): boolean {
+  return (
+    order.payoutProviderSnapshot?.scope === "official" &&
+    order.payoutProviderSnapshot.status === "active" &&
+    order.depositStatus === "confirmed" &&
+    ["draft", "approved", "awaiting_approval"].includes(order.payoutStatus)
   );
 }

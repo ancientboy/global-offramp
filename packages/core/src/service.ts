@@ -1,3 +1,5 @@
+import { validateMerchantRow } from "./merchant-import";
+import { ReceiptService } from "./receipts";
 import { createHash, randomUUID } from "node:crypto";
 import { parse } from "csv-parse/sync";
 import { z } from "zod";
@@ -22,6 +24,14 @@ import {
   Store,
 } from "./types";
 import { CONFIG } from "./fixtures";
+import {
+  calculatePricing,
+  checkBaseline,
+  initialPricing,
+  initialProviders,
+  pricingInput,
+  providerInput,
+} from "./pricing";
 import { authorize, maskAudit, verifyWebhook } from "./security";
 import { transfer } from "./ledger";
 const id = z
@@ -55,12 +65,128 @@ const eventSchema = z
     confirmations: z.number().int().min(1).max(10000),
   })
   .strict();
+// Saved means schema-valid synthetic details, not bank or identity verification.
+// Legacy pending records were already schema-valid and need no manual review.
+const usableBeneficiary = (b: Beneficiary | undefined): b is Beneficiary =>
+  !!b && ["saved", "approved", "pending"].includes(b.status);
+
 export class OfframpService {
+  private readonly bootstrapPricing;
   constructor(
     public readonly store: Store,
     private readonly clock: () => Date = () => new Date(),
     private readonly config: typeof CONFIG = CONFIG,
-  ) {}
+  ) {
+    this.bootstrapPricing = initialPricing(config, clock());
+  }
+  private currentPricing(s: State) {
+    return s.pricingHistory?.at(-1) ?? this.bootstrapPricing;
+  }
+  private ensurePricing(s: State) {
+    if (!s.pricingHistory?.length)
+      s.pricingHistory = [structuredClone(this.bootstrapPricing)];
+  }
+  async previewPricing(actor: Actor, input: unknown) {
+    authorize(actor, "payout.record");
+    demand(
+      actor.role === "merchant_admin",
+      "FORBIDDEN",
+      "Merchant administrator required",
+    );
+    const v = pricingInput.parse(input);
+    const current = this.currentPricing(await this.store.read());
+    demand(
+      v.expectedVersion === current.version,
+      "PRICING_VERSION_CONFLICT",
+      "Pricing changed; reload before previewing",
+    );
+    return calculatePricing(v, this.clock(), "preview");
+  }
+  async publishPricing(actor: Actor, input: unknown) {
+    authorize(actor, "payout.record");
+    demand(
+      actor.role === "merchant_admin",
+      "FORBIDDEN",
+      "Merchant administrator required",
+    );
+    const v = pricingInput.parse(input);
+    return this.store.transaction((s) => {
+      this.ensurePricing(s);
+      demand(
+        v.expectedVersion === this.currentPricing(s).version,
+        "PRICING_VERSION_CONFLICT",
+        "Pricing changed; review the latest version",
+      );
+      const p = calculatePricing(
+        v,
+        this.clock(),
+        "mock-pricing-" + randomUUID(),
+      );
+      p.publishedAt = this.clock().toISOString();
+      p.publishedBy = actor.id;
+      (s.pricingHistory ??= []).push(p);
+      this.audit(s, actor, "pricing.published", p.version, {
+        previousVersion: v.expectedVersion,
+      });
+      return p;
+    });
+  }
+  async upsertPayoutProvider(actor: Actor, input: unknown) {
+    authorize(actor, "payout.record");
+    demand(
+      actor.role === "merchant_admin",
+      "FORBIDDEN",
+      "Merchant administrator required",
+    );
+    const v = providerInput.parse(input);
+    demand(
+      new Set(v.routes).size === v.routes.length,
+      "INVALID_PROVIDER_ROUTE",
+      "Duplicate provider routes",
+    );
+    demand(
+      !v.isDefault || v.status === "active",
+      "INVALID_PROVIDER_STATUS",
+      "Default provider must be active",
+    );
+    return this.store.transaction((s) => {
+      const providers = (s.payoutProviders ??= initialProviders());
+      const existing = v.id ? providers.find((p) => p.id === v.id) : undefined;
+      demand(!v.id || existing, "NOT_FOUND", "Payout provider missing");
+      const p = {
+        ...v,
+        id: existing?.id ?? randomUUID(),
+        updatedAt: this.clock().toISOString(),
+      };
+      if (v.isDefault)
+        for (const other of providers)
+          if (
+            other.id !== p.id &&
+            other.routes.some((r) => p.routes.includes(r))
+          )
+            other.isDefault = false;
+      if (existing) providers[providers.indexOf(existing)] = p;
+      else providers.push(p);
+      for (const currency of ["CNY", "USD"] as const)
+        demand(
+          providers.filter(
+            (x) =>
+              x.isDefault &&
+              x.status === "active" &&
+              x.routes.includes(currency),
+          ).length === 1,
+          "DEFAULT_PROVIDER_REQUIRED",
+          "Every route requires exactly one active default payout provider",
+        );
+      this.audit(s, actor, "payout_provider.updated", p.id, {
+        scope: p.scope,
+        status: p.status,
+        routes: p.routes,
+        isDefault: p.isDefault,
+      });
+      return p;
+    });
+  }
   private audit(
     s: State,
     a: Actor,
@@ -114,9 +240,9 @@ export class OfframpService {
       (x) => x.id === beneficiaryId && x.customerId === customerId,
     );
     demand(
-      b?.status === "approved",
+      usableBeneficiary(b),
       "BENEFICIARY_BLOCKED",
-      "Whitelisted beneficiary required",
+      "Available recipient belonging to this customer required",
     );
     return b;
   }
@@ -127,7 +253,19 @@ export class OfframpService {
       input.customerId,
       input.beneficiaryId,
     );
-    const route = this.config.routes[beneficiary.currency];
+    this.ensurePricing(s);
+    const pricing = this.currentPricing(s);
+    checkBaseline(pricing, this.clock());
+    const rateRow = pricing.rates.find(
+      (r) =>
+        r.sourceCurrency === input.sourceCurrency &&
+        r.payoutCurrency === beneficiary.currency,
+    )!;
+    const route = {
+      ...this.config.routes[beneficiary.currency],
+      ...pricing.routes[beneficiary.currency],
+      ...rateRow,
+    };
     demand(
       route.enabled && route.country === beneficiary.country,
       "ROUTE_DISABLED",
@@ -155,10 +293,10 @@ export class OfframpService {
         : input.sourceCurrency,
     );
     const serviceFee = amount(
-      customer.serviceFeeOverride ?? this.config.serviceFee,
+      customer.serviceFeeOverride ?? pricing.serviceFee,
       input.sourceCurrency,
     );
-    const channelFee = amount(this.config.channelFee, input.sourceCurrency);
+    const channelFee = amount(pricing.channelFee, input.sourceCurrency);
     const rate = units(route.customerRate, 8);
     demand(rate > 0n, "INVALID_RATE", "Rate must be positive");
     const numerator =
@@ -211,8 +349,9 @@ export class OfframpService {
       costRate: route.costRate,
       referenceRate: route.referenceRate,
       customerRate: route.customerRate,
-      configVersion: this.config.version,
-      feeRuleVersion: this.config.feeRuleVersion,
+      configVersion: pricing.version,
+      feeRuleVersion: pricing.version,
+      pricingSnapshot: structuredClone(pricing),
       partnerId: customer.partnerId,
       attributionVersion: customer.attributionVersion,
       commissionRate: customer.partnerId
@@ -221,7 +360,10 @@ export class OfframpService {
       commissionRuleVersion: this.config.commissionRuleVersion,
       createdAt: now.toISOString(),
       expiresAt: new Date(
-        now.getTime() + this.config.quoteTtlSeconds * 1000,
+        Math.min(
+          now.getTime() + this.config.quoteTtlSeconds * 1000,
+          Date.parse(pricing.baseline.expiresAt),
+        ),
       ).toISOString(),
     };
     demand(
@@ -274,7 +416,7 @@ export class OfframpService {
     const v = z
       .object({
         customerId: id,
-        name: text,
+        name: z.string().trim().min(1).max(100),
         country: z.enum(["CN", "US"]),
         currency: z.enum(["CNY", "USD"]),
         accountToken: id,
@@ -293,11 +435,11 @@ export class OfframpService {
       const b: Beneficiary = {
         id: randomUUID(),
         ...v,
-        status: "pending",
+        status: "saved",
         createdBy: actor.id,
       };
       s.beneficiaries.push(b);
-      this.audit(s, actor, "beneficiary.created", b.id, {
+      this.audit(s, actor, "beneficiary.saved", b.id, {
         accountToken: v.accountToken,
       });
       return b;
@@ -332,12 +474,151 @@ export class OfframpService {
       return this.quoteView(q, actor);
     });
   }
+  private walletAccount(customerId: string) {
+    return "liability:wallet:" + customerId;
+  }
+  private walletAvailable(
+    s: State,
+    customerId: string,
+    currency: "USDT" | "USDC",
+  ) {
+    return s.journals
+      .flatMap((j) => j.lines)
+      .filter(
+        (l) =>
+          l.account === this.walletAccount(customerId) &&
+          l.currency === currency,
+      )
+      .reduce((n, l) => n + units(l.credit, 6) - units(l.debit, 6), 0n);
+  }
+  /** Synthetic credit only. There is no address, external transfer, or custody integration. */
+  async depositWallet(actor: Actor, input: unknown) {
+    const v = z
+      .object({
+        customerId: id,
+        currency: z.enum(["USDT", "USDC"]),
+        amount: decimalString,
+        idempotencyKey: id,
+      })
+      .strict()
+      .parse(input);
+    authorize(actor, "wallet.deposit", v.customerId);
+    const value = amount(v.amount, v.currency);
+    demand(units(value, 6) > 0n, "INVALID_AMOUNT", "Deposit must be positive");
+    return this.store.transaction((s) => {
+      this.checkCustomer(s, v.customerId);
+      const key = "wallet-deposit:" + v.customerId + ":" + v.idempotencyKey;
+      const duplicate = s.journals.some((j) => j.businessKey === key);
+      const journal = transfer(
+        s,
+        key,
+        v.currency,
+        value,
+        "asset:custody:mock",
+        this.walletAccount(v.customerId),
+        this.clock(),
+      );
+      if (!duplicate) {
+        this.audit(s, actor, "wallet.deposited", journal.id, {
+          customerId: v.customerId,
+          currency: v.currency,
+          amount: value,
+          idempotencyKey: v.idempotencyKey,
+          mode: "MOCK",
+        });
+        this.emit(s, "wallet.deposited", journal.id, {
+          customerId: v.customerId,
+          currency: v.currency,
+          amount: value,
+        });
+      }
+      return {
+        mode: "MOCK",
+        duplicate,
+        journalId: journal.id,
+        customerId: v.customerId,
+        currency: v.currency,
+        amount: value,
+        available: decimal(
+          this.walletAvailable(s, v.customerId, v.currency),
+          6,
+        ),
+      };
+    });
+  }
+  private releaseWallet(s: State, actor: Actor, o: Order, reason: string) {
+    if (o.fundingSource !== "wallet" || o.walletFundingStatus === "released")
+      return;
+    demand(
+      o.walletFundingStatus === "reserved",
+      "WALLET_LOCKED",
+      "Consumed funds cannot be released",
+    );
+    demand(
+      o.conversionStatus === "pending",
+      "FUNDS_CONVERTED",
+      "Converted funds need treasury resolution, not automatic stablecoin credit",
+    );
+    transfer(
+      s,
+      "wallet-release:" + o.id,
+      o.quote.sourceCurrency,
+      o.quote.totalDeposit,
+      "liability:order:" + o.id,
+      this.walletAccount(o.customerId),
+      this.clock(),
+    );
+    o.walletFundingStatus = "released";
+    this.audit(s, actor, "wallet.released", o.id, {
+      customerId: o.customerId,
+      currency: o.quote.sourceCurrency,
+      amount: o.quote.totalDeposit,
+      reason,
+    });
+    this.emit(s, "wallet.released", o.id);
+  }
+  async cancelOrder(actor: Actor, orderId: string, input: unknown) {
+    const { reason } = z.object({ reason: text }).strict().parse(input);
+    return this.store.transaction((s) => {
+      const o = this.order(s, orderId);
+      authorize(actor, "order.cancel", o.customerId);
+      demand(
+        o.fundingSource === "wallet",
+        "WALLET_REQUIRED",
+        "Use legacy refund handling for deposit-funded orders",
+      );
+      if (
+        o.payoutStatus === "cancelled" &&
+        o.walletFundingStatus === "released"
+      )
+        return this.orderView(o, actor);
+      demand(
+        o.payoutStatus === "draft" &&
+          o.conversionStatus === "pending" &&
+          !s.attempts.some((a) => a.orderId === o.id),
+        "PAYOUT_LOCKED",
+        "Only an untouched wallet order can be cancelled; verify active or unknown payments first",
+      );
+      this.releaseWallet(s, actor, o, reason);
+      o.payoutStatus = "cancelled";
+      this.audit(s, actor, "order.cancelled", o.id, { reason });
+      return this.orderView(o, actor);
+    });
+  }
+  private requireWalletReservation(o: Order) {
+    demand(
+      o.fundingSource !== "wallet" || o.walletFundingStatus === "reserved",
+      "WALLET_RELEASED",
+      "Wallet reservation closed; create a new quote and order",
+    );
+  }
   private makeOrder(
     s: State,
     actor: Actor,
     quoteId: string,
     clientOrderId: string,
     batchId?: string,
+    fundingSource: "deposit" | "wallet" = "deposit",
   ) {
     const q = s.quotes.find((x) => x.id === quoteId);
     demand(q, "NOT_FOUND", "Quote missing");
@@ -347,7 +628,8 @@ export class OfframpService {
     );
     if (existing) {
       demand(
-        existing.quote.id === quoteId,
+        existing.quote.id === quoteId &&
+          (existing.fundingSource ?? "deposit") === fundingSource,
         "IDEMPOTENCY_CONFLICT",
         "Client order key was used for a different quote",
       );
@@ -365,12 +647,33 @@ export class OfframpService {
     );
     this.checkCustomer(s, q.customerId);
     this.checkBeneficiary(s, q.customerId, q.beneficiaryId);
+    const provider = (s.payoutProviders ?? initialProviders()).find(
+      (p) =>
+        p.status === "active" &&
+        p.isDefault &&
+        p.routes.includes(q.payoutCurrency),
+    );
+    demand(
+      provider,
+      "PROVIDER_UNAVAILABLE",
+      "No active default payout provider for this route",
+    );
     const order: Order = {
       id: randomUUID(),
+      orderNumber:
+        "MOCK-" +
+        this.clock().toISOString().slice(0, 10).replaceAll("-", "") +
+        "-" +
+        String(s.orders.length + 1).padStart(6, "0"),
+      payoutProviderSnapshot: structuredClone(provider),
       customerId: q.customerId,
       quote: structuredClone(q),
       clientOrderId,
-      depositStatus: "awaiting",
+      fundingSource,
+      ...(fundingSource === "wallet"
+        ? { walletFundingStatus: "reserved" as const }
+        : {}),
+      depositStatus: fundingSource === "wallet" ? "confirmed" : "awaiting",
       conversionStatus: "pending",
       payoutStatus: "draft",
       receiptStatus: "none",
@@ -378,20 +681,43 @@ export class OfframpService {
       createdAt: this.clock().toISOString(),
       ...(batchId ? { batchId } : {}),
     };
-    order.fundingExpiresAt = new Date(
-      this.clock().getTime() + 30 * 60 * 1000,
-    ).toISOString();
-    order.fundingInstruction = {
-      mode: "mock",
-      payable: false,
-      status: "mock_nonpayable",
-      reference: "MOCK-" + order.id,
-      network: "MOCK",
-      address: null,
-      currency: q.sourceCurrency,
-      amount: q.totalDeposit,
-      expiresAt: order.fundingExpiresAt,
-    };
+    if (fundingSource === "deposit") {
+      order.fundingExpiresAt = new Date(
+        this.clock().getTime() + 30 * 60 * 1000,
+      ).toISOString();
+      order.fundingInstruction = {
+        mode: "mock",
+        payable: false,
+        status: "mock_nonpayable",
+        reference: "MOCK-" + order.id,
+        network: "MOCK",
+        address: null,
+        currency: q.sourceCurrency,
+        amount: q.totalDeposit,
+        expiresAt: order.fundingExpiresAt,
+      };
+    } else {
+      demand(
+        this.walletAvailable(s, q.customerId, q.sourceCurrency) >=
+          units(q.totalDeposit, 6),
+        "INSUFFICIENT_BALANCE",
+        "Insufficient available wallet balance including fees",
+      );
+      transfer(
+        s,
+        "wallet-reserve:" + order.id,
+        q.sourceCurrency,
+        q.totalDeposit,
+        this.walletAccount(q.customerId),
+        "liability:order:" + order.id,
+        this.clock(),
+      );
+      this.audit(s, actor, "wallet.reserved", order.id, {
+        customerId: q.customerId,
+        currency: q.sourceCurrency,
+        amount: q.totalDeposit,
+      });
+    }
     s.orders.push(order);
     this.audit(s, actor, "order.created", order.id);
     this.emit(s, "order.created", order.id);
@@ -399,12 +725,23 @@ export class OfframpService {
   }
   async createOrder(actor: Actor, input: unknown) {
     const v = z
-      .object({ quoteId: id, clientOrderId: id })
+      .object({
+        quoteId: id,
+        clientOrderId: id,
+        fundingSource: z.enum(["deposit", "wallet"]).optional(),
+      })
       .strict()
       .parse(input);
     return this.store.transaction((s) =>
       this.orderView(
-        this.makeOrder(s, actor, v.quoteId, v.clientOrderId),
+        this.makeOrder(
+          s,
+          actor,
+          v.quoteId,
+          v.clientOrderId,
+          undefined,
+          v.fundingSource,
+        ),
         actor,
       ),
     );
@@ -434,6 +771,11 @@ export class OfframpService {
         return { duplicate: true };
       }
       const o = this.order(s, v.orderId);
+      demand(
+        o.fundingSource !== "wallet",
+        "WALLET_FUNDED",
+        "Wallet orders cannot receive a second order deposit",
+      );
       demand(
         v.currency === o.quote.sourceCurrency,
         "CURRENCY_MISMATCH",
@@ -511,6 +853,7 @@ export class OfframpService {
       .parse(input);
     return this.store.transaction((s) => {
       const o = this.order(s, orderId);
+      this.requireWalletReservation(o);
       demand(
         o.depositStatus === "confirmed" && o.conversionStatus === "pending",
         "INVALID_STATE",
@@ -581,6 +924,7 @@ export class OfframpService {
         );
         return old;
       }
+      this.requireWalletReservation(o);
       this.checkCustomer(s, o.customerId);
       this.checkBeneficiary(s, o.customerId, o.quote.beneficiaryId);
       demand(
@@ -631,6 +975,7 @@ export class OfframpService {
         "Maker cannot approve own payout",
       );
       const o = this.order(s, a.orderId);
+      this.requireWalletReservation(o);
       this.checkCustomer(s, o.customerId);
       this.checkBeneficiary(s, o.customerId, o.quote.beneficiaryId);
       a.checkerId = actor.id;
@@ -669,6 +1014,7 @@ export class OfframpService {
             this.clock(),
           );
     }
+    if (o.fundingSource === "wallet") o.walletFundingStatus = "consumed";
     o.payoutStatus = "sent";
   }
   async recordPayout(actor: Actor, attemptId: string, input: unknown) {
@@ -699,6 +1045,7 @@ export class OfframpService {
         "Only designated maker may record portal result",
       );
       const o = this.order(s, a.orderId);
+      this.requireWalletReservation(o);
       this.checkCustomer(s, o.customerId);
       this.checkBeneficiary(s, o.customerId, o.quote.beneficiaryId);
       if (v.outcome === "sent") {
@@ -767,6 +1114,7 @@ export class OfframpService {
           "Reference already used",
         );
         const o = this.order(s, a.orderId);
+        this.requireWalletReservation(o);
         this.checkCustomer(s, o.customerId);
         this.checkBeneficiary(s, o.customerId, o.quote.beneficiaryId);
         if (actor.role === "merchant_admin") {
@@ -796,7 +1144,19 @@ export class OfframpService {
           };
         }
         this.recordSent(s, o);
-      } else this.order(s, a.orderId).payoutStatus = "failed";
+        if (actor.role === "merchant_admin")
+          this.completePayout(s, o, actor, "admin_attestation");
+      } else {
+        const o = this.order(s, a.orderId);
+        o.payoutStatus = "failed";
+        if (o.conversionStatus === "pending")
+          this.releaseWallet(s, actor, o, v.evidence);
+        else if (o.fundingSource === "wallet")
+          this.audit(s, actor, "wallet.retained_after_failed_payout", o.id, {
+            reason:
+              "External conversion already recorded; no stablecoin return verified",
+          });
+      }
       Object.assign(a, { state: v.outcome, verifiedBy: actor.id, ...v });
       this.audit(s, actor, "payout.verified", a.orderId, {
         attemptId,
@@ -810,6 +1170,220 @@ export class OfframpService {
             : "independent_manual_review",
       });
       return a;
+    });
+  }
+  /** Upgrade a historical administrator confirmation; never execute or record a second payout. */
+  async completeRecordedPayment(actor: Actor, orderId: string) {
+    authorize(actor, "payout.record");
+    demand(actor.role === "merchant_admin", "FORBIDDEN", "Merchant administrator required");
+    return this.store.transaction((s) => {
+      const o = this.order(s, orderId);
+      const confirmation = o.paymentConfirmation;
+      demand(o.payoutStatus === "sent" && confirmation, "INVALID_STATE", "Existing administrator payment confirmation required");
+      demand(confirmation.confirmedBy &&
+        ["admin_attestation", "mock_internal_record"].includes(confirmation.verification) &&
+        confirmation.actualAmount === o.quote.payoutAmount &&
+        s.attempts.some(a => a.orderId === o.id && a.state === "sent" &&
+          a.providerReference === confirmation.providerReference &&
+          (a.referenceKind ?? "external") === (confirmation.referenceKind ?? "external")),
+        "PAYMENT_CONFIRMATION_MISMATCH", "Existing confirmation and sent attempt must match the order");
+      demand(!s.refunds.some(r => r.orderId === o.id && r.kind === "principal"), "REFUND_CONFLICT", "Principal refund blocks completion");
+      demand(!s.discrepancies.some(d => d.orderId === o.id && d.status === "open"), "OPEN_DISCREPANCY", "Resolve open discrepancies before completion");
+      this.completePayout(s, o, actor, confirmation.verification);
+      return this.orderView(o, actor);
+    });
+  }
+  /** Synthetic official-provider bookkeeping only. Never an external payment attestation. */
+  async confirmMockPayout(actor: Actor, orderId: string, input: unknown) {
+    authorize(actor, "payout.record");
+    demand(
+      actor.role === "merchant_admin",
+      "FORBIDDEN",
+      "Merchant administrator required",
+    );
+    const v = z
+      .object({
+        idempotencyKey: id,
+        expectedAmount: decimalString,
+        beneficiaryId: id,
+        payoutProviderId: id,
+        note: z.string().trim().max(500).optional(),
+      })
+      .strict()
+      .parse(input);
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(v))
+      .digest("hex");
+    return this.store.transaction((s) => {
+      const o = this.order(s, orderId);
+      const replay = s.audits.find(
+        (a) =>
+          a.action === "payout.mock_confirmed" &&
+          a.data.idempotencyKey === v.idempotencyKey,
+      );
+      const keyAttempt = s.attempts.find(
+        (a) => a.idempotencyKey === v.idempotencyKey,
+      );
+      if (replay || keyAttempt) {
+        demand(
+          replay?.targetId === orderId &&
+            replay.data.fingerprint === fingerprint,
+          "IDEMPOTENCY_CONFLICT",
+          "Payment key reused with changed details",
+        );
+        this.completePayout(s, o, actor, "mock_internal_record");
+        return this.orderView(o, actor);
+      }
+      demand(
+        o.payoutProviderSnapshot?.scope === "official" &&
+          o.payoutProviderSnapshot.status === "active",
+        "MOCK_PROVIDER_REQUIRED",
+        "Explicit active official provider snapshot required; use manual review for legacy or third-party orders",
+      );
+      demand(
+        o.payoutProviderSnapshot.id === v.payoutProviderId,
+        "PAYOUT_PROVIDER_MISMATCH",
+        "Payout executor must match the order snapshot",
+      );
+      demand(
+        o.quote.beneficiaryId === v.beneficiaryId,
+        "BENEFICIARY_MISMATCH",
+        "Recipient must match the order snapshot",
+      );
+      demand(
+        amount(v.expectedAmount, o.quote.payoutCurrency) ===
+          o.quote.payoutAmount,
+        "PAYOUT_AMOUNT_MISMATCH",
+        "Confirmed amount must exactly match the order",
+      );
+      this.checkCustomer(s, o.customerId);
+      this.checkBeneficiary(s, o.customerId, o.quote.beneficiaryId);
+      demand(
+        !s.refunds.some((r) => r.orderId === o.id && r.kind === "principal"),
+        "REFUND_CONFLICT",
+        "Principal refund blocks payment",
+      );
+      demand(
+        !s.discrepancies.some((d) => d.orderId === o.id && d.status === "open"),
+        "OPEN_DISCREPANCY",
+        "Resolve discrepancies before payment confirmation",
+      );
+      // Another browser may retry with a new key. Register that key, but never pay again.
+      if (
+        o.payoutStatus === "sent" &&
+        o.paymentConfirmation?.referenceKind === "mock_internal"
+      ) {
+        this.audit(s, actor, "payout.mock_confirmed", o.id, {
+          idempotencyKey: v.idempotencyKey,
+          fingerprint,
+          replay: true,
+          internalRecordId: o.paymentConfirmation.internalRecordId,
+          referenceKind: "mock_internal",
+        });
+        this.completePayout(s, o, actor, "mock_internal_record");
+        return this.orderView(o, actor);
+      }
+      this.requireWalletReservation(o);
+      demand(
+        o.depositStatus === "confirmed",
+        "FUNDS_NOT_READY",
+        "Confirmed stablecoin deposit required",
+      );
+      const priorAttempts = s.attempts.filter((a) => a.orderId === o.id);
+      const previous = priorAttempts.at(-1);
+      const reusable =
+        priorAttempts.length === 1 &&
+        previous &&
+        ["approved", "awaiting_approval"].includes(previous.state) &&
+        previous.state === o.payoutStatus &&
+        !previous.providerReference &&
+        !previous.evidence;
+      demand(
+        (o.payoutStatus === "draft" && priorAttempts.length === 0) || reusable,
+        "PAYOUT_LOCKED",
+        "Only draft or untouched approved payouts allow simplified confirmation; failed or unknown payouts require manual review",
+      );
+      const confirmedAt = this.clock().toISOString();
+      const internalRecordId = "MOCK-INTERNAL-" + randomUUID();
+      const statement =
+        "Synthetic MOCK internal record only; no external payment was executed or verified and receipt by the beneficiary is not confirmed.";
+      if (o.conversionStatus === "pending") {
+        transfer(
+          s,
+          "conversion-source:" + o.id,
+          o.quote.sourceCurrency,
+          o.quote.sourceAmount,
+          "liability:order:" + o.id,
+          "asset:custody:mock",
+          this.clock(),
+        );
+        transfer(
+          s,
+          "conversion-target:" + o.id,
+          o.quote.payoutCurrency,
+          o.quote.payoutAmount,
+          "asset:provider:mock",
+          "liability:payout:" + o.id,
+          this.clock(),
+        );
+        o.conversionStatus = "recorded";
+        o.conversion = {
+          providerReference: "MOCK-ALLOCATION-" + o.id,
+          actualRate: o.quote.customerRate,
+          evidence: statement,
+          recordedBy: actor.id,
+        };
+      }
+      const attempt = reusable
+        ? previous
+        : {
+            id: randomUUID(),
+            orderId,
+            idempotencyKey: v.idempotencyKey,
+            makerId: actor.id,
+            state: "sent" as const,
+            createdAt: confirmedAt,
+          };
+      if (!reusable) s.attempts.push(attempt);
+      Object.assign(attempt, {
+        state: "sent",
+        idempotencyKey: v.idempotencyKey,
+        providerReference: internalRecordId,
+        referenceKind: "mock_internal",
+        internalRecordId,
+        evidence: statement,
+      });
+      this.recordSent(s, o);
+      o.paymentConfirmation = {
+        actualAmount: o.quote.payoutAmount,
+        // Legacy field aliases are explicitly classified as internal, never bank identifiers/times.
+        paidAt: confirmedAt,
+        providerReference: internalRecordId,
+        confirmedAt,
+        confirmedBy: actor.id,
+        verification: "mock_internal_record",
+        referenceKind: "mock_internal",
+        internalRecordId,
+        statement,
+        ...(v.note ? { note: v.note } : {}),
+      };
+      this.completePayout(s, o, actor, "mock_internal_record");
+      this.audit(s, actor, "payout.mock_confirmed", o.id, {
+        idempotencyKey: v.idempotencyKey,
+        fingerprint,
+        internalRecordId,
+        referenceKind: "mock_internal",
+        verification: "mock_internal_record",
+        confirmedAt,
+        statement,
+        note: v.note,
+      });
+      this.emit(s, "payout.sent", o.id, {
+        verification: "mock_internal_record",
+        referenceKind: "mock_internal",
+        internalRecordId,
+      });
+      return this.orderView(o, actor);
     });
   }
   /** Mock bookkeeping only: the administrator attests a payment made outside this application. */
@@ -836,6 +1410,15 @@ export class OfframpService {
       .digest("hex");
     return this.store.transaction((s) => {
       const o = this.order(s, orderId);
+      demand(
+        !s.audits.some(
+          (a) =>
+            a.action === "payout.mock_confirmed" &&
+            a.data.idempotencyKey === v.idempotencyKey,
+        ),
+        "IDEMPOTENCY_CONFLICT",
+        "Payment key already belongs to a synthetic confirmation",
+      );
       const existing = s.attempts.find(
         (a) => a.idempotencyKey === v.idempotencyKey,
       );
@@ -851,8 +1434,11 @@ export class OfframpService {
           "IDEMPOTENCY_CONFLICT",
           "Payment key reused with changed details",
         );
+        if (o.payoutStatus === "sent")
+          this.completePayout(s, o, actor, "admin_attestation");
         return this.orderView(o, actor);
       }
+      this.requireWalletReservation(o);
       this.checkCustomer(s, o.customerId);
       this.checkBeneficiary(s, o.customerId, o.quote.beneficiaryId);
       demand(
@@ -931,7 +1517,7 @@ export class OfframpService {
         );
         o.conversionStatus = "recorded";
         o.conversion = {
-          providerReference: "manual-allocation-" + o.id,
+          providerReference: "MOCK-ALLOCATION-" + o.id,
           actualRate: o.quote.customerRate,
           evidence:
             "Administrator attested manual external allocation; not bank verified",
@@ -965,6 +1551,7 @@ export class OfframpService {
           confirmedBy: actor.id,
           verification: "admin_attestation",
         };
+        this.completePayout(s, o, actor, "admin_attestation");
       } else o.payoutStatus = "unknown";
       this.audit(s, actor, "payout.admin_attested", o.id, {
         attemptId: attempt.id,
@@ -981,6 +1568,7 @@ export class OfframpService {
     });
   }
   /** Small, unscanned DEMO attachment stored in the existing mock state, never public object storage. */
+  get receipts() { return new ReceiptService(this.store, this.clock); }
   async uploadReceiptFile(actor: Actor, orderId: string, input: unknown) {
     authorize(actor, "receipt.upload");
     const v = z
@@ -1032,6 +1620,7 @@ export class OfframpService {
         "Confirm payment before attaching receipt",
       );
       o.receiptFile = {
+        privateOriginal: true,
         ...v,
         size: bytes.length,
         sha256,
@@ -1062,6 +1651,7 @@ export class OfframpService {
       "NOT_FOUND",
       "No demo file attached; metadata alone is not a file",
     );
+    demand(!o.receiptFile.privateOriginal || actor.role === "merchant_admin", "FORBIDDEN", "New receipt originals are administrator private; publish a redacted single-customer copy instead");
     return structuredClone(o.receiptFile);
   }
   async uploadReceipt(actor: Actor, orderId: string, objectKey: string) {
@@ -1096,6 +1686,7 @@ export class OfframpService {
     const v = z
       .object({
         providerReference: id,
+        referenceKind: z.enum(["mock_internal", "external"]).optional(),
         actualAmount: decimalString,
         evidence: text,
       })
@@ -1117,6 +1708,12 @@ export class OfframpService {
         "MAKER_CHECKER",
         "Independent financial verification required",
       );
+      demand(
+        (v.referenceKind ?? "external") ===
+          (attempt.referenceKind ?? "external"),
+        "REFERENCE_KIND_MISMATCH",
+        "Explicit mock_internal reference kind required for synthetic records; external references are not interchangeable",
+      );
       if (
         v.providerReference !== attempt.providerReference ||
         amount(v.actualAmount, o.quote.payoutCurrency) !== o.quote.payoutAmount
@@ -1125,7 +1722,7 @@ export class OfframpService {
           id: randomUUID(),
           orderId,
           kind: "payout_mismatch",
-          detail: "Provider amount or reference differs from order.",
+          detail: "Recorded amount or reference differs from order.",
           status: "open" as const,
         };
         s.discrepancies.push(d);
@@ -1144,13 +1741,34 @@ export class OfframpService {
       attempt.verifiedBy = actor.id;
       this.audit(s, actor, "reconciliation.matched", o.id, {
         evidence: v.evidence,
+        referenceKind: attempt.referenceKind ?? "external",
+        reference: v.providerReference,
       });
-      this.accrueCommission(s, o);
+      this.completePayout(s, o, actor, "financial_review");
       return { matched: true, orderId };
     });
   }
+  /** A bank API/receipt is not used to establish this administrative completion. */
+  private isCompleted(o: Order): boolean {
+    return o.payoutStatus === "sent" && (!!o.completion || o.reconciled);
+  }
+  private completePayout(
+    s: State,
+    o: Order,
+    actor: Actor,
+    basis: NonNullable<Order["completion"]>["basis"],
+  ) {
+    demand(o.payoutStatus === "sent", "INVALID_STATE", "Sent payout required for completion");
+    if (!o.completion) {
+      demand(!s.discrepancies.some(d => d.orderId === o.id && d.status === "open"), "OPEN_DISCREPANCY", "Resolve open discrepancies before completing payment");
+      o.completion = { basis, completedAt: this.clock().toISOString(), completedBy: actor.id };
+      this.audit(s, actor, "order.completed", o.id, { ...o.completion, bankVerified: false });
+    }
+    this.accrueCommission(s, o);
+  }
   private accrueCommission(s: State, o: Order) {
     if (
+      !this.isCompleted(o) ||
       !o.quote.partnerId ||
       s.commissions.some((c) => c.orderId === o.id && !c.originalCommissionId)
     )
@@ -1232,6 +1850,11 @@ export class OfframpService {
       .parse(input);
     return this.store.transaction((s) => {
       const o = this.order(s, orderId);
+      demand(
+        o.fundingSource !== "wallet",
+        "WALLET_REFUND_UNSUPPORTED",
+        "Wallet orders use cancellation or verified-failure release; external refunds are disabled to prevent duplicate credits",
+      );
       const existing = s.refunds.find(
         (r) => r.idempotencyKey === v.idempotencyKey,
       );
@@ -1451,7 +2074,7 @@ export class OfframpService {
                   original.id === c.originalCommissionId &&
                   original.eligibleAt.slice(0, 7) <= v.month,
               ))) &&
-          this.order(s, c.orderId).reconciled &&
+          this.isCompleted(this.order(s, c.orderId)) &&
           !s.discrepancies.some(
             (d) => d.orderId === c.orderId && d.status === "open",
           ),
@@ -1500,12 +2123,12 @@ export class OfframpService {
       for (const cid of st.commissionIds) {
         const c = s.commissions.find((x) => x.id === cid)!;
         demand(
-          this.order(s, c.orderId).reconciled &&
+          this.isCompleted(this.order(s, c.orderId)) &&
             !s.discrepancies.some(
               (d) => d.orderId === c.orderId && d.status === "open",
             ),
           "SETTLEMENT_BLOCKED",
-          "Commission order no longer reconciled",
+          "Commission order is not completed or has an open discrepancy",
         );
       }
       demand(
@@ -1542,6 +2165,55 @@ export class OfframpService {
       this.audit(s, actor, "settlement.cancelled", st.id, { reason });
       this.emit(s, "settlement.cancelled", st.id);
       return st;
+    });
+  }
+  /** Merchant-provided target-payout rows. Raw account data is never persisted. */
+  async importMerchantBatch(actor: Actor, input: unknown) {
+    const v = z.object({ customerId: id, clientBatchId: id, rows: z.array(z.unknown()).min(1).max(100) }).strict().parse(input);
+    authorize(actor, "batch.create", v.customerId);
+    authorize(actor, "beneficiary.create", v.customerId);
+    return this.store.transaction((s) => {
+      demand(this.checkCustomer(s, v.customerId).kind === "company", "MERCHANT_REQUIRED", "商户模板仅适用于企业商户，请先选择商户");
+      const digest = createHash("sha256").update(JSON.stringify(v.rows.map(raw => raw && typeof raw === "object" && !Array.isArray(raw) ? Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b))) : raw))).digest("hex");
+      const existing = s.batches.find(b => b.customerId === v.customerId && b.clientBatchId === v.clientBatchId);
+      if (existing) {
+        demand(s.merchantImportDigests?.[existing.id] === digest, "IDEMPOTENCY_CONFLICT", "批次编号已用于不同内容，请重新选择文件");
+        return { batch: existing, items: s.batchItems.filter(i => i.batchId === existing.id) };
+      }
+      const batch = { id: randomUUID(), customerId: v.customerId, clientBatchId: v.clientBatchId, itemIds: [] as string[], createdAt: this.clock().toISOString() };
+      const seen = new Set<string>();
+      v.rows.forEach((raw, index) => {
+        const validated = validateMerchantRow(raw, index + 2);
+        const { row, errors } = validated;
+        if (raw && typeof raw === "object" && (typeof (raw as Record<string, unknown>).clientItemId !== "string" || !((raw as Record<string, unknown>).clientItemId as string).trim())) row.clientItemId = `row_${index + 2}_${randomUUID()}`;
+        if (seen.has(row.clientItemId)) errors.push("商户行号重复");
+        seen.add(row.clientItemId);
+        if (s.batchItems.some(i => i.clientItemId === row.clientItemId && i.status !== "error" && s.batches.some(b => b.id === i.batchId && b.customerId === v.customerId))) errors.push("该商户行号已导入，请勿重复提交");
+        let beneficiaryId = "";
+        if (!errors.length) {
+          const beneficiary: Beneficiary = {
+            id: randomUUID(), customerId: v.customerId, name: row.name, bankName: row.bankName,
+            country: row.targetCurrency === "CNY" ? "CN" : "US", currency: row.targetCurrency,
+            accountMasked: "**** " + row.accountNumber.slice(-4), accountToken: "demo_" + randomUUID(),
+            status: "saved", createdBy: actor.id,
+          };
+          s.beneficiaries.push(beneficiary);
+          beneficiaryId = beneficiary.id;
+        }
+        const item: import("./types").BatchItem = {
+          id: randomUUID(), batchId: batch.id, clientItemId: row.clientItemId,
+          beneficiaryId, sourceCurrency: row.sourceCurrency, sourceAmount: "0.000000",
+          amountMode: "target_payout", targetAmount: row.targetAmount, targetCurrency: row.targetCurrency,
+          recipientName: row.name, bankName: row.bankName,
+          accountMasked: /^\d{8,34}$/.test(row.accountNumber) ? "**** " + row.accountNumber.slice(-4) : undefined,
+          rowNumber: row.sourceRowNumber, status: errors.length ? "error" : "valid", errors,
+        };
+        s.batchItems.push(item); batch.itemIds.push(item.id);
+      });
+      s.batches.push(batch);
+      (s.merchantImportDigests ??= {})[batch.id] = digest;
+      this.audit(s, actor, "batch.imported", batch.id, { rowCount: v.rows.length, format: "merchant_target_v1" });
+      return { batch, items: s.batchItems.filter(i => i.batchId === batch.id) };
     });
   }
   async importBatch(
@@ -1621,10 +2293,10 @@ export class OfframpService {
             (b) =>
               b.id === row.beneficiaryId &&
               b.customerId === customerId &&
-              b.status === "approved",
+              usableBeneficiary(b),
           )
         )
-          errors.push("Beneficiary not whitelisted");
+          errors.push("Recipient unavailable or belongs to another customer");
         try {
           demand(
             units(row.sourceAmount, 6) > 0n,
@@ -1657,26 +2329,131 @@ export class OfframpService {
       };
     });
   }
-  async submitBatch(actor: Actor, batchId: string) {
+  async quoteBatch(actor: Actor, batchId: string) {
     return this.store.transaction((s) => {
       const batch = s.batches.find((b) => b.id === batchId);
       demand(batch, "NOT_FOUND", "Batch missing");
       authorize(actor, "batch.create", batch.customerId);
-      for (const item of s.batchItems.filter(
+      demand(
+        !s.batchItems.some(
+          (i) => i.batchId === batchId && i.status === "created",
+        ),
+        "BATCH_SUBMITTED",
+        "Submitted batches cannot be repriced",
+      );
+      const items = s.batchItems.filter(
         (i) => i.batchId === batchId && i.status === "valid",
-      )) {
+      );
+      demand(items.length > 0, "EMPTY_BATCH", "No valid batch rows");
+      const quotes = items.map((item) => {
         const q = this.quote(s, {
           customerId: batch.customerId,
           beneficiaryId: item.beneficiaryId,
           sourceCurrency: item.sourceCurrency,
-          sourceAmount: item.sourceAmount,
+          ...(item.amountMode === "target_payout" ? { amountMode: "target_payout" as const, targetAmount: item.targetAmount, payoutCurrency: item.targetCurrency } : { sourceAmount: item.sourceAmount }),
         });
+        item.quoteId = q.id;
+        item.sourceAmount = q.sourceAmount;
+        return {
+          itemId: item.id,
+          clientItemId: item.clientItemId,
+          ...this.quoteView(q, actor),
+        };
+      });
+      const totals = (["USDT", "USDC"] as const).map((currency) => {
+        const selected = quotes.filter((q) => q.sourceCurrency === currency);
+        const sum = (
+          field: "sourceAmount" | "serviceFee" | "channelFee" | "totalDeposit",
+        ) =>
+          decimal(
+            selected.reduce((n, q) => n + units(q[field]!, 6), 0n),
+            6,
+          );
+        return {
+          currency,
+          sourceAmount: sum("sourceAmount"),
+          serviceFee: sum("serviceFee"),
+          channelFee: sum("channelFee"),
+          totalDeposit: sum("totalDeposit"),
+          available: decimal(
+            this.walletAvailable(s, batch.customerId, currency),
+            6,
+          ),
+        };
+      });
+      this.audit(s, actor, "batch.quoted", batch.id, {
+        quoteIds: quotes.map((q) => q.id),
+      });
+      return {
+        batch,
+        quotes,
+        totals,
+        createdAt: quotes[0].createdAt,
+        expiresAt: quotes.map((q) => q.expiresAt!).sort()[0],
+      };
+    });
+  }
+  async submitBatch(actor: Actor, batchId: string, input: unknown = {}) {
+    const { fundingSource = "deposit", quoteIds } = z
+      .object({
+        fundingSource: z.enum(["deposit", "wallet"]).optional(),
+        quoteIds: z.array(id).max(100).optional(),
+      })
+      .strict()
+      .parse(input);
+    return this.store.transaction((s) => {
+      const batch = s.batches.find((b) => b.id === batchId);
+      demand(batch, "NOT_FOUND", "Batch missing");
+      authorize(actor, "batch.create", batch.customerId);
+      if (fundingSource === "wallet") {
+        const items = s.batchItems.filter(
+          (i) => i.batchId === batchId && i.status !== "error",
+        );
+        demand(
+          items.length && quoteIds?.length && items.every((i) => i.quoteId),
+          "BATCH_QUOTE_REQUIRED",
+          "Preview batch quotes and submit their IDs",
+        );
+        demand(
+          JSON.stringify(quoteIds) ===
+            JSON.stringify(items.map((i) => i.quoteId)),
+          "BATCH_QUOTE_CHANGED",
+          "Batch preview changed; review the new quotes before submitting",
+        );
+      }
+      demand(
+        !s.orders.some(
+          (o) =>
+            o.batchId === batchId &&
+            (o.fundingSource ?? "deposit") !== fundingSource,
+        ),
+        "IDEMPOTENCY_CONFLICT",
+        "Batch funding source cannot change",
+      );
+      for (const item of s.batchItems.filter(
+        (i) => i.batchId === batchId && i.status === "valid",
+      )) {
+        const q =
+          fundingSource === "wallet"
+            ? s.quotes.find((q) => q.id === item.quoteId)
+            : this.quote(s, {
+                customerId: batch.customerId,
+                beneficiaryId: item.beneficiaryId,
+                sourceCurrency: item.sourceCurrency,
+                ...(item.amountMode === "target_payout" ? { amountMode: "target_payout" as const, targetAmount: item.targetAmount, payoutCurrency: item.targetCurrency } : { sourceAmount: item.sourceAmount }),
+              });
+        demand(
+          q,
+          "BATCH_QUOTE_REQUIRED",
+          "Preview batch quotes and totals before submitting wallet orders",
+        );
         const o = this.makeOrder(
           s,
           actor,
           q.id,
           `batch_${batchId}_${item.clientItemId}`,
           batchId,
+          fundingSource,
         );
         item.orderId = o.id;
         item.status = "created";
@@ -1690,6 +2467,7 @@ export class OfframpService {
   private quoteView(q: Quote, actor: Actor) {
     const result = structuredClone(q) as Partial<Quote>;
     if (actor.role === "customer") {
+      delete result.pricingSnapshot;
       delete result.costRate;
       delete result.referenceRate;
       delete result.commissionRate;
@@ -1703,9 +2481,12 @@ export class OfframpService {
     const view = {
       ...structuredClone(o),
       quote: this.quoteView(o.quote, actor),
+      completionStatus: this.isCompleted(o) ? "completed" : o.payoutStatus === "sent" ? "pending_review" : "in_progress",
+      completionBasis: o.completion?.basis ?? (o.reconciled && o.payoutStatus === "sent" ? "financial_review" : null),
     } as Record<string, unknown>;
-    view.receiptFileAvailable = !!o.receiptFile;
+    view.receiptFileAvailable = !!o.receiptFile && (!o.receiptFile.privateOriginal || actor.role === "merchant_admin");
     delete view.receiptFile;
+    if (actor.role !== "merchant_admin") delete view.receiptAttachmentIds;
     if (actor.role === "customer") {
       delete view.conversion;
       if (o.receipt) view.receipt = { available: true };
@@ -1713,13 +2494,13 @@ export class OfframpService {
     return view;
   }
   async dashboard(actor: Actor) {
-    const s = await this.store.read();
+    let s = await this.store.read();
     const eligibility = (
       c: Commission,
     ): "hold" | "available" | "allocated" | "frozen" => {
       if (c.settlementId) return "allocated";
       if (
-        !this.order(s, c.orderId).reconciled ||
+        !this.isCompleted(this.order(s, c.orderId)) ||
         s.discrepancies.some(
           (d) => d.orderId === c.orderId && d.status === "open",
         )
@@ -1759,11 +2540,69 @@ export class OfframpService {
       };
     }
     authorize(actor, "order.read", actor.customerId);
+    if (!s.pricingHistory?.length)
+      s = await this.store.transaction((state) => {
+        this.ensurePricing(state);
+        return state;
+      });
     const customer = actor.role === "customer";
     return {
       mode: "MOCK",
       actor,
+      walletRates: this.currentPricing(s)
+        .rates.filter(
+          (r) => this.currentPricing(s).routes[r.payoutCurrency].enabled,
+        )
+        .map((r) => ({
+          sourceCurrency: r.sourceCurrency,
+          payoutCurrency: r.payoutCurrency,
+          customerRate: r.customerRate,
+          configVersion: this.currentPricing(s).version,
+          baselineAsOf: this.currentPricing(s).baseline.asOf,
+          baselineExpiresAt: this.currentPricing(s).baseline.expiresAt,
+          baselineSource: "MOCK",
+          stale:
+            Date.parse(this.currentPricing(s).baseline.expiresAt) <=
+            this.clock().getTime(),
+        })),
+      walletBalances: s.customers
+        .filter((c) => !customer || c.id === actor.customerId)
+        .flatMap((c) =>
+          (["USDT", "USDC"] as const).map((currency) => ({
+            customerId: c.id,
+            currency,
+            available: decimal(this.walletAvailable(s, c.id, currency), 6),
+            frozen: decimal(
+              s.orders
+                .filter(
+                  (o) =>
+                    o.customerId === c.id &&
+                    o.quote.sourceCurrency === currency &&
+                    o.fundingSource === "wallet" &&
+                    o.walletFundingStatus === "reserved",
+                )
+                .reduce((n, o) => n + units(o.quote.totalDeposit, 6), 0n),
+              6,
+            ),
+          })),
+        ),
+      walletDeposits: s.audits
+        .filter(
+          (a) =>
+            a.action === "wallet.deposited" &&
+            (!customer || a.data.customerId === actor.customerId),
+        )
+        .map((a) => ({ id: a.targetId, at: a.at, ...a.data })),
       pricingFixture: customer ? undefined : this.config,
+      pricingCurrent: customer ? undefined : this.currentPricing(s),
+      pricingHistory: customer ? undefined : (s.pricingHistory ?? []),
+      payoutProviders: customer
+        ? undefined
+        : (s.payoutProviders ?? initialProviders()),
+      storageMode: "ephemeral_mock",
+      pricingBaselineExpired:
+        Date.parse(this.currentPricing(s).baseline.expiresAt) <=
+        this.clock().getTime(),
       commissions: ["merchant_admin", "finance", "auditor"].includes(actor.role)
         ? s.commissions.map((c) => ({ ...c, eligibility: eligibility(c) }))
         : undefined,
