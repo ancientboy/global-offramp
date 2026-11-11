@@ -273,6 +273,7 @@ export interface Dashboard {
   payoutProviders?: import("./admin-models").PayoutProvider[];
 }
 export interface Health {
+  accessMode?: "public_demo";
   status: string;
   mode: string;
   persistence: string;

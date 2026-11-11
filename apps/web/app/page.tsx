@@ -1620,7 +1620,7 @@ export default function Home() {
         <p className="muted small">
           支持 PNG、JPEG、PDF 多附件，单个最大 2
           MiB。新原件默认仅管理员可见；识别仅用于人工匹配，不证明真实付款。文件未经恶意软件扫描。
-          {workspace ? " 原件保存在服务器私有目录，客户只能下载管理员明确发布的脱敏副本。" : health?.persistence === "d1_mock"
+          {workspace ? " 原件保存在服务器私有目录，客户只能下载管理员明确发布的脱敏副本。" : health?.accessMode === "public_demo" ? " 公开演示允许访客切换角色，只能使用虚构凭证。" : health?.persistence === "d1_mock"
             ? " 原件使用私有对象存储，记录按登录账号隔离。"
             : " 本地预览附件临时保存，会话失效后不可恢复。"}
         </p>
@@ -1958,7 +1958,9 @@ export default function Home() {
           ? "收款账户"
           : titles[page];
   const storageLabel =
-    health?.persistence === "d1_mock"
+    health?.accessMode === "public_demo"
+      ? "公开演示 · 访客共享虚构数据 · 勿输入真实资料"
+      : health?.persistence === "d1_mock"
       ? "D1 持久演示记录 · 按已登录账户隔离 · 勿输入真实资料"
       : health?.persistence === "session-memory"
         ? "会话内存 · 最多30分钟/实例重启失效 · 勿输入真实资料"
@@ -2092,7 +2094,8 @@ export default function Home() {
           </div>
           <details className="environment-details">
             <summary>{workspace ? "账号内测：会话8小时到期；资金沙箱，充值及付款关闭" : health?.persistence === "d1_mock" ? "演示数据已保存 · 存储与使用说明" : "临时演示数据 · 存储与使用说明"}</summary>
-          {health?.persistence === "d1_mock" && (
+          {health?.accessMode === "public_demo" && <Note>当前入口免登录，不同访客共享同一份虚构数据。请勿输入真实客户、银行或钱包资料，也不要上传真实回单。业务账号内测使用独立入口和独立数据库。</Note>}
+          {health?.persistence === "d1_mock" && health?.accessMode !== "public_demo" && (
             <Note>
               已登录账户的虚构演示历史保存于
               D1，跨会话和实例重启保留，账号之间隔离。总记录上限 1
@@ -2131,7 +2134,7 @@ export default function Home() {
                 只使用虚构资料。所有资金相关按钮仅调用 MOCK
                 后端；不支持真实充值、换汇或付款。内存模式在 API
                 重启后清空；会话内存最多保留 30 分钟，实例重启也会失效。D1
-                模式按已登录账户保存演示历史，浏览器会话到期不清空记录；只用于演示，不是生产金融账本。实际存储模式见页面连接状态。
+                模式保存虚构演示历史，浏览器会话到期不清空记录；公开演示访客共享数据，业务账号入口使用独立数据库。实际数据范围见页面连接状态。
               </Note>
               <button className="button text" onClick={() => setSupport(false)}>
                 收起说明
@@ -2200,7 +2203,7 @@ export default function Home() {
                     <button onClick={() => setProfileTab("security")}><span className="circle-icon"><Lock size={24}/></span><div><strong>安全与隐私</strong><small>登录、资料可见范围与演示边界</small></div><ArrowRight size={19}/></button>
                     <button onClick={() => setSupport(true)}><span className="circle-icon"><Question size={24}/></span><div><strong>帮助与演示说明</strong><small>资金、数据保存及回单使用说明</small></div><ArrowRight size={19}/></button>
                   </div> : <div className="profile-subheading"><button className="button text back-link" onClick={() => setProfileTab("home")}><ArrowLeft size={16}/> 返回用户中心</button><h2>{profileTab === "recipients" ? "收款人管理" : profileTab === "security" ? "安全与隐私" : "账户资料"}</h2></div>}
-                  {profileTab === "security" && <section className="card security-summary"><h3>账户与数据保护</h3><p>{workspace ? "当前使用独立密码账号与安全会话。邮箱尚未验证，未接入 MFA 或找回密码；充值与付款关闭。" : "线上私有站通过 ChatGPT 登录控制访问。页面内个人、商户和管理员均为演示角色，不是独立的真实资金账户。"}</p><ul><li>已登录账户的历史与私有回单按账户隔离，商户仅能获取明确发布给自己的回单。</li><li>收款账户仅保存掩码资料，保存不代表真实身份或银行归属验证。</li><li>本演示不提供密码修改、双重验证设置或真实资金操作，请勿输入密码、完整证件或支付卡资料。</li></ul></section>}
+                  {profileTab === "security" && <section className="card security-summary"><h3>账户与数据保护</h3><p>{workspace ? "当前使用独立密码账号与安全会话。邮箱尚未验证，未接入 MFA 或找回密码；充值与付款关闭。" : "当前入口用于虚构数据演示，个人、商户和管理员均为可切换的演示角色，不是独立登录账号；数据范围以上方连接说明为准。"}</p><ul><li>业务账号入口按客户隔离；公开演示访客共享虚构数据，不应录入真实资料。</li><li>收款账户仅保存掩码资料，保存不代表真实身份或银行归属验证。</li><li>本演示不提供密码修改、双重验证设置或真实资金操作，请勿输入密码、完整证件或支付卡资料。</li></ul></section>}
                   {profileTab === "recipients" && (
                     <div className="profile-add">
                       <label>

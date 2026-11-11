@@ -81,7 +81,14 @@ const server = createServer(async (req, res) => {
       if (size > 3 * 1024 * 1024) { res.writeHead(413); res.end(); return; }
       chunks.push(chunk);
     }
-    const response = await mf.dispatchFetch(url, { method: req.method, headers, ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) });
+    let response = await mf.dispatchFetch(url, { method: req.method, headers, ...(chunks.length ? { body: Buffer.concat(chunks) } : {}) });
+    if (publicMode && url.pathname === '/api/health' && response.ok) {
+      const value = await response.json();
+      value.accessMode = 'public_demo';
+      value.sessionScope = 'shared-public-demo';
+      value.note = 'Public synthetic demonstration: visitors share one dataset. Never submit real customer or financial information.';
+      response = new Response(JSON.stringify(value), { status: response.status, headers: response.headers });
+    }
     const outputHeaders = Object.fromEntries(response.headers);
     if (response.headers.getSetCookie().length) outputHeaders['set-cookie'] = response.headers.getSetCookie();
     outputHeaders['x-content-type-options'] = 'nosniff';
