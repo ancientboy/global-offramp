@@ -97,7 +97,7 @@ export default function Workspace() {
     >
       <h1>汇途 · {register ? "注册账号" : "业务登录"}</h1>
       <p>账号内测 / 资金沙箱 · 无真实资金操作</p>
-      <p>管理员使用用户名登录，客户使用邮箱注册。当前为内测，客户邮箱验证、MFA 和真实 KYC 尚未接入。</p>
+      <p>支持用户名或邮箱登录，客户可使用邮箱注册。当前为内测，客户邮箱验证、MFA 和真实 KYC 尚未接入。</p>
       <form onSubmit={(e) => void submit(e)}>
         {register && (
           <>
@@ -115,7 +115,7 @@ export default function Workspace() {
           </>
         )}
         <label>
-          {register ? "邮箱" : "管理员用户名 / 客户邮箱"}
+          {register ? "邮箱" : "用户名 / 邮箱"}
           <input
             name="identifier"
             type={register ? "email" : "text"}
@@ -130,7 +130,7 @@ export default function Workspace() {
             name="password"
             type="password"
             required
-            minLength={12}
+            minLength={register ? 12 : 1}
             maxLength={128}
             autoComplete={register ? "new-password" : "current-password"}
           />

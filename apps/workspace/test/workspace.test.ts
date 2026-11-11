@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import {scryptSync,randomUUID} from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -17,6 +18,7 @@ const migrations = [
   "db-runtime.sql",
   "db/migrations/002_workspace.sql",
   "db/migrations/003_route_drafts.sql",
+  "db/migrations/004_operator_customer_username.sql",
 ].map((p) => readFileSync(p, "utf8"));
 function poolFor(db: PGlite): SqlPool {
   return {
@@ -652,6 +654,43 @@ test("administrator uses a username without an email; clients cannot self-regist
   } finally {
     await f.close();
   }
+});
+
+test("login accepts an operator-set short existing password while customer registration keeps its creation policy", async () => {
+  const f = await fixture();
+  try {
+    await f.auth.createAdmin({username:"short_login",password},"Operator");
+    const salt="0123456789abcdef0123456789abcdef";
+    const stored="scrypt-v1$"+salt+"$"+scryptSync("test123",salt,32,{N:32768,r:8,p:1,maxmem:64*1024*1024}).toString("hex");
+    await f.db.query("UPDATE workspace.accounts SET password_hash=$1 WHERE username='short_login'",[stored]);
+    const r=await f.call("auth/login",{identifier:"short_login",password:"test123"});
+    assert.equal(r.status,200);
+    assert.equal((await f.call("auth/login",{username:"short_login",password:"wrong12"})).status,401);
+    assert.equal((await f.call("auth/register",{email:"short@example.com",name:"Client",kind:"personal",password:"test123"})).status,400);
+    const cookie=r.headers.get("set-cookie")!.split(";")[0];
+    assert.equal((await f.call("auth/logout",{},cookie)).status,200);
+    assert.equal((await f.call("auth/me",undefined,cookie)).status,401);
+  } finally {await f.close();}
+});
+
+test("operator-provisioned username customer can log in but cannot enter the admin scope", async () => {
+  const f=await fixture();
+  try {
+    const customerId=randomUUID(),accountId=randomUUID(),at=new Date();
+    const salt="0123456789abcdef0123456789abcdef";
+    const stored="scrypt-v1$"+salt+"$"+scryptSync("test123",salt,32,{N:32768,r:8,p:1,maxmem:64*1024*1024}).toString("hex");
+    await f.store.transactionWithClient(async(s,c)=>{
+      await c.query("INSERT INTO workspace.customers(id,kind,created_at) VALUES($1,'personal',$2)",[customerId,at]);
+      await c.query("INSERT INTO workspace.accounts(id,username,display_name,password_hash,role,customer_id,created_at) VALUES($1,'test_user','Customer',$2,'customer',$3,$4)",[accountId,stored,customerId,at]);
+      s.customers.push({id:customerId,kind:"personal",name:"Customer",status:"pending"});
+    });
+    const login=await f.call("auth/login",{identifier:"test_user",password:"test123"});assert.equal(login.status,200);
+    const cookie=login.headers.get("set-cookie")!.split(";")[0];
+    const dashboard=await (await f.call("dashboard",undefined,cookie,{'x-demo-actor':'admin-demo'})).json();
+    assert.equal(dashboard.actor.role,"customer");assert.deepEqual(dashboard.customers.map((c:any)=>c.id),[customerId]);
+    assert.equal((await f.call("customers/"+customerId+"/review",{status:"approved"},cookie)).status,403);
+    assert.equal((await f.call("audit",undefined,cookie)).status,403);
+  } finally {await f.close();}
 });
 
 test("route drafts require admin, preserve optimistic versions and never enable money; recipient checks echo no account values", async () => {

@@ -46,11 +46,14 @@ export const username = z
   .toLowerCase()
   .regex(/^[a-z0-9_][a-z0-9_.-]{2,31}$/);
 const identifier = z.union([credentials.shape.email, username]);
+// Login verifies existing credentials; creation/reset policies are separate.
+const loginPassword = z.string().min(1).max(128);
 export const loginCredentials = z.union([
-  z.object({ identifier, password: credentials.shape.password }).strict(),
-  credentials.transform((v) => ({ identifier: v.email, password: v.password })),
+  z.object({ identifier, password: loginPassword }).strict(),
+  z.object({email: credentials.shape.email, password: loginPassword}).strict()
+    .transform((v) => ({ identifier: v.email, password: v.password })),
   z
-    .object({ username, password: credentials.shape.password })
+    .object({ username, password: loginPassword })
     .strict()
     .transform((v) => ({ identifier: v.username, password: v.password })),
 ]);
