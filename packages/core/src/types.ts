@@ -175,7 +175,7 @@ export interface Order {
     confirmedBy: string;
     verification:
       "admin_attestation" | "provider_attestation" | "mock_internal_record";
-    referenceKind?: "mock_internal" | "external";
+    referenceKind?: "mock_internal" | "system_internal" | "external";
     internalRecordId?: string;
     confirmedAt?: string;
     statement?: string;
@@ -210,7 +210,7 @@ export interface PayoutAttempt {
   createdAt: string;
   providerReference?: string;
   evidence?: string;
-  referenceKind?: "mock_internal" | "external";
+  referenceKind?: "mock_internal" | "system_internal" | "external";
   internalRecordId?: string;
   verifiedBy?: string;
 }

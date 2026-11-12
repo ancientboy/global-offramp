@@ -15,10 +15,12 @@ type Order = {
   depositStatus: string;
   canRecordPayment: boolean;
   recipient: null | { name: string; country: string; accountMasked: string };
+  processingRecordId?: string | null;
   paymentConfirmation: null | {
     actualAmount: string;
     paidAt: string;
-    providerReference: string;
+    providerReference: string | null;
+    internalRecordId?: string | null;
   };
 };
 type Data = {
@@ -136,16 +138,14 @@ export default function ProviderPortal() {
       const input = {
         idempotencyKey: key.current,
         outcome: action,
-        evidence,
+        ...(evidence.trim() ? { evidence: evidence.trim() } : {}),
+        ...(reference.trim() ? { providerReference: reference.trim() } : {}),
         ...(action === "sent"
           ? {
               actualAmount: selected.payoutAmount,
               paidAt: new Date(paidAt).toISOString(),
-              providerReference: reference,
             }
-          : reference
-            ? { providerReference: reference }
-            : {}),
+          : {}),
       };
       const order = await request(
         "provider/orders/" + selected.id + "/payment",
@@ -399,7 +399,15 @@ export default function ProviderPortal() {
             {selected.paymentConfirmation && (
               <section className="provider-payment">
                 <h3>付款登记</h3>
-                <p>参考号：{selected.paymentConfirmation.providerReference}</p>
+                {selected.processingRecordId && (
+                  <p>处理记录号：{selected.processingRecordId}</p>
+                )}
+                {selected.paymentConfirmation.providerReference && (
+                  <p>
+                    外部付款流水号：
+                    {selected.paymentConfirmation.providerReference}
+                  </p>
+                )}
                 <p>付款时间：{date(selected.paymentConfirmation.paidAt)}</p>
                 <p>
                   登记金额：{money(selected.paymentConfirmation.actualAmount)}{" "}
@@ -444,10 +452,17 @@ export default function ProviderPortal() {
                   </>
                 )}
                 <label>
-                  付款参考号{action === "unknown" ? "（选填）" : ""}
+                  处理记录号
                   <input
-                    aria-label="付款参考号"
-                    required={action === "sent"}
+                    aria-label="处理记录号"
+                    readOnly
+                    value={selected.processingRecordId ?? "提交后自动生成"}
+                  />
+                </label>
+                <label>
+                  外部付款流水号（选填）
+                  <input
+                    aria-label="外部付款流水号"
                     maxLength={100}
                     value={reference}
                     onChange={(e) => setReference(e.target.value)}
@@ -455,11 +470,9 @@ export default function ProviderPortal() {
                   />
                 </label>
                 <label>
-                  处理说明
+                  付款说明（选填）
                   <textarea
-                    aria-label="处理说明"
-                    required
-                    minLength={3}
+                    aria-label="付款说明"
                     maxLength={1000}
                     value={evidence}
                     onChange={(e) => setEvidence(e.target.value)}

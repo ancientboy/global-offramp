@@ -1466,10 +1466,18 @@ export class OfframpService {
         actualAmount: decimalString.optional(),
         paidAt: z.string().datetime({ offset: true }).optional(),
         providerReference: id.optional(),
-        evidence: text,
+        evidence: (actor.role === "payout_provider"
+          ? z.string().trim().max(1000)
+          : text
+        ).optional(),
       })
       .strict()
       .parse(input);
+    demand(
+      actor.role === "payout_provider" || v.evidence,
+      "PAYMENT_DETAILS_REQUIRED",
+      "Administrator evidence is required",
+    );
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(v))
       .digest("hex");
@@ -1547,7 +1555,9 @@ export class OfframpService {
         );
       if (v.outcome === "sent") {
         demand(
-          v.actualAmount && v.paidAt && v.providerReference,
+          v.actualAmount &&
+            v.paidAt &&
+            (actor.role === "payout_provider" || v.providerReference),
           "PAYMENT_DETAILS_REQUIRED",
           "Amount, payment time and reference are required",
         );
@@ -1620,16 +1630,33 @@ export class OfframpService {
             };
       if (attempt !== previous) s.attempts.push(attempt);
       // Consume an existing legacy approved attempt instead of creating a second live payment.
+      const internalRecordId =
+        actor.role === "payout_provider" ? "PAY-" + randomUUID() : undefined;
+      const recordedReference = v.providerReference ?? internalRecordId;
+      if (internalRecordId) {
+        attempt.internalRecordId = internalRecordId;
+        attempt.referenceKind = v.providerReference
+          ? "external"
+          : "system_internal";
+      }
       attempt.idempotencyKey = v.idempotencyKey;
       attempt.state = v.outcome;
-      attempt.providerReference = v.providerReference;
+      attempt.providerReference = recordedReference;
       attempt.evidence = v.evidence;
       if (v.outcome === "sent") {
         this.recordSent(s, o);
         o.paymentConfirmation = {
           actualAmount: amount(v.actualAmount!, o.quote.payoutCurrency),
           paidAt: v.paidAt!,
-          providerReference: v.providerReference!,
+          providerReference: recordedReference!,
+          ...(internalRecordId
+            ? {
+                internalRecordId,
+                referenceKind: v.providerReference
+                  ? ("external" as const)
+                  : ("system_internal" as const),
+              }
+            : {}),
           confirmedBy: actor.id,
           verification:
             actor.role === "payout_provider"
@@ -1659,6 +1686,14 @@ export class OfframpService {
           actualAmount: v.actualAmount,
           paidAt: v.paidAt,
           providerReference: v.providerReference,
+          ...(internalRecordId
+            ? {
+                internalRecordId,
+                referenceKind: v.providerReference
+                  ? "external"
+                  : "system_internal",
+              }
+            : {}),
         },
       );
       this.emit(s, "payout." + v.outcome, o.id, {
@@ -1800,7 +1835,9 @@ export class OfframpService {
     const v = z
       .object({
         providerReference: id,
-        referenceKind: z.enum(["mock_internal", "external"]).optional(),
+        referenceKind: z
+          .enum(["mock_internal", "system_internal", "external"])
+          .optional(),
         actualAmount: decimalString,
         evidence: text,
       })

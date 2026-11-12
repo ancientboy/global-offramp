@@ -276,7 +276,20 @@ test("provider orders open details and payment registration requires confirmatio
       /100.00 CNY/,
     );
     await act(async () => button("登记已付款").click());
-    assert.ok(f.document.querySelector('input[aria-label="付款参考号"]'));
+    assert.ok(f.document.querySelector('input[aria-label="外部付款流水号"]'));
+    assert.equal(
+      f.document.querySelector('input[aria-label="外部付款流水号"]').required,
+      false,
+    );
+    assert.equal(
+      f.document.querySelector('textarea[aria-label="付款说明"]').required,
+      false,
+    );
+    assert.equal(
+      f.document.querySelector('input[aria-label="处理记录号"]').readOnly,
+      true,
+    );
+
     assert.equal(button("确认登记已付款").disabled, true);
     await act(async () =>
       f.document.querySelector("input[type=checkbox]").click(),

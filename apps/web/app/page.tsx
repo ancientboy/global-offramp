@@ -1182,7 +1182,7 @@ export default function Home() {
           <Note>
             {o.paymentConfirmation.referenceKind === "mock_internal"
               ? "内部确认记录："
-              : "人工登记的模拟付款："}
+              : "线下付款登记："}
             {o.paymentConfirmation.internalRecordId ??
               o.paymentConfirmation.providerReference}{" "}
             ·{" "}
@@ -1544,10 +1544,7 @@ export default function Home() {
                         path: `orders/${o.id}/reconcile`,
                         base: {
                           referenceKind:
-                            o.paymentConfirmation?.referenceKind ===
-                            "mock_internal"
-                              ? "mock_internal"
-                              : "external",
+                            o.paymentConfirmation?.referenceKind ?? "external",
                         },
                         fields: [
                           {

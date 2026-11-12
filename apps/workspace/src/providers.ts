@@ -30,11 +30,21 @@ export async function providerDashboard(auth: Auth, account: Account) {
             ) &&
             (o.fundingSource !== "wallet" ||
               o.walletFundingStatus === "reserved"),
+          processingRecordId:
+            o.paymentConfirmation?.internalRecordId ??
+            state.attempts.filter((a) => a.orderId === o.id).at(-1)
+              ?.internalRecordId ??
+            null,
           paymentConfirmation: o.paymentConfirmation
             ? {
                 actualAmount: o.paymentConfirmation.actualAmount,
                 paidAt: o.paymentConfirmation.paidAt,
-                providerReference: o.paymentConfirmation.providerReference,
+                providerReference:
+                  o.paymentConfirmation.referenceKind === "system_internal"
+                    ? null
+                    : o.paymentConfirmation.providerReference,
+                internalRecordId:
+                  o.paymentConfirmation.internalRecordId ?? null,
               }
             : null,
           payoutCurrency: o.quote.payoutCurrency,

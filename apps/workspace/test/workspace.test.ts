@@ -1209,7 +1209,8 @@ test("scoped provider payment and receipt flow records once, holds unknown outco
     }
     const paid = await order("provider-paid"),
       unknown = await order("provider-unknown"),
-      unfunded = await order("provider-unfunded", false);
+      unfunded = await order("provider-unfunded", false),
+      external = await order("provider-external");
     const other = await core.upsertPayoutProvider(admin, {
       name: "Other provider",
       status: "active",
@@ -1264,8 +1265,6 @@ test("scoped provider payment and receipt flow records once, holds unknown outco
       outcome: "sent",
       actualAmount: paid.quote.payoutAmount,
       paidAt: paid.createdAt,
-      providerReference: "provider-reference-once",
-      evidence: "已核对付款结果",
     };
     const before = await f.store.read();
     await assert.rejects(
@@ -1336,16 +1335,50 @@ test("scoped provider payment and receipt flow records once, holds unknown outco
       "provider_attestation",
     );
     assert.equal(saved.completion?.basis, "provider_attestation");
+    assert.equal(saved.paymentConfirmation?.referenceKind, "system_internal");
+    assert.match(
+      saved.paymentConfirmation!.internalRecordId!,
+      /^PAY-[a-f0-9-]+$/,
+    );
+    const repeatedDetail = await (
+      await f.call(path(paid.id), undefined, cookie)
+    ).json();
+    assert.equal(
+      repeatedDetail.processingRecordId,
+      saved.paymentConfirmation!.internalRecordId,
+    );
+    assert.equal(repeatedDetail.paymentConfirmation.providerReference, null);
+
     assert.equal(saved.walletFundingStatus, "consumed");
     assert.equal(
       state.journals.filter((j) => j.businessKey === "payout:" + paid.id)
         .length,
       1,
     );
+    const externalInput = {
+      ...input,
+      idempotencyKey: "provider-external-once",
+      actualAmount: external.quote.payoutAmount,
+      paidAt: external.createdAt,
+      providerReference: "bank-channel-original",
+      evidence: "好",
+    };
+    const externalResponse = await f.call(
+      path(external.id, "payment"),
+      externalInput,
+      cookie,
+    );
+    assert.equal(externalResponse.status, 200);
+    const externalDetail = await externalResponse.json();
+    assert.equal(
+      externalDetail.paymentConfirmation.providerReference,
+      "bank-channel-original",
+    );
+    assert.match(externalDetail.processingRecordId, /^PAY-/);
+    assert.notEqual(externalDetail.processingRecordId, "bank-channel-original");
     const unknownInput = {
       idempotencyKey: "provider-unknown-once",
       outcome: "unknown",
-      evidence: "结果待核实，禁止重复付款",
     };
     assert.equal(
       (await f.call(path(unknown.id, "payment"), unknownInput, cookie)).status,

@@ -62,11 +62,15 @@ export default function OrderHistory({
         o.quote.payoutAmount,
         o.quote.payoutCurrency,
         o.payoutProviderSnapshot?.name ?? "旧版本未记录",
-        o.paymentConfirmation?.referenceKind === "mock_internal"
-          ? "模拟内部记录，未外部核验"
+        ["mock_internal", "system_internal"].includes(
+          o.paymentConfirmation?.referenceKind ?? "",
+        )
+          ? "系统内部记录"
           : "人工登记",
         o.paymentConfirmation?.internalRecordId ?? "",
-        o.paymentConfirmation?.referenceKind === "mock_internal"
+        ["mock_internal", "system_internal"].includes(
+          o.paymentConfirmation?.referenceKind ?? "",
+        )
           ? ""
           : (o.paymentConfirmation?.providerReference ?? ""),
       ]),
