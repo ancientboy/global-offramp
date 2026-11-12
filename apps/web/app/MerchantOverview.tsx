@@ -165,7 +165,7 @@ export default function MerchantOverview({
         <span>
           回单不影响完成与佣金计提。历史待复核及异常单独处理，退款等限制以订单详情为准。
         </span>
-        <span>{batches.size} 个批次 · MOCK 演示，无真实资金执行</span>
+        <span>{batches.size} 个批次</span>
       </div>
     </section>
   );

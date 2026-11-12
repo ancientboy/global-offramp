@@ -1,5 +1,6 @@
 "use client";
-import { Fragment, useEffect, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useId, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Check, Info, X } from "@phosphor-icons/react";
 import { labels, money, csvText, type Quote } from "./models";
 export function Badge({
@@ -146,6 +147,7 @@ export function Modal({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     ref.current?.focus();
@@ -156,21 +158,21 @@ export function Modal({
       previous?.focus();
     };
   }, []);
-  return (
+  const content = (
     <div className="modal-overlay" onClick={() => !busy && onClose()}>
       <div
         ref={ref}
         className="modal"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="dialog-title"
+        aria-labelledby={titleId}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === "Escape" && !busy) onClose();
           if (e.key === "Tab") {
             const nodes = ref.current?.querySelectorAll<HTMLElement>(
-              "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href]",
+              "button:not(:disabled):not([hidden]), input:not(:disabled):not([hidden]), textarea:not(:disabled), select:not(:disabled):not([hidden]), a[href]",
             );
             if (!nodes?.length) return;
             const first = nodes[0],
@@ -189,19 +191,24 @@ export function Modal({
           }
         }}
       >
-        <button
-          className="close"
-          aria-label="关闭"
-          disabled={busy}
-          onClick={onClose}
-        >
-          <X size={22} />
-        </button>
-        <h2 id="dialog-title">{title}</h2>
-        {children}
+        <div className="modal-heading">
+          <h2 id={titleId}>{title}</h2>
+          <button
+            className="close"
+            aria-label="关闭"
+            disabled={busy}
+            onClick={onClose}
+          >
+            <X size={22} />
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
       </div>
     </div>
   );
+  return typeof document !== "undefined"
+    ? createPortal(content, document.body)
+    : content;
 }
 export function downloadCSV(name: string, rows: string[][]) {
   const blob = new Blob(["\uFEFF" + csvText(rows)], {

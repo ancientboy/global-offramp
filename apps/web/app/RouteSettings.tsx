@@ -1,4 +1,6 @@
 "use client";
+import SelectField from "./SelectField";
+import MarketRatesPanel, { type MarketStatus } from "./MarketRatesPanel";
 import { useEffect, useState } from "react";
 import type {
   RouteDefinition,
@@ -14,7 +16,11 @@ type Draft = {
   providerName: string;
   processingNote: string;
 };
-type Row = RouteDefinition & { version: number; draft?: Draft };
+type Row = RouteDefinition & {
+  version: number;
+  availableForQuotes?: boolean;
+  draft?: Draft;
+};
 type Catalog = {
   routes: Row[];
   methods: Record<string, RecipientMethodDefinition>;
@@ -28,7 +34,7 @@ const markets: Record<string, string> = {
   GB: "英国",
 };
 const names: Record<string, string> = {
-  referenceRate: "草稿汇率（每单位稳定币兑换法币）",
+  referenceRate: "市场参考汇率（每单位稳定币兑换法币）",
   serviceFee: "服务费（来源稳定币）",
   channelFee: "渠道费（来源稳定币）",
   minPayout: "最低出款额（法币）",
@@ -66,6 +72,7 @@ const errors: Record<string, string> = {
     "请检查输入：金额使用十进制，最低额不能大于最高额，汇率须大于零。",
 };
 export default function RouteSettings({ admin }: { admin: boolean }) {
+  const [market, setMarket] = useState<MarketStatus | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
@@ -73,6 +80,13 @@ export default function RouteSettings({ admin }: { admin: boolean }) {
     [values, setValues] = useState<Draft>(empty),
     [busy, setBusy] = useState(false);
   const row = catalog?.routes.find((r) => r.id === selected);
+  const referenceRate = market?.stale
+    ? null
+    : (market?.snapshot?.rates.find(
+        (r) =>
+          r.sourceCurrency === row?.sourceAsset &&
+          r.payoutCurrency === row?.targetCurrency,
+      )?.referenceRate ?? null);
   async function load() {
     const r = await fetch("/workspace/api/routes", {
       cache: "no-store",
@@ -99,12 +113,16 @@ export default function RouteSettings({ admin }: { admin: boolean }) {
         method: "POST",
         credentials: "same-origin",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...values, expectedVersion: row.version }),
+        body: JSON.stringify({
+          ...values,
+          referenceRate,
+          expectedVersion: row.version,
+        }),
       });
       const v = await r.json();
       if (!r.ok) throw new Error(errors[v.error] ?? "保存失败，请稍后重试。");
       await load();
-      setNotice("草稿已保存；这不会开放收币或付款，也不会改变已生成的报价。");
+      setNotice("配置草稿已保存。");
     } catch (e) {
       setError(e instanceof Error ? e.message : "保存失败");
     } finally {
@@ -115,15 +133,14 @@ export default function RouteSettings({ admin }: { admin: boolean }) {
     <section className="card">
       <div className="card-heading">
         <h2>{admin ? "人工代付路线配置" : "首批出款地区"}</h2>
-        <span className="badge">筹备中</span>
+        <span className="badge">人工代付</span>
       </div>
+      <MarketRatesPanel authenticated admin={admin} onSnapshot={setMarket} />
       <p>
         支持方向：USDT / USDC →
         CNY、USD、EUR、MXN、BRL、GBP。首版由运营线下付款，系统管理记录与对账。
       </p>
-      <p className="muted small">
-        所有路线当前均未开放真实资金。链网络尚未配置，不提供收币地址或二维码；格式校验不代表银行账户已核验。
-      </p>
+      <p className="muted small">各地区的可用状态以路线配置为准。</p>
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       {!catalog ? (
@@ -146,9 +163,7 @@ export default function RouteSettings({ admin }: { admin: boolean }) {
                     <td>{markets[r.market]}</td>
                     <td>{r.sourceAsset}</td>
                     <td>{r.targetCurrency}</td>
-                    <td>
-                      {r.draft ? "已有配置草稿 · 未开放" : "待配置 · 未开放"}
-                    </td>
+                    <td>{r.availableForQuotes ? "可报价" : "待配置"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -158,7 +173,7 @@ export default function RouteSettings({ admin }: { admin: boolean }) {
             <div style={{ marginTop: 24 }}>
               <label>
                 选择配置路线
-                <select
+                <SelectField
                   value={selected}
                   disabled={busy}
                   onChange={(e) => {
@@ -172,7 +187,7 @@ export default function RouteSettings({ admin }: { admin: boolean }) {
                       {markets[r.market]} · {r.id}
                     </option>
                   ))}
-                </select>
+                </SelectField>
               </label>
               <div
                 style={{
@@ -186,7 +201,12 @@ export default function RouteSettings({ admin }: { admin: boolean }) {
                   <label key={key}>
                     {names[key]}
                     <input
-                      value={values[key as keyof Draft] ?? ""}
+                      value={
+                        key === "referenceRate"
+                          ? (referenceRate ?? "")
+                          : (values[key as keyof Draft] ?? "")
+                      }
+                      readOnly={key === "referenceRate"}
                       disabled={busy}
                       maxLength={key === "processingNote" ? 500 : 100}
                       inputMode={

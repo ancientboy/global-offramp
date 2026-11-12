@@ -109,8 +109,8 @@ test("saved recipient keeps customer ownership, suspension, field and route guar
     { name: "" },
     { accountToken: "" },
     { accountMasked: "1234567890" },
-    { country: "GB" },
-    { currency: "EUR" },
+    { country: "invalid" },
+    { currency: "JPY" },
   ]) {
     await assert.rejects(
       h.service.createBeneficiary(actor, { ...input, ...patch }),
@@ -124,6 +124,14 @@ test("saved recipient keeps customer ownership, suspension, field and route guar
   await rejects(
     h.service.createBeneficiary(actor, { ...input, customerId: "customer-2" }),
     "FORBIDDEN",
+  );
+  await rejects(
+    h.service.createBeneficiary(actor, { ...input, country: "GB" }),
+    "ROUTE_MISMATCH",
+  );
+  await rejects(
+    h.service.createBeneficiary(actor, { ...input, currency: "EUR" }),
+    "ROUTE_MISMATCH",
   );
   const b = await h.service.createBeneficiary(actor, input);
   const quoteInput = {

@@ -18,7 +18,7 @@ export interface Quote {
   customerId: string;
   beneficiaryId: string;
   sourceCurrency: "USDT" | "USDC";
-  payoutCurrency: "CNY" | "USD";
+  payoutCurrency: "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
   sourceAmount: string;
   payoutAmount: string;
   serviceFee: string;
@@ -101,7 +101,7 @@ export interface Beneficiary {
   customerId: string;
   name: string;
   country: string;
-  currency: "CNY" | "USD";
+  currency: "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
   accountMasked: string;
   status: string;
   createdBy: string;
@@ -273,6 +273,7 @@ export interface Dashboard {
   payoutProviders?: import("./admin-models").PayoutProvider[];
 }
 export interface Health {
+  simulatedTopupsEnabled?: boolean;
   accessMode?: "public_demo";
   status: string;
   mode: string;
@@ -331,7 +332,20 @@ export function date(value: string) {
   );
 }
 export function symbol(currency: string) {
-  return currency === "CNY" ? "¥" : "$";
+  return (
+    (
+      {
+        CNY: "¥",
+        USD: "$",
+        USDT: "$",
+        USDC: "$",
+        EUR: "€",
+        GBP: "£",
+        MXN: "MX$",
+        BRL: "R$",
+      } as Record<string, string>
+    )[currency] ?? currency
+  );
 }
 
 /** Escape every output cell, including rejected CSV input and financial negatives. */

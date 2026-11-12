@@ -1,4 +1,5 @@
 "use client";
+import SelectField from "./SelectField";
 import { useEffect, useRef, useState } from "react";
 import type { Worker } from "tesseract.js";
 import type { Order } from "./models";
@@ -587,7 +588,7 @@ export default function ReceiptLibrary({
               {rows.length > 0 && (
                 <label className="receipt-order">
                   逐行核对（识别到 {rows.length} 行）
-                  <select
+                  <SelectField
                     value={rowIndex}
                     disabled={saving}
                     onChange={(e) => {
@@ -610,7 +611,7 @@ export default function ReceiptLibrary({
                         {r.payoutCurrency}
                       </option>
                     ))}
-                  </select>
+                  </SelectField>
                 </label>
               )}
               <div className="receipt-fields">
@@ -664,7 +665,7 @@ export default function ReceiptLibrary({
               ))}
               <label className="receipt-order">
                 关联已出款 / 失败 / 待确认订单（可选）
-                <select
+                <SelectField
                   value={orderId}
                   onChange={(e) => {
                     setOrderId(e.target.value);
@@ -690,7 +691,7 @@ export default function ReceiptLibrary({
                         : ""}
                     </option>
                   ))}
-                </select>
+                </SelectField>
               </label>
               <label className="receipt-order">
                 核对说明
@@ -729,7 +730,7 @@ export default function ReceiptLibrary({
                 batchOptions.length > 0 && (
                   <label className="receipt-order">
                     批量回单归属（逐行关联可选）
-                    <select
+                    <SelectField
                       value={targetBatchId}
                       disabled={saving}
                       onChange={(e) => {
@@ -745,7 +746,7 @@ export default function ReceiptLibrary({
                           {o.customerId} · {o.batchId}
                         </option>
                       ))}
-                    </select>
+                    </SelectField>
                   </label>
                 )}
               {active.quarantine ? (

@@ -1,10 +1,16 @@
+import { MARKETS } from "./route-catalog";
 /** No IEEE-754 arithmetic is used for monetary values. Forward conversion rounds down; reverse target quotes explicitly round principal up. */
-export type Currency = "USDT" | "USDC" | "CNY" | "USD";
+export type Currency =
+  "USDT" | "USDC" | "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
 export const SCALE: Record<Currency, number> = {
   USDT: 6,
   USDC: 6,
   CNY: 2,
   USD: 2,
+  EUR: 2,
+  GBP: 2,
+  MXN: 2,
+  BRL: 2,
 };
 export class DomainError extends Error {
   constructor(
@@ -70,5 +76,29 @@ export function proportion(
   return decimal(
     (units(value, SCALE[currency]) * units(rate, 8)) / 100000000n,
     SCALE[currency],
+  );
+}
+
+export const FIAT_CODES = ["CNY", "USD", "EUR", "MXN", "BRL", "GBP"] as const;
+export type FiatCurrency = (typeof FIAT_CODES)[number];
+export function defaultPayoutCountry(currency: FiatCurrency) {
+  return { CNY: "CN", USD: "US", EUR: "DE", MXN: "MX", BRL: "BR", GBP: "GB" }[
+    currency
+  ];
+}
+export function countryMatchesCurrency(
+  currency: FiatCurrency,
+  country: string,
+) {
+  const market = {
+    CNY: "CN",
+    USD: "US",
+    EUR: "EURO_AREA",
+    MXN: "MX",
+    BRL: "BR",
+    GBP: "GB",
+  } as const;
+  return (MARKETS[market[currency]].countries as readonly string[]).includes(
+    country,
   );
 }

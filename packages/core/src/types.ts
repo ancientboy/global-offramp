@@ -25,8 +25,8 @@ export interface Beneficiary {
   id: string;
   customerId: string;
   name: string;
-  country: "CN" | "US";
-  currency: "CNY" | "USD";
+  country: string;
+  currency: "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
   bankName?: string;
   accountMasked: string;
   accountToken: string;
@@ -38,6 +38,10 @@ export interface PricingBaseline {
   USDT_USD: string;
   USDC_USD: string;
   USD_CNY: string;
+  USD_EUR?: string;
+  USD_GBP?: string;
+  USD_MXN?: string;
+  USD_BRL?: string;
   asOf: string;
   expiresAt: string;
 }
@@ -48,13 +52,28 @@ export interface PricingRoute {
   adjustment: string;
 }
 export interface PricingVersion {
+  marketReference?: {
+    batchId: string;
+    fetchedAt: string;
+    fxDate: string;
+    fxSource: "ECB";
+    stablecoinSource: "Kraken";
+    usdRates: Record<"USD" | "CNY" | "EUR" | "GBP" | "MXN" | "BRL", string>;
+    stablecoinUsd: Record<"USDT" | "USDC", string>;
+    rates: {
+      sourceCurrency: "USDT" | "USDC";
+      payoutCurrency: "USD" | "CNY" | "EUR" | "GBP" | "MXN" | "BRL";
+      referenceRate: string;
+    }[];
+  };
   mode: "MOCK";
   version: string;
   baseline: PricingBaseline;
-  routes: Record<"CNY" | "USD", PricingRoute>;
+  routes: Record<"CNY" | "USD", PricingRoute> &
+    Partial<Record<"EUR" | "MXN" | "BRL" | "GBP", PricingRoute>>;
   rates: {
     sourceCurrency: "USDT" | "USDC";
-    payoutCurrency: "CNY" | "USD";
+    payoutCurrency: "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
     referenceRate: string;
     customerRate: string;
   }[];
@@ -68,7 +87,7 @@ export interface PayoutProvider {
   name: string;
   status: "active" | "disabled";
   scope: "official" | "third_party";
-  routes: ("CNY" | "USD")[];
+  routes: ("CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP")[];
   isDefault: boolean;
   updatedAt: string;
 }
@@ -78,7 +97,7 @@ export interface Quote {
   customerId: string;
   beneficiaryId: string;
   sourceCurrency: "USDT" | "USDC";
-  payoutCurrency: "CNY" | "USD";
+  payoutCurrency: "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
   sourceAmount: string;
   amountMode: "principal" | "total_deposit" | "target_payout";
   inputCurrency?: Currency;
@@ -275,7 +294,7 @@ export interface Batch {
 export interface BatchItem {
   amountMode?: "principal" | "target_payout";
   targetAmount?: string;
-  targetCurrency?: "CNY" | "USD";
+  targetCurrency?: "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
   recipientName?: string;
   bankName?: string;
   accountMasked?: string;

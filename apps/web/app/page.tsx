@@ -1,4 +1,5 @@
 "use client";
+import SelectField from "./SelectField";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
@@ -178,18 +179,18 @@ const subtitles: Record<Page, string> = {
   routes: "首批六个法币方向，线下付款，汇率和费用按路线配置",
   receipts: "私有存储、本地识别、人工关联，原件不会自动分享给客户",
   overview: "按订单创建、登记付款分别统计，不同币种独立核算",
-  directory: "查看个人与企业资料、账户和订单，不涉及真实身份认证",
+  directory: "查看个人与企业资料、账户和订单",
   providers: "管理实际出款角色，与推广返佣伙伴完全分开",
   referrals: "查看推广归属与服务费佣金，不承担订单出款",
-  wallet: "先模拟充值，再用可用余额结汇；资金状态一目了然",
-  profile: "管理演示身份与常用收款账户",
+  wallet: "查看资产余额与资金记录，发起单笔或批量结汇",
+  profile: "管理账户资料与常用收款账户",
   payment: "从钱包余额兑换法币，汇率、费用与到账金额透明列明",
   recipients: "收款账户保存后即可使用，系统自动检查必填项、格式与币种",
   orders: "付款确认即完成，回单可选补充，异常单独处理",
   detail: "每一步资金状态，都有清晰记录",
-  certification: "来自服务端的演示客户审核状态",
+  certification: "查看并管理客户审核状态",
   workbench: "核对收款信息后确认完成，回单可后补，未知结果先核实",
-  pricing: "模拟基准加管理员调整，先预览再发布，新报价使用新版本",
+  pricing: "设置参考汇率与费用，发布后应用于新报价",
   reconciliation: "处理异常与历史待复核记录，正常完成订单无需再次核对",
   audit: "来自服务端的脱敏操作记录",
   partner: "查看服务费佣金与月度结算",
@@ -209,7 +210,13 @@ const uid = () => crypto.randomUUID();
 
 export default function Home() {
   const workspace = useContext(WorkspaceContext);
-  const [actor, setActor] = useState<ActorKey>(() => workspace?.account.role === "merchant_admin" ? "admin-demo" : workspace?.account.kind === "company" ? "company-demo" : "customer-demo");
+  const [actor, setActor] = useState<ActorKey>(() =>
+    workspace?.account.role === "merchant_admin"
+      ? "admin-demo"
+      : workspace?.account.kind === "company"
+        ? "company-demo"
+        : "customer-demo",
+  );
   const actorRef = useRef(actor);
   actorRef.current = actor;
   const role: ViewRole =
@@ -220,7 +227,9 @@ export default function Home() {
         : "admin";
   const finance = actor === "admin-demo";
   const maker = actor === "admin-demo";
-  const [page, setPage] = useState<Page>(workspace?.account.role === "merchant_admin" ? "overview" : "wallet");
+  const [page, setPage] = useState<Page>(
+    workspace?.account.role === "merchant_admin" ? "overview" : "wallet",
+  );
   const [dataState, setDataState] = useState<{
     actor: ActorKey;
     value: Dashboard;
@@ -277,7 +286,11 @@ export default function Home() {
   const orders = data?.orders ?? [],
     beneficiaries = data?.beneficiaries ?? [],
     customers = data?.customers ?? [];
-  const customerId = workspace ? (workspace.account.customerId ?? "") : actor === "company-demo" ? "customer-2" : "customer-1";
+  const customerId = workspace
+    ? (workspace.account.customerId ?? "")
+    : actor === "company-demo"
+      ? "customer-2"
+      : "customer-1";
   const currentCustomer = customers.find((c) => c.id === customerId);
   const usableBeneficiaries = beneficiaries.filter(
     (b) =>
@@ -313,16 +326,22 @@ export default function Home() {
       signal?: AbortSignal,
       responseType: "json" | "blob" = "json",
     ): Promise<T> => {
-      const response = await fetch((workspace ? "/workspace/api/" : "/api/") + path, {
-        method: body === undefined ? "GET" : "POST",
-        cache: "no-store",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json", ...(workspace ? {} : { "x-demo-actor": actor }) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        signal: signal
-          ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
-          : AbortSignal.timeout(15000),
-      });
+      const response = await fetch(
+        (workspace ? "/workspace/api/" : "/api/") + path,
+        {
+          method: body === undefined ? "GET" : "POST",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: {
+            "content-type": "application/json",
+            ...(workspace ? {} : { "x-demo-actor": actor }),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          signal: signal
+            ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+            : AbortSignal.timeout(15000),
+        },
+      );
       const result =
         response.ok && responseType === "blob"
           ? await response.blob()
@@ -402,7 +421,7 @@ export default function Home() {
         h.realExecutionEnabled !== false ||
         h.status !== "ok"
       )
-        throw new Error("后端未通过 MOCK 安全健康检查，操作已停用");
+        throw new Error("服务暂时不可用，请刷新后重试。");
       setHealth(h);
       setDataState({ actor, value: d });
       setConnection("connected");
@@ -707,7 +726,7 @@ export default function Home() {
         clientOrderId: "web_" + quote.id,
         fundingSource: "wallet",
       },
-      "结汇订单已创建，对应模拟余额已冻结，无需再次充值。",
+      "结汇订单已创建，对应余额已冻结，无需再次充值。",
     );
     if (result) {
       setSelected(result.id);
@@ -749,7 +768,7 @@ export default function Home() {
     const result = await mutate<BatchPreview>(
       `batches/${batch.batch.id}/quote`,
       {},
-      "批次模拟报价已生成，请核对分币种金额和费用。",
+      "批次报价已生成，请核对分币种金额和费用。",
     );
     if (result) {
       setBatchPreview(result);
@@ -771,7 +790,7 @@ export default function Home() {
         fundingSource: "wallet",
         quoteIds: batchPreview.quotes.map((q) => q.id),
       },
-      "有效行已创建结汇订单并冻结模拟余额，可逐笔追踪出款与回单。",
+      "有效行已创建结汇订单并冻结余额，可逐笔追踪出款与回单。",
     );
     if (result) {
       setBatch(result);
@@ -781,34 +800,44 @@ export default function Home() {
   }
   function addRecipient() {
     openCommand({
-      title: "手动新增模拟收款账户",
-      description:
-        "保存后即可用于单笔或批量结汇，无需人工审核。系统仅检查必填项、账户尾号格式和地区币种匹配，不验证账户归属或银行信息。演示中请只填写虚构资料。",
+      title: "新增收款账户",
+      description: "保存收款信息后，可在单笔或批量结汇时选择使用。",
       path: "beneficiaries",
       base: {
         customerId,
-        country: market === "CNY" ? "CN" : "US",
+        country: (
+          {
+            CNY: "CN",
+            USD: "US",
+            EUR: "DE",
+            GBP: "GB",
+            MXN: "MX",
+            BRL: "BR",
+          } as Record<string, string>
+        )[market],
         currency: market,
         accountToken: "mock-vault-" + uid(),
       },
       fields: [
-        { key: "name", label: "虚构收款人名称", value: "MOCK 新收款人" },
+        { key: "name", label: "收款人名称", value: "新收款人" },
         {
           key: "accountMasked",
-          label: "虚构账户尾号（例如 **** 8888）",
+          label: "账户尾号（例如 **** 8888）",
           value: "**** 8888",
         },
       ],
       button: "保存并使用",
-      success: "收款账户已保存，可立即用于结汇；未进行真实银行账户验证。",
+      success: "收款账户已保存。",
     });
   }
   function openTopup(currency: string) {
-    if (workspace) {setError("账号内测的充值渠道尚未开放"); return;}
+    if (workspace && !health?.simulatedTopupsEnabled) {
+      setError("模拟充值暂不可用，请稍后重试。");
+      return;
+    }
     openCommand({
       title: "模拟充值 " + currency,
-      description:
-        "仅在当前演示账户记账，不连接区块链或托管服务，不提供真实地址。请勿转入任何真实资金。重复提交同一请求不会重复入账。",
+      description: "增加当前账户的测试余额，不发生真实转账。",
       path: "wallet/deposits",
       base: { customerId, currency, idempotencyKey: "topup_" + uid() },
       fields: [
@@ -819,7 +848,7 @@ export default function Home() {
         },
       ],
       button: "确认模拟充值",
-      success: "模拟余额已入账，可继续结汇。原草稿保留，报价将重新获取。",
+      success: "模拟充值成功，可继续结汇。",
     });
   }
   function goTopup() {
@@ -839,13 +868,13 @@ export default function Home() {
   }
   const evidence = (value: string): Field => ({
     key: "evidence",
-    label: "MOCK 核验依据（仅虚构资料）",
+    label: "核验说明",
     value,
     type: "textarea",
   });
   const reference = (value: string): Field => ({
     key: "providerReference",
-    label: "模拟渠道参考号（请手动填写 MOCK- 开头）",
+    label: "渠道参考号",
     value,
   });
   function resetSession() {
@@ -863,13 +892,13 @@ export default function Home() {
   function seedScenario() {
     if (workspace) return;
     openCommand({
-      title: "创建服务端 MOCK 场景",
+      title: "创建示例订单",
       description:
         "服务端通过领域方法创建三笔关联样例：已入金待付款、待记录付款结果、已对账待观察期佣金。再次点击返回同一组样例，不重置或覆盖已有订单。",
       path: "demo/scenario",
       base: { idempotencyKey: "workspace-default-v1" },
-      button: "创建 MOCK 场景",
-      success: "服务端 MOCK 场景已准备好，可切换角色验证后续流程。",
+      button: "创建示例订单",
+      success: "示例订单已创建。",
     });
   }
   function orderTable() {
@@ -962,7 +991,8 @@ export default function Home() {
                       <strong>{o.orderNumber ?? shortId(o.id)}</strong>
                     </button>
                     <small>
-                      {o.quote.sourceCurrency} · {o.quote.configVersion}
+                      {o.quote.sourceCurrency} ·{" "}
+                      {o.quote.configVersion.replace(/^mock-pricing-/i, "")}
                     </small>
                   </td>
                   <td>
@@ -995,7 +1025,9 @@ export default function Home() {
             <Empty title={search ? "没有匹配的订单" : "还没有订单"}>
               {role === "customer"
                 ? "创建付款后，服务端订单将在这里显示。"
-                : workspace ? "账号内测的资金渠道尚未开放，订单仅用于沙箱记录。" : "可以先创建 MOCK 场景，由同一管理员验证完整流程。"}
+                : workspace
+                  ? "新的订单会显示在这里。"
+                  : "可创建示例订单查看处理流程。"}
             </Empty>
           )}
         </div>
@@ -1060,14 +1092,14 @@ export default function Home() {
           </div>
           <Note>
             {o.walletFundingStatus === "released"
-              ? "这笔模拟冻结已释放回钱包，不再处理付款。"
+              ? "这笔冻结金额已释放回钱包，不再处理付款。"
               : o.walletFundingStatus === "consumed"
-                ? "这笔模拟结汇余额已结算扣减，可查看付款与回单状态。"
-                : "已从模拟钱包冻结本笔本金与费用，无需再次转币。结果待核实时保持冻结，避免重复支出。"}
+                ? "这笔结汇余额已结算扣减，可查看付款与回单状态。"
+                : "已从钱包冻结本笔本金与费用，无需再次转币。结果待核实时保持冻结，避免重复支出。"}
           </Note>
           <div className="demo-address">
             <Lock size={19} />
-            <strong>MOCK ONLY · 无真实托管或资金操作</strong>
+            <strong>资金记录</strong>
           </div>
         </>
       );
@@ -1081,11 +1113,11 @@ export default function Home() {
         <dl className="details">
           <div>
             <dt>入金网络</dt>
-            <dd>{funding?.network ?? "MOCK"} · 演示网络</dd>
+            <dd>模拟充值</dd>
           </div>
           <div>
             <dt>入金指引</dt>
-            <dd>未接入托管服务 · 不可转账</dd>
+            <dd>请通过模拟充值增加余额</dd>
           </div>
           <div>
             <dt>到账状态</dt>
@@ -1095,18 +1127,16 @@ export default function Home() {
           </div>
           {(funding?.expiresAt ?? o.fundingExpiresAt) && (
             <div>
-              <dt>演示入金截止</dt>
+              <dt>入金有效期</dt>
               <dd>{date((funding?.expiresAt ?? o.fundingExpiresAt)!)}</dd>
             </div>
           )}
         </dl>
         <div className="demo-address">
           <Lock size={19} />
-          <strong>MOCK ONLY · 无可付款地址或二维码</strong>
+          <strong>请使用模拟充值增加余额</strong>
         </div>
-        <Note>
-          当前未接入真实托管收币服务，请勿转账。正式接入后，这里会显示与订单绑定的地址、网络及所需金额。演示仅由管理员模拟到账。
-        </Note>
+        <Note>可返回钱包使用模拟充值，再继续下单。</Note>
       </>
     );
   }
@@ -1131,20 +1161,27 @@ export default function Home() {
           </Badge>
         </div>
         <p className="record-id">系统 ID：{o.id}</p>
-        {!admin && <div className={"customer-detail-state " + customerOrderState(o).tone}><strong>{customerOrderState(o).label}</strong><p>{customerOrderState(o).detail}</p></div>}
+        {!admin && (
+          <div
+            className={"customer-detail-state " + customerOrderState(o).tone}
+          >
+            <strong>{customerOrderState(o).label}</strong>
+            <p>{customerOrderState(o).detail}</p>
+          </div>
+        )}
         {o.payoutProviderSnapshot && (
           <Note>
             出款方：{o.payoutProviderSnapshot.name} ·{" "}
             {o.payoutProviderSnapshot.scope === "official"
               ? "官方自营"
-              : "模拟合作方"}
+              : "合作方"}
             ，按下单时配置锁定，与推广返佣伙伴无关。
           </Note>
         )}
         {o.paymentConfirmation && (
           <Note>
             {o.paymentConfirmation.referenceKind === "mock_internal"
-              ? "MOCK 内部确认记录："
+              ? "内部确认记录："
               : "人工登记的模拟付款："}
             {o.paymentConfirmation.internalRecordId ??
               o.paymentConfirmation.providerReference}{" "}
@@ -1228,15 +1265,15 @@ export default function Home() {
               disabled={locked}
               onClick={() =>
                 openCommand({
-                  title: "取消这笔模拟结汇？",
+                  title: "取消这笔结汇？",
                   description:
-                    "仅未处理的订单可取消。服务端确认安全后会解除冻结并退回模拟可用余额，结果未知的订单不能取消。",
+                    "仅未处理的订单可取消。服务端确认安全后会解除冻结并退回可用余额，结果未知的订单不能取消。",
                   path: `orders/${o.id}/cancel`,
                   base: {
-                    reason: "MOCK: customer cancelled before processing",
+                    reason: "客户取消未处理订单",
                   },
                   button: "取消订单并释放余额",
-                  success: "模拟订单已取消，冻结余额已释放。",
+                  success: "订单已取消，冻结余额已释放。",
                 })
               }
             >
@@ -1256,11 +1293,11 @@ export default function Home() {
           </div>
           <div>
             <dt>报价配置版本</dt>
-            <dd>{o.quote.configVersion}</dd>
+            <dd>{o.quote.configVersion.replace(/^mock-pricing-/i, "")}</dd>
           </div>
           <div>
             <dt>入金网络</dt>
-            <dd>MOCK · 无真实充值地址</dd>
+            <dd>模拟充值</dd>
           </div>
         </dl>
         <div className="ruleline" />
@@ -1281,7 +1318,7 @@ export default function Home() {
               labels={["确认资金", "核对与确认", "完成 · 回单可选"]}
             />
             <Note>
-              官方自营模拟订单核对收款人、金额与执行方后即可确认，内部记录号由系统生成，备注选填。回单可后补；未知结果须先核实，不能重复确认。这里不执行真实付款。
+              官方自营订单核对收款人、金额与执行方后即可确认，内部记录号由系统生成，备注选填。回单可后补；未知结果须先核实，不能重复确认。这里不执行真实付款。
             </Note>
             <div className="actions">
               {o.depositStatus === "awaiting" && (
@@ -1291,7 +1328,7 @@ export default function Home() {
                   onClick={() =>
                     openCommand({
                       title: "模拟稳定币到账",
-                      description: "仅创建签名 MOCK 入金事件，不产生真实转账。",
+                      description: "更新订单的模拟到账状态。",
                       path: `demo/orders/${o.id}/deposit`,
                       button: "模拟到账",
                       success: "模拟入金已处理。",
@@ -1316,7 +1353,7 @@ export default function Home() {
                             ? {
                                 title: "确认模拟付款",
                                 description:
-                                  "请核对以下信息。确认后系统生成唯一 MOCK 内部记录号，并记录操作人和时间，无需手填渠道号或核验内容。",
+                                  "核对收款人、金额和出款方，确认后生成内部记录号。",
                                 path: `orders/${o.id}/mock-payout`,
                                 base: {
                                   idempotencyKey:
@@ -1502,7 +1539,7 @@ export default function Home() {
                         description:
                           o.paymentConfirmation?.referenceKind ===
                           "mock_internal"
-                            ? "核对 MOCK 内部记录号和金额，必须填写人工核对说明。此记录不等于银行流水或到账验证。"
+                            ? "核对内部记录号和金额，并填写核对说明。"
                             : "核对实际金额和渠道参考号。不一致会进入差异队列，必须填写人工核对说明。",
                         path: `orders/${o.id}/reconcile`,
                         base: {
@@ -1518,7 +1555,7 @@ export default function Home() {
                             label:
                               o.paymentConfirmation?.referenceKind ===
                               "mock_internal"
-                                ? "MOCK 内部记录号（不代表银行流水）"
+                                ? "内部记录号"
                                 : "人工登记渠道参考号",
                           },
                           {
@@ -1620,9 +1657,7 @@ export default function Home() {
         <p className="muted small">
           支持 PNG、JPEG、PDF 多附件，单个最大 2
           MiB。新原件默认仅管理员可见；识别仅用于人工匹配，不证明真实付款。文件未经恶意软件扫描。
-          {workspace ? " 原件保存在服务器私有目录，客户只能下载管理员明确发布的脱敏副本。" : health?.accessMode === "public_demo" ? " 公开演示允许访客切换角色，只能使用虚构凭证。" : health?.persistence === "d1_mock"
-            ? " 原件使用私有对象存储，记录按登录账号隔离。"
-            : " 本地预览附件临时保存，会话失效后不可恢复。"}
+          回单可关联订单，并按客户归属提供下载。
         </p>
         <div className="ruleline" />
         <div className="card-heading">
@@ -1643,7 +1678,7 @@ export default function Home() {
                         ? "申请服务费退款记录"
                         : "申请换汇前本金退款",
                     description:
-                      "仅创建 MOCK 退款预留记录，须再次确认并登记结果。服务端校验累计金额上限，不执行实际退款。",
+                      "核对退款金额后创建退款记录，并登记后续处理结果。",
                     path: `orders/${o.id}/refunds`,
                     base: {
                       idempotencyKey: "refund_" + uid(),
@@ -1707,15 +1742,10 @@ export default function Home() {
                     openCommand({
                       title: "登记模拟退款结果",
                       description:
-                        "保存外部 MOCK 退款参考号与证据。退款对佣金的影响由服务端生成负向调整，不改写原记录。",
+                        "填写退款参考号和处理说明，相关佣金将按规则调整。",
                       path: `refunds/${r.id}/record`,
-                      fields: [
-                        reference("refund_" + r.id),
-                        evidence(
-                          "MOCK: external refund independently recorded",
-                        ),
-                      ],
-                      button: "登记 MOCK 退款",
+                      fields: [reference("refund_" + r.id), evidence("")],
+                      button: "登记退款",
                       success: "模拟退款已登记，相关佣金调整由服务端计算。",
                     })
                   }
@@ -1738,7 +1768,7 @@ export default function Home() {
       <div className="card pricing-panel">
         <div className="card-heading">
           <h2>当前客户汇率</h2>
-          <Badge>MOCK</Badge>
+          <Badge>当前配置</Badge>
         </div>
         {!p || !rate ? (
           <Empty title="当前身份无定价配置视图" />
@@ -1746,13 +1776,17 @@ export default function Home() {
           <>
             <label>
               适用市场
-              <select
+              <SelectField
                 value={pricingMarket}
                 onChange={(e) => setPricingMarket(e.target.value)}
               >
                 <option>CNY</option>
                 <option>USD</option>
-              </select>
+                <option>EUR</option>
+                <option>MXN</option>
+                <option>BRL</option>
+                <option>GBP</option>
+              </SelectField>
             </label>
             <dl className="details">
               <div>
@@ -1762,7 +1796,7 @@ export default function Home() {
                 </dd>
               </div>
               <div>
-                <dt>模拟参考基准</dt>
+                <dt>参考基准</dt>
                 <dd>{rate.referenceRate}</dd>
               </div>
               <div>
@@ -1859,8 +1893,7 @@ export default function Home() {
                                   {
                                     key: "reason",
                                     label: "取消原因",
-                                    value:
-                                      "MOCK: rebuild with latest eligible commissions",
+                                    value: "根据最新佣金记录重新生成",
                                     type: "textarea",
                                   },
                                 ],
@@ -1957,20 +1990,6 @@ export default function Home() {
         : page === "recipients" && role === "admin"
           ? "收款账户"
           : titles[page];
-  const storageLabel =
-    health?.accessMode === "public_demo"
-      ? "公开演示 · 访客共享虚构数据 · 勿输入真实资料"
-      : health?.persistence === "d1_mock"
-      ? "D1 持久演示记录 · 按已登录账户隔离 · 勿输入真实资料"
-      : health?.persistence === "session-memory"
-        ? "会话内存 · 最多30分钟/实例重启失效 · 勿输入真实资料"
-        : health?.persistence === "memory"
-          ? "内存模式 · 重启 API 后清空"
-          : health?.persistence === "postgres"
-            ? "PostgreSQL · 服务端持久化"
-            : health
-              ? health.persistence + " · 服务端存储"
-              : "存储状态待确认";
   const visibleBatch =
     batch && data?.batches?.some((b) => b.id === batch.batch.id)
       ? {
@@ -2009,24 +2028,26 @@ export default function Home() {
                 : "个人工作台"}
         </div>
         <nav aria-label="主导航">
-          {navs[role].filter(([p])=>p!=="routes"||!!workspace).map(([p, label, I]) => (
-            <button
-              key={p}
-              title={label}
-              className={
-                page === p ||
-                (p === "orders" && page === "detail") ||
-                (p === "profile" &&
-                  ["recipients", "certification"].includes(page))
-                  ? "active"
-                  : ""
-              }
-              onClick={() => go(p)}
-            >
-              <I size={20} />
-              <span>{label}</span>
-            </button>
-          ))}
+          {navs[role]
+            .filter(([p]) => p !== "routes" || !!workspace)
+            .map(([p, label, I]) => (
+              <button
+                key={p}
+                title={label}
+                className={
+                  page === p ||
+                  (p === "orders" && page === "detail") ||
+                  (p === "profile" &&
+                    ["recipients", "certification"].includes(page))
+                    ? "active"
+                    : ""
+                }
+                onClick={() => go(p)}
+              >
+                <I size={20} />
+                <span>{label}</span>
+              </button>
+            ))}
         </nav>
         <div className="sidebar-bottom">
           <button onClick={() => setSupport((v) => !v)}>
@@ -2034,8 +2055,8 @@ export default function Home() {
             帮助与支持
           </button>
           <p>安全、清晰的每一笔付款</p>
-          {!workspace && <a href="/workspace">业务账号内测</a>}
-          <span className="tiny">汇途 · MOCK 验证空间</span>
+          {!workspace && <a href="/workspace">登录账户</a>}
+          <span className="tiny">汇途 · 全球代付</span>
         </div>
       </aside>
       <div className="workspace">
@@ -2052,20 +2073,36 @@ export default function Home() {
             {title}
           </div>
           <div className="top-actions">
-            <span className="demo-badge">{workspace ? "账号内测 / 资金沙箱" : "MOCK · 无真实资金"}</span>
-            {workspace ? <><span>{workspace.account.name}</span><button className="button text" onClick={() => void workspace.logout().catch(() => setError("退出失败，请重试"))}>退出</button></> : <>
-            <select
-              aria-label="演示角色切换"
-              value={actor}
-              disabled={busy}
-              onChange={(e) => changeActor(e.target.value as ActorKey)}
-            >
-              {actors.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select></>}
+            {workspace ? (
+              <>
+                <span>{workspace.account.name}</span>
+                <button
+                  className="button text"
+                  onClick={() =>
+                    void workspace
+                      .logout()
+                      .catch(() => setError("退出失败，请重试"))
+                  }
+                >
+                  退出
+                </button>
+              </>
+            ) : (
+              <>
+                <SelectField
+                  aria-label="切换工作台"
+                  value={actor}
+                  disabled={busy}
+                  onChange={(e) => changeActor(e.target.value as ActorKey)}
+                >
+                  {actors.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </SelectField>
+              </>
+            )}
             <button
               className="avatar"
               aria-label="刷新服务器数据"
@@ -2077,69 +2114,22 @@ export default function Home() {
           </div>
         </header>
         <main>
-          <div className="connection-strip" role="status">
-            <span className={"connection-dot " + connection} />
-            <span>
-              {connection === "connected"
-                ? "已连接 MOCK API"
-                : connection === "loading"
-                  ? "正在连接 MOCK API…"
-                  : "后端连接不可用"}
-            </span>
-            <span className="storage-status">
-              <Database size={13} />
-              {storageLabel}
-            </span>
-            <span className="connection-right">{workspace ? role === "admin" ? "管理员用户名登录 · 资金渠道关闭" : "账号已登录 · 客户邮箱未验证 · 资金渠道关闭" : "演示身份，无真实认证"}</span>
-          </div>
-          <details className="environment-details">
-            <summary>{workspace ? "账号内测：会话8小时到期；资金沙箱，充值及付款关闭" : health?.persistence === "d1_mock" ? "演示数据已保存 · 存储与使用说明" : "临时演示数据 · 存储与使用说明"}</summary>
-          {health?.accessMode === "public_demo" && <Note>当前入口免登录，不同访客共享同一份虚构数据。请勿输入真实客户、银行或钱包资料，也不要上传真实回单。业务账号内测使用独立入口和独立数据库。</Note>}
-          {health?.persistence === "d1_mock" && health?.accessMode !== "public_demo" && (
-            <Note>
-              已登录账户的虚构演示历史保存于
-              D1，跨会话和实例重启保留，账号之间隔离。总记录上限 1
-              MiB；回单原件另存私有 R2，单份不超过 2
-              MiB。容量满时保留原记录并停止新增。资金与订单仍为演示；仅上传有权处理的凭证，不上传密码、完整证件或支付卡资料。
-            </Note>
-          )}
-          {health?.persistence === "session-memory" && (
-            <div className="session-warning" role="note">
-              <Lock size={17} />
-              <span>
-                <strong>隔离会话演示 · 请勿输入真实资料</strong>会话数据最多保留
-                30
-                分钟，实例重启即失效。不要输入真实身份、银行账户、钱包或其他敏感信息。
-              </span>
-            </div>
-          )}
-          </details>
           <div className="page-heading">
             <div>
               <h1>{title}</h1>
-              <p>{workspace && ["wallet", "payment", "profile"].includes(page) ? "独立账号内测：资金沙箱，充值及付款渠道尚未开放" : subtitles[page]}</p>
+              <p>{subtitles[page]}</p>
             </div>
-            {role !== "customer" && <span className="date">{workspace ? "账号内测 / 资金沙箱" : "SERVER-BACKED DEMO"}</span>}
           </div>
-          {support && !workspace && (
-            <div className="card support">
-              <h2>从这里开始体验</h2>
+          {support && (
+            <section className="card support">
+              <h2>帮助与支持</h2>
               <p>
-                客户：钱包模拟充值 → 输入稳定币或目标法币金额 → 核对报价与收款人
-                →
-                冻结余额创建结汇订单。商户可批量导入校验。平台管理员：查看待处理订单
-                → 核对后确认模拟付款 → 可选补充回单。推广伙伴：查看同一服务端产生的佣金与观察期。出款合作方由管理员独立管理。
+                客户可模拟充值、管理收款账户并提交结汇订单。管理员可审核客户、处理订单、管理回单和费率。
               </p>
-              <Note>
-                只使用虚构资料。所有资金相关按钮仅调用 MOCK
-                后端；不支持真实充值、换汇或付款。内存模式在 API
-                重启后清空；会话内存最多保留 30 分钟，实例重启也会失效。D1
-                模式保存虚构演示历史，浏览器会话到期不清空记录；公开演示访客共享数据，业务账号入口使用独立数据库。实际数据范围见页面连接状态。
-              </Note>
               <button className="button text" onClick={() => setSupport(false)}>
-                收起说明
+                收起
               </button>
-            </div>
+            </section>
           )}
           {error && (
             <div className="api-error" role="alert">
@@ -2159,7 +2149,6 @@ export default function Home() {
               </button>
             </div>
           )}
-          {support && workspace && <section className="card support"><h2>账号内测说明</h2><p>独立账号登录后仅显示所属客户或管理员工作台。新客户须等待管理员审核；资金渠道关闭，充值与付款不可用。回单原件仅管理员可见，客户只见明确发布给自己的副本。邮箱尚未验证，未接入 MFA 或找回密码。</p><button className="button text" onClick={() => setSupport(false)}>收起说明</button></section>}
           {!data ? (
             <div className="card">
               <Empty
@@ -2176,11 +2165,30 @@ export default function Home() {
             </div>
           ) : (
             <>
-              {page === "routes" && workspace && <RouteSettings admin={role==="admin"}/>}
+              {page === "routes" && workspace && (
+                <RouteSettings admin={role === "admin"} />
+              )}
               {page === "wallet" && role === "customer" && (
-                <CustomerWallet fundsDisabled={!!workspace} key={actor} balances={walletBalances} deposits={data.walletDeposits ?? []} orders={orders} customerId={customerId} locked={locked} resumeDraft={resumeDraft} initialCurrency={asset}
-                  onTopup={openTopup} onExchange={(currency) => { if (!resumeDraft) editForm(() => setAsset(currency)); resumeExchange(); }}
-                  onOrder={(id) => { setSelected(id); go("detail"); }} />
+                <CustomerWallet
+                  fundsDisabled={!!workspace && !health?.simulatedTopupsEnabled}
+                  key={actor}
+                  balances={walletBalances}
+                  deposits={data.walletDeposits ?? []}
+                  orders={orders}
+                  customerId={customerId}
+                  locked={locked}
+                  resumeDraft={resumeDraft}
+                  initialCurrency={asset}
+                  onTopup={openTopup}
+                  onExchange={(currency) => {
+                    if (!resumeDraft) editForm(() => setAsset(currency));
+                    resumeExchange();
+                  }}
+                  onOrder={(id) => {
+                    setSelected(id);
+                    go("detail");
+                  }}
+                />
               )}
               {page === "profile" && role === "customer" && (
                 <>
@@ -2192,23 +2200,92 @@ export default function Home() {
                       <h2>{currentCustomer?.name}</h2>
                       <p>
                         {actor === "company-demo" ? "商户企业账户" : "个人账户"}{" "}
-                        · {workspace ? "独立账号 · 未完成真实身份认证" : "仅演示身份，不构成真实认证"}
+                        · {workspace ? "已登录账户" : "账户资料"}
                       </p>
                     </div>
                     <Badge status={currentCustomer?.status} />
                   </section>
-                  {profileTab === "home" ? <div className="profile-menu">
-                    <button onClick={() => setProfileTab("recipients")}><span className="circle-icon"><Bank size={24}/></span><div><strong>收款人管理</strong><small>{beneficiaries.length} 个已保存账户 · 添加后即可使用</small></div><ArrowRight size={19}/></button>
-                    <button onClick={() => setProfileTab("certification")}><span className="circle-icon"><User size={24}/></span><div><strong>账户资料</strong><small>查看{actor === "company-demo" ? "企业" : "个人"}演示资料与账户状态</small></div><ArrowRight size={19}/></button>
-                    <button onClick={() => setProfileTab("security")}><span className="circle-icon"><Lock size={24}/></span><div><strong>安全与隐私</strong><small>登录、资料可见范围与演示边界</small></div><ArrowRight size={19}/></button>
-                    <button onClick={() => setSupport(true)}><span className="circle-icon"><Question size={24}/></span><div><strong>帮助与演示说明</strong><small>资金、数据保存及回单使用说明</small></div><ArrowRight size={19}/></button>
-                  </div> : <div className="profile-subheading"><button className="button text back-link" onClick={() => setProfileTab("home")}><ArrowLeft size={16}/> 返回用户中心</button><h2>{profileTab === "recipients" ? "收款人管理" : profileTab === "security" ? "安全与隐私" : "账户资料"}</h2></div>}
-                  {profileTab === "security" && <section className="card security-summary"><h3>账户与数据保护</h3><p>{workspace ? "当前使用独立密码账号与安全会话。邮箱尚未验证，未接入 MFA 或找回密码；充值与付款关闭。" : "当前入口用于虚构数据演示，个人、商户和管理员均为可切换的演示角色，不是独立登录账号；数据范围以上方连接说明为准。"}</p><ul><li>业务账号入口按客户隔离；公开演示访客共享虚构数据，不应录入真实资料。</li><li>收款账户仅保存掩码资料，保存不代表真实身份或银行归属验证。</li><li>本演示不提供密码修改、双重验证设置或真实资金操作，请勿输入密码、完整证件或支付卡资料。</li></ul></section>}
+                  {profileTab === "home" ? (
+                    <div className="profile-menu">
+                      <button onClick={() => setProfileTab("recipients")}>
+                        <span className="circle-icon">
+                          <Bank size={24} />
+                        </span>
+                        <div>
+                          <strong>收款人管理</strong>
+                          <small>
+                            {beneficiaries.length} 个已保存账户 · 添加后即可使用
+                          </small>
+                        </div>
+                        <ArrowRight size={19} />
+                      </button>
+                      <button onClick={() => setProfileTab("certification")}>
+                        <span className="circle-icon">
+                          <User size={24} />
+                        </span>
+                        <div>
+                          <strong>账户资料</strong>
+                          <small>
+                            查看{actor === "company-demo" ? "企业" : "个人"}
+                            资料与账户状态
+                          </small>
+                        </div>
+                        <ArrowRight size={19} />
+                      </button>
+                      <button onClick={() => setProfileTab("security")}>
+                        <span className="circle-icon">
+                          <Lock size={24} />
+                        </span>
+                        <div>
+                          <strong>安全与隐私</strong>
+                          <small>登录与资料管理</small>
+                        </div>
+                        <ArrowRight size={19} />
+                      </button>
+                      <button onClick={() => setSupport(true)}>
+                        <span className="circle-icon">
+                          <Question size={24} />
+                        </span>
+                        <div>
+                          <strong>帮助与支持</strong>
+                          <small>资金、数据保存及回单使用说明</small>
+                        </div>
+                        <ArrowRight size={19} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="profile-subheading">
+                      <button
+                        className="button text back-link"
+                        onClick={() => setProfileTab("home")}
+                      >
+                        <ArrowLeft size={16} /> 返回用户中心
+                      </button>
+                      <h2>
+                        {profileTab === "recipients"
+                          ? "收款人管理"
+                          : profileTab === "security"
+                            ? "安全与隐私"
+                            : "账户资料"}
+                      </h2>
+                    </div>
+                  )}
+                  {profileTab === "security" && (
+                    <section className="card security-summary">
+                      <h3>账户与数据保护</h3>
+                      <p>请妥善保管登录信息，使用完毕后可退出账户。</p>
+                      <ul>
+                        <li>收款账户和订单按客户归属管理。</li>
+                        <li>回单由管理员按订单归属提供。</li>
+                        <li>需要调整账户资料时，请联系管理员。</li>
+                      </ul>
+                    </section>
+                  )}
                   {profileTab === "recipients" && (
                     <div className="profile-add">
                       <label>
                         新增账户地区
-                        <select
+                        <SelectField
                           aria-label="新增账户地区"
                           value={market}
                           onChange={(e) =>
@@ -2217,7 +2294,11 @@ export default function Home() {
                         >
                           <option value="CNY">中国大陆 · CNY</option>
                           <option value="USD">美国 · USD</option>
-                        </select>
+                          <option value="EUR">欧元区 · EUR</option>
+                          <option value="MXN">墨西哥 · MXN</option>
+                          <option value="BRL">巴西 · BRL</option>
+                          <option value="GBP">英国 · GBP</option>
+                        </SelectField>
                       </label>
                       <button
                         className="button"
@@ -2225,7 +2306,7 @@ export default function Home() {
                         disabled={locked}
                       >
                         <Plus size={17} />
-                        新增模拟收款账户
+                        新增收款账户
                       </button>
                     </div>
                   )}
@@ -2344,7 +2425,7 @@ export default function Home() {
                                 editForm(() => setEnteredAmount(e.target.value))
                               }
                             />
-                            <select
+                            <SelectField
                               aria-label={
                                 amountMode === "target_payout"
                                   ? "出款币种"
@@ -2367,6 +2448,10 @@ export default function Home() {
                                 <>
                                   <option>CNY</option>
                                   <option>USD</option>
+                                  <option>EUR</option>
+                                  <option>MXN</option>
+                                  <option>BRL</option>
+                                  <option>GBP</option>
                                 </>
                               ) : (
                                 <>
@@ -2374,14 +2459,14 @@ export default function Home() {
                                   <option>USDC</option>
                                 </>
                               )}
-                            </select>
+                            </SelectField>
                           </div>
                         </label>
                         <div className="exchange-currency-row">
                           {amountMode === "target_payout" ? (
                             <label>
                               支付稳定币
-                              <select
+                              <SelectField
                                 aria-label="支付稳定币"
                                 value={asset}
                                 disabled={busy}
@@ -2391,12 +2476,12 @@ export default function Home() {
                               >
                                 <option>USDT</option>
                                 <option>USDC</option>
-                              </select>
+                              </SelectField>
                             </label>
                           ) : (
                             <label>
                               收款地区 / 币种
-                              <select
+                              <SelectField
                                 aria-label="收款地区"
                                 value={market}
                                 disabled={busy}
@@ -2409,7 +2494,11 @@ export default function Home() {
                               >
                                 <option value="CNY">中国大陆 · CNY</option>
                                 <option value="USD">美国 · USD</option>
-                              </select>
+                                <option value="EUR">欧元区 · EUR</option>
+                                <option value="MXN">墨西哥 · MXN</option>
+                                <option value="BRL">巴西 · BRL</option>
+                                <option value="GBP">英国 · GBP</option>
+                              </SelectField>
                             </label>
                           )}
                           <div className="exchange-available">
@@ -2444,7 +2533,7 @@ export default function Home() {
                             <User size={22} />
                           </div>
                           <div>
-                            <select
+                            <SelectField
                               aria-label="选择收款人"
                               value={chosenBeneficiaryId}
                               disabled={!usableBeneficiaries.length || busy}
@@ -2460,7 +2549,7 @@ export default function Home() {
                                   {b.name}
                                 </option>
                               ))}
-                            </select>
+                            </SelectField>
                             <p>
                               {recipient
                                 ? `${recipient.accountMasked} · ${recipient.currency}`
@@ -2483,15 +2572,14 @@ export default function Home() {
                           </span>
                         </div>
                         <details className="exchange-details">
-                          <summary>费用与演示规则</summary>
+                          <summary>费用说明</summary>
                           <p>
                             {amountMode === "total_deposit"
                               ? "支付总额包含服务费与通道费，扣除费用后的本金用于兑换。"
                               : "按目标到账金额反算稳定币本金及费用；收款银行如另收费，以实际渠道规则为准。"}
                           </p>
                           <p>
-                            报价由服务端计算。仅使用 MOCK
-                            网络与虚构账户，不执行真实付款；收款账户保存不代表身份、账户归属或合规验证。
+                            报价在有效期内锁定汇率及费用，提交前请核对收款信息。
                           </p>
                           <p>
                             付款回单可后补，不阻塞付款。历史订单与回单可在“订单”查看。
@@ -2511,7 +2599,7 @@ export default function Home() {
                                 : "已过期"}
                             </Badge>
                           ) : (
-                            <span className="muted small">MOCK</span>
+                            <span className="muted small">待报价</span>
                           )}
                         </div>
                         <p className="quote-label">收款人预计到账</p>
@@ -2596,7 +2684,7 @@ export default function Home() {
                         <details className="exchange-details">
                           <summary>报价来源</summary>
                           <p>
-                            {quote?.configVersion ?? "MOCK 报价源"} ·
+                            {quote ? "费率已锁定" : "报价待生成"} ·
                             样例费率，不构成实时市场报价。
                           </p>
                         </details>
@@ -2642,7 +2730,7 @@ export default function Home() {
                                 className="link"
                                 onClick={() =>
                                   downloadCSV(
-                                    "汇途-MOCK批量模板.csv",
+                                    "汇途批量模板.csv",
                                     template()
                                       .split("\n")
                                       .map((line) => line.split(",")),
@@ -2655,8 +2743,8 @@ export default function Home() {
                             </div>
                             <Note>
                               批量 CSV 的 sourceAmount
-                              始终表示兑换本金，费用另加。 CSV 将提交给隔离 MOCK
-                              API 校验与保存。仅导入虚构资料；最多 100
+                              始终表示兑换本金，费用另加。 CSV 将提交给隔离 API
+                              校验与保存。仅导入虚构资料；最多 100
                               行、100KB，使用当前客户已保存的收款账户 ID。
                             </Note>
                             <div className="upload-zone">
@@ -2921,7 +3009,7 @@ export default function Home() {
                               }
                               onClick={() => void submitBatch()}
                             >
-                              {busy ? "正在提交…" : "确认并冻结模拟余额"}
+                              {busy ? "正在提交…" : "确认并冻结余额"}
                               <ArrowRight size={18} />
                             </button>
                             <button
@@ -2957,7 +3045,7 @@ export default function Home() {
                             </button>
                           </div>
                           <p className="muted small">
-                            仅为 MOCK
+                            仅为
                             模拟报价与付款，提交时服务端会再次检查余额和有效期。
                           </p>
                         </>
@@ -2978,7 +3066,7 @@ export default function Home() {
                                 (i) => i.status === "created",
                               ).length
                             }{" "}
-                            笔订单已创建，对应模拟余额已冻结。
+                            笔订单已创建，对应余额已冻结。
                           </p>
                           <p className="muted small">
                             {visibleBatch.batch.clientBatchId}
@@ -3237,7 +3325,18 @@ export default function Home() {
                             )?.accountMasked
                           }{" "}
                           ·{" "}
-                          {quote.payoutCurrency === "CNY" ? "中国大陆" : "美国"}{" "}
+                          {
+                            (
+                              {
+                                CNY: "中国大陆",
+                                USD: "美国",
+                                EUR: "欧元区",
+                                GBP: "英国",
+                                MXN: "墨西哥",
+                                BRL: "巴西",
+                              } as Record<string, string>
+                            )[quote.payoutCurrency]
+                          }{" "}
                           · {quote.payoutCurrency}
                         </p>
                         <div className="ruleline" />
@@ -3272,17 +3371,19 @@ export default function Home() {
                             </div>
                             <div>
                               <dt>报价版本</dt>
-                              <dd>{quote.configVersion}</dd>
+                              <dd>
+                                {quote.configVersion.replace(
+                                  /^mock-pricing-/i,
+                                  "",
+                                )}
+                              </dd>
                             </div>
                             <div>
                               <dt>到期时间</dt>
                               <dd>{date(quote.expiresAt)}</dd>
                             </div>
                           </dl>
-                          <p>
-                            MOCK
-                            模拟网络，无真实充值地址或付款。报价由服务端生成并在提交时再次核验有效期。
-                          </p>
+                          <p>提交订单时将再次核对报价有效期。</p>
                         </details>
                         <label className="checkbox">
                           <input
@@ -3320,7 +3421,7 @@ export default function Home() {
                           }
                           onClick={() => void createOrder()}
                         >
-                          {busy ? "正在提交…" : "确认结汇并冻结模拟余额"}
+                          {busy ? "正在提交…" : "确认结汇并冻结余额"}
                           <ArrowRight size={20} />
                         </button>
                         <div className="actions centered">
@@ -3345,7 +3446,7 @@ export default function Home() {
                         <CheckCircle size={34} />
                       </div>
                       <h2>结汇订单已提交</h2>
-                      <p>订单 {shortId(order.id)} · MOCK 模拟</p>
+                      <p>订单 {shortId(order.id)}</p>
                       {fundingPanel(order)}
                       <div className="actions">
                         <button className="button" onClick={() => go("detail")}>
@@ -3403,7 +3504,7 @@ export default function Home() {
                         }
                         onClick={() =>
                           openCommand({
-                            title: "新增模拟收款账户",
+                            title: "新增收款账户",
                             description:
                               "创建中国大陆 CNY 路线的虚构账户（尾号 8888）。保存后即可使用，无需人工审核，仅检查字段和格式；不收集或验证真实银行账号。",
                             path: "beneficiaries",
@@ -3416,7 +3517,7 @@ export default function Home() {
                             fields: [
                               {
                                 key: "customerId",
-                                label: "所属演示客户",
+                                label: "所属客户",
                                 value:
                                   role === "customer"
                                     ? customerId
@@ -3430,8 +3531,8 @@ export default function Home() {
                               },
                               {
                                 key: "name",
-                                label: "虚构收款人名称",
-                                value: "MOCK 新收款人",
+                                label: "收款人名称",
+                                value: "新收款人",
                               },
                             ],
                             button: "保存收款账户",
@@ -3440,7 +3541,7 @@ export default function Home() {
                         }
                       >
                         <Plus size={18} />
-                        新增演示收款人
+                        新增收款人
                       </button>
                     )}
                   </div>
@@ -3464,8 +3565,10 @@ export default function Home() {
                         <h2>{b.name}</h2>
                         <p>{b.accountMasked}</p>
                         <span className="tag">
-                          {b.country === "CN" ? "中国大陆" : "美国"} ·{" "}
-                          {b.currency}
+                          {new Intl.DisplayNames(["zh-CN"], {
+                            type: "region",
+                          }).of(b.country)}{" "}
+                          · {b.currency}
                         </span>
                         <p className="record-id">收款账户 ID · {b.id}</p>
                         <div className="ruleline" />
@@ -3531,7 +3634,7 @@ export default function Home() {
                               {
                                 key: "name",
                                 label: "虚构客户名称",
-                                value: "MOCK 新企业",
+                                value: "新企业",
                               },
                             ],
                             button: "创建待审核客户",
@@ -3584,7 +3687,7 @@ export default function Home() {
                                   void mutate(
                                     `customers/${c.id}/review`,
                                     { status: "approved" },
-                                    "客户的 MOCK 审核状态已更新为通过。",
+                                    "客户审核已通过。",
                                   )
                                 }
                               >
@@ -3599,7 +3702,7 @@ export default function Home() {
                                   openCommand({
                                     title: "暂停演示客户",
                                     description:
-                                      "暂停后，服务器会阻止该客户的新报价和受限资金操作。仅改变 MOCK 客户状态。",
+                                      "暂停后，该客户将无法创建新报价或执行受限操作。",
                                     path: `customers/${c.id}/review`,
                                     base: { status: "suspended" },
                                     button: "暂停演示客户",
@@ -3637,15 +3740,36 @@ export default function Home() {
                     }}
                   />
                 ) : (
-                  <CustomerOrders key={actor} data={data} request={request} onDownload={downloadPublishedReceipt}
-                    onOpen={(id) => { setSelected(id); go("detail"); }}
+                  <CustomerOrders
+                    key={actor}
+                    data={data}
+                    request={request}
+                    onDownload={downloadPublishedReceipt}
+                    onOpen={(id) => {
+                      setSelected(id);
+                      go("detail");
+                    }}
                     onResumeBatch={(id) => {
-                      const selectedBatch = data.batches?.find((b) => b.id === id && b.customerId === customerId);
+                      const selectedBatch = data.batches?.find(
+                        (b) => b.id === id && b.customerId === customerId,
+                      );
                       if (!selectedBatch) return;
-                      setBatch({batch:selectedBatch,items:data.batchItems?.filter((i) => i.batchId === id) ?? []});
-                      setBatchPreview(null); setBatchChecked(false); setBatchKey(selectedBatch.clientBatchId);
-                      setMode("batch"); setStep(1); setQuote(null); setChecked(false); go("payment");
-                    }} />
+                      setBatch({
+                        batch: selectedBatch,
+                        items:
+                          data.batchItems?.filter((i) => i.batchId === id) ??
+                          [],
+                      });
+                      setBatchPreview(null);
+                      setBatchChecked(false);
+                      setBatchKey(selectedBatch.clientBatchId);
+                      setMode("batch");
+                      setStep(1);
+                      setQuote(null);
+                      setChecked(false);
+                      go("payment");
+                    }}
+                  />
                 ))}
               {page === "overview" && (
                 <OverviewPanel
@@ -3724,19 +3848,20 @@ export default function Home() {
                           onClick={seedScenario}
                         >
                           <Plus size={17} />
-                          创建 MOCK 场景
+                          创建示例订单
                         </button>
-                        {(!workspace && canResetDemoSession(actor, health?.persistence)) && (
-                          <button
-                            className="button outline reset-session"
-                            disabled={locked}
-                            onClick={resetSession}
-                            aria-label="重置当前会话演示数据"
-                          >
-                            <ArrowsClockwise size={17} />
-                            重置当前会话
-                          </button>
-                        )}
+                        {!workspace &&
+                          canResetDemoSession(actor, health?.persistence) && (
+                            <button
+                              className="button outline reset-session"
+                              disabled={locked}
+                              onClick={resetSession}
+                              aria-label="重置当前会话演示数据"
+                            >
+                              <ArrowsClockwise size={17} />
+                              重置当前会话
+                            </button>
+                          )}
                       </div>
                     )}
                   </div>
@@ -3751,7 +3876,7 @@ export default function Home() {
                         <ShieldCheck size={24} />
                         <h3>统一商家工作台</h3>
                         <p>
-                          官方自营模拟订单核对后即可确认，系统自动生成内部记录；回单可后补。未知结果先核实，禁止重复确认。
+                          官方自营订单核对后即可确认，系统自动生成内部记录；回单可后补。未知结果先核实，禁止重复确认。
                         </p>
                         <Note>
                           所有操作受服务端控制。客户、商家和伙伴入口仅用于演示，不能替代正式登录。
@@ -3773,6 +3898,8 @@ export default function Home() {
               )}
               {page === "pricing" && (
                 <PricingSettingsPanel
+                  automatic={!!workspace}
+                  onReload={() => void reload()}
                   current={data.pricingCurrent}
                   history={data.pricingHistory ?? []}
                   busy={locked}
@@ -3872,11 +3999,7 @@ export default function Home() {
                                         description:
                                           "服务端根据差异类型校验。未分配入金不能仅凭文字标记解决；需要实现相应资金分配流程。",
                                         path: `discrepancies/${d.id}/resolve`,
-                                        fields: [
-                                          evidence(
-                                            "MOCK: independent investigation evidence",
-                                          ),
-                                        ],
+                                        fields: [evidence("")],
                                         button: "提交处理依据",
                                         success:
                                           "差异处理请求已由服务端校验并保存。",
@@ -4225,35 +4348,33 @@ export default function Home() {
             </>
           )}
           <footer>
-            <span>
-              <ShieldCheck size={15} />
-              MOCK 模式，无真实资金操作
-            </span>
-            <span>{storageLabel}</span>
-            <button onClick={() => setSupport((v) => !v)}>查看边界说明</button>
+            <span>汇途 · 全球代付</span>
+            <button onClick={() => setSupport((v) => !v)}>帮助与支持</button>
           </footer>
         </main>
         <nav
           className={"mobile-nav " + (role === "admin" ? "admin-mobile" : "")}
           aria-label="移动导航"
         >
-          {navs[role].map(([p, label, I]) => (
-            <button
-              key={p}
-              className={
-                page === p ||
-                (p === "orders" && page === "detail") ||
-                (p === "profile" &&
-                  ["recipients", "certification"].includes(page))
-                  ? "active"
-                  : ""
-              }
-              onClick={() => go(p)}
-            >
-              <I size={21} />
-              <span>{label}</span>
-            </button>
-          ))}
+          {navs[role]
+            .filter(([p]) => p !== "routes" || !!workspace)
+            .map(([p, label, I]) => (
+              <button
+                key={p}
+                className={
+                  page === p ||
+                  (p === "orders" && page === "detail") ||
+                  (p === "profile" &&
+                    ["recipients", "certification"].includes(page))
+                    ? "active"
+                    : ""
+                }
+                onClick={() => go(p)}
+              >
+                <I size={21} />
+                <span>{label}</span>
+              </button>
+            ))}
         </nav>
       </div>
       {toast && (
@@ -4289,7 +4410,7 @@ export default function Home() {
               <label key={field.key}>
                 {field.label}
                 {field.type === "select" ? (
-                  <select
+                  <SelectField
                     required={field.required !== false}
                     disabled={busy}
                     value={commandValues[field.key] ?? ""}
@@ -4305,7 +4426,7 @@ export default function Home() {
                         {label}
                       </option>
                     ))}
-                  </select>
+                  </SelectField>
                 ) : field.type === "textarea" ? (
                   <textarea
                     required={field.required !== false}
@@ -4337,7 +4458,6 @@ export default function Home() {
                 )}
               </label>
             ))}
-            <Note>此操作仅发送到隔离 MOCK API，不执行真实转账。</Note>
             {commandError && (
               <div className="modal-error" role="alert">
                 {commandError}

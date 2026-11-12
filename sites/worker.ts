@@ -4,6 +4,7 @@
  * D1 keeps bounded synthetic history per authenticated Site visitor when bound.
  * Cookies only hold request controls; no DB means disposable local preview mode.
  */
+import { referencePricing } from "../packages/core/src/market-reference";
 import { D1MockStore, D1_MAX_STATE_BYTES, type D1Database } from "./d1-store";
 import { Buffer } from "buffer";
 import { createHash, randomUUID } from "node:crypto";
@@ -29,6 +30,7 @@ export interface ReceiptBucket {
   get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
 }
 export interface PreviewEnvironment {
+  MARKET_RATES?: { fetch(request: Request): Promise<Response> };
   BUCKET?: ReceiptBucket;
   DB?: D1Database;
   ASSETS: { fetch(request: Request): Promise<Response> };
@@ -1061,6 +1063,44 @@ export function createPreviewWorker(options: { now?: () => number } = {}) {
               410,
               "Preview session expired while reading this command.",
             );
+          if (
+            env.MARKET_RATES &&
+            (url.pathname === "/api/dashboard" ||
+              /\/(?:quotes|batch-quotes)$/.test(url.pathname))
+          ) {
+            const required = isCommand;
+            try {
+              const response = await env.MARKET_RATES.fetch(
+                new Request("https://reference.internal/"),
+              );
+              const status = (await response.json()) as any;
+              const snapshot = status.snapshot;
+              if (
+                !response.ok ||
+                status.stale ||
+                !snapshot ||
+                !Number.isFinite(Date.parse(snapshot.fetchedAt)) ||
+                Date.parse(snapshot.fetchedAt) > now() ||
+                now() - Date.parse(snapshot.fetchedAt) > 30 * 60000
+              )
+                throw new Error("stale");
+              const system = {
+                id: "system-market-reference",
+                role: "merchant_admin" as const,
+              };
+              const current = (await session!.core.dashboard(system))
+                .pricingCurrent!;
+              if (current.marketReference?.batchId !== snapshot.batchId)
+                await session!.core.publishPricing(
+                  system,
+                  referencePricing(snapshot, current),
+                  snapshot,
+                );
+            } catch (error) {
+              if (required)
+                fail("REFERENCE_UNAVAILABLE", 503, "汇率暂不可用，请稍后重试");
+            }
+          }
           return matching.run(session!, actor, body, id, now);
         });
         return value instanceof Response ? value : json(value, 200, cookie);

@@ -1,4 +1,5 @@
 "use client";
+import SelectField from "./SelectField";
 import { useState } from "react";
 import type { Order, Customer, Beneficiary } from "./models";
 import { date, money } from "./models";
@@ -30,7 +31,7 @@ export default function OrderHistory({
     setFilters((old) => ({ ...old, [key]: value }));
   const rows = filterHistory(orders, filters, customers, beneficiaries);
   const exportRows = () =>
-    downloadCSV("MOCK-orders-filtered.csv", [
+    downloadCSV("订单记录.csv", [
       [
         "内部订单号",
         "客户",
@@ -45,7 +46,7 @@ export default function OrderHistory({
         "法币",
         "出款方",
         "记录号类型",
-        "MOCK内部记录号",
+        "内部记录号",
         "人工登记渠道参考号",
       ],
       ...rows.map((o) => [
@@ -82,12 +83,7 @@ export default function OrderHistory({
           导出筛选结果
         </button>
       </div>
-      <Note>
-        {persistence === "d1_mock"
-          ? "MOCK 历史记录保存于服务端，刷新和实例重启不会清空。数据共享或隔离范围以上方连接说明为准，公开演示勿输入真实资料。"
-          : "当前仅显示本次演示会话内的全部订单。临时预览重启或会话到期后记录会清空。"}{" "}
-        此列表独立于出款工作台，包含已付款和已取消订单。
-      </Note>
+      <Note>包含处理中、已完成和已取消的订单，可按条件筛选并导出。</Note>
       <div className="history-filters">
         <label className="history-search">
           搜索
@@ -100,7 +96,7 @@ export default function OrderHistory({
         </label>
         <label>
           订单状态
-          <select
+          <SelectField
             value={filters.status}
             onChange={(e) => set("status", e.target.value)}
           >
@@ -112,11 +108,11 @@ export default function OrderHistory({
             <option value="unknown">结果待核实</option>
             <option value="failed">确认失败</option>
             <option value="cancelled">已取消</option>
-          </select>
+          </SelectField>
         </label>
         <label>
           用户 / 商户
-          <select
+          <SelectField
             value={filters.customerId}
             onChange={(e) => set("customerId", e.target.value)}
           >
@@ -126,29 +122,31 @@ export default function OrderHistory({
                 {c.name} · {c.kind === "company" ? "商户" : "个人"}
               </option>
             ))}
-          </select>
+          </SelectField>
         </label>
         <label>
           币种
-          <select
+          <SelectField
             value={filters.currency}
             onChange={(e) => set("currency", e.target.value)}
           >
             <option value="all">全部币种</option>
-            {["USDT", "USDC", "CNY", "USD"].map((c) => (
-              <option key={c}>{c}</option>
-            ))}
-          </select>
+            {["USDT", "USDC", "CNY", "USD", "EUR", "MXN", "BRL", "GBP"].map(
+              (c) => (
+                <option key={c}>{c}</option>
+              ),
+            )}
+          </SelectField>
         </label>
         <label>
           时间口径
-          <select
+          <SelectField
             value={filters.timeField}
             onChange={(e) => set("timeField", e.target.value)}
           >
             <option value="createdAt">订单创建时间 UTC</option>
             <option value="paidAt">登记付款时间 UTC</option>
-          </select>
+          </SelectField>
         </label>
         <label>
           起始日期 UTC

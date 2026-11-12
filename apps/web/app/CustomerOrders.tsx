@@ -109,7 +109,7 @@ export default function CustomerOrders({
     setReceiptOrderId(null);
   };
   const exportOrders = () =>
-    downloadCSV("MOCK-订单记录.csv", [
+    downloadCSV("订单记录.csv", [
       [
         "订单号",
         "创建时间 UTC",
@@ -146,7 +146,7 @@ export default function CustomerOrders({
       }),
     ]);
   const exportBatches = () =>
-    downloadCSV("MOCK-批次记录.csv", [
+    downloadCSV("批次记录.csv", [
       [
         "批次编号",
         "批次参考号",
@@ -234,10 +234,7 @@ export default function CustomerOrders({
             className="button outline"
             disabled={!rows.length}
             onClick={() =>
-              downloadCSV(
-                "MOCK-批次逐行结果.csv",
-                customerBatchExport(batch, rows),
-              )
+              downloadCSV("批次逐行结果.csv", customerBatchExport(batch, rows))
             }
           >
             <DownloadSimple size={16} />
@@ -633,7 +630,6 @@ export default function CustomerOrders({
           清除筛选
         </button>
       )}
-      <p className="co-footnote">MOCK 演示记录，不代表真实银行付款。</p>
     </section>
   );
 }

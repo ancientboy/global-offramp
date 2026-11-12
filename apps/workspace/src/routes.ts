@@ -53,6 +53,8 @@ export const draftInput = z
         });
   });
 export async function routeCatalog(auth: Auth, account: Account) {
+  const state = await auth.store.read();
+  const pricing = state.pricingHistory?.at(-1);
   const drafts =
     account.role === "merchant_admin"
       ? (
@@ -70,6 +72,14 @@ export async function routeCatalog(auth: Auth, account: Account) {
       const d = drafts.find((row) => row.route_id === route.id);
       return {
         ...route,
+        availableForQuotes:
+          !!pricing?.routes[route.targetCurrency]?.enabled &&
+          pricing.rates.some(
+            (r) =>
+              r.sourceCurrency === route.sourceAsset &&
+              r.payoutCurrency === route.targetCurrency,
+          ) &&
+          Date.parse(pricing.baseline.expiresAt) > auth.now(),
         ...(d
           ? { draft: d.document, version: d.version, updatedAt: d.updated_at }
           : { version: 0 }),

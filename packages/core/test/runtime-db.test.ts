@@ -146,3 +146,42 @@ test("runtime PostgreSQL rejects empty, unbalanced, sub-cent and false reversal 
     await db.close();
   }
 });
+
+test("multi-fiat migration preserves existing journals and enforces cents and append-only guards", async () => {
+  const db = new PGlite();
+  try {
+    await db.exec(sql);
+    const migration = readFileSync("db/migrations/005_multi_fiat.sql", "utf8");
+    await db.exec(migration);
+    await db.exec(migration);
+    for (const currency of ["CNY", "USD", "EUR", "GBP", "MXN", "BRL"]) {
+      const id = randomUUID();
+      await db.exec(
+        `BEGIN;INSERT INTO runtime.journals(id,business_key,created_at) VALUES('${id}','six-${currency}',now());INSERT INTO runtime.ledger_lines(journal_id,account,currency,debit,credit) VALUES('${id}','a','${currency}',100.01,0),('${id}','b','${currency}',0,100.01);COMMIT;`,
+      );
+      const bad = randomUUID();
+      await assert.rejects(
+        () =>
+          db.exec(
+            `BEGIN;INSERT INTO runtime.journals(id,business_key,created_at) VALUES('${bad}','bad-${currency}',now());INSERT INTO runtime.ledger_lines(journal_id,account,currency,debit,credit) VALUES('${bad}','a','${currency}',0.001,0),('${bad}','b','${currency}',0,0.001);COMMIT;`,
+          ),
+        /check constraint/,
+      );
+      await db.exec("ROLLBACK");
+    }
+    assert.equal(
+      (
+        await db.query<{ n: number }>(
+          "SELECT count(*)::int n FROM runtime.journals",
+        )
+      ).rows[0].n,
+      6,
+    );
+    await assert.rejects(
+      () => db.exec("UPDATE runtime.ledger_lines SET debit=1"),
+      /append-only/,
+    );
+  } finally {
+    await db.close();
+  }
+});

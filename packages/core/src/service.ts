@@ -11,6 +11,9 @@ import {
   demand,
   proportion,
   SCALE,
+  FIAT_CODES,
+  countryMatchesCurrency,
+  defaultPayoutCountry,
   units,
 } from "./money";
 import {
@@ -48,7 +51,7 @@ const quoteInput = z
     sourceCurrency: z.enum(["USDT", "USDC"]),
     sourceAmount: decimalString.optional(),
     targetAmount: decimalString.optional(),
-    payoutCurrency: z.enum(["CNY", "USD"]).optional(),
+    payoutCurrency: z.enum(FIAT_CODES).optional(),
     amountMode: z
       .enum(["principal", "total_deposit", "target_payout"])
       .optional(),
@@ -102,7 +105,11 @@ export class OfframpService {
     );
     return calculatePricing(v, this.clock(), "preview");
   }
-  async publishPricing(actor: Actor, input: unknown) {
+  async publishPricing(
+    actor: Actor,
+    input: unknown,
+    marketReference?: import("./types").PricingVersion["marketReference"],
+  ) {
     authorize(actor, "payout.record");
     demand(
       actor.role === "merchant_admin",
@@ -124,6 +131,21 @@ export class OfframpService {
       );
       p.publishedAt = this.clock().toISOString();
       p.publishedBy = actor.id;
+      const current = this.currentPricing(s);
+      const sameBaseline = Object.entries(p.baseline).every(
+        ([key, value]) =>
+          current.baseline[key as keyof typeof p.baseline] === value,
+      );
+      if (marketReference) {
+        demand(
+          marketReference.fetchedAt === p.baseline.asOf,
+          "INVALID_REFERENCE",
+          "Reference timestamp mismatch",
+        );
+        p.marketReference = structuredClone(marketReference);
+      } else if (sameBaseline && current.marketReference) {
+        p.marketReference = structuredClone(current.marketReference);
+      }
       (s.pricingHistory ??= []).push(p);
       this.audit(s, actor, "pricing.published", p.version, {
         previousVersion: v.expectedVersion,
@@ -167,7 +189,9 @@ export class OfframpService {
             other.isDefault = false;
       if (existing) providers[providers.indexOf(existing)] = p;
       else providers.push(p);
-      for (const currency of ["CNY", "USD"] as const)
+      for (const currency of FIAT_CODES.filter(
+        (c) => this.currentPricing(s).routes[c]?.enabled,
+      ))
         demand(
           providers.filter(
             (x) =>
@@ -261,13 +285,15 @@ export class OfframpService {
         r.sourceCurrency === input.sourceCurrency &&
         r.payoutCurrency === beneficiary.currency,
     )!;
+    demand(rateRow, "ROUTE_DISABLED", "Currency reference is not configured");
     const route = {
       ...this.config.routes[beneficiary.currency],
       ...pricing.routes[beneficiary.currency],
       ...rateRow,
     };
     demand(
-      route.enabled && route.country === beneficiary.country,
+      route.enabled &&
+        countryMatchesCurrency(beneficiary.currency, beneficiary.country),
       "ROUTE_DISABLED",
       "Route unavailable",
     );
@@ -417,8 +443,8 @@ export class OfframpService {
       .object({
         customerId: id,
         name: z.string().trim().min(1).max(100),
-        country: z.enum(["CN", "US"]),
-        currency: z.enum(["CNY", "USD"]),
+        country: z.string().regex(/^[A-Z]{2}$/),
+        currency: z.enum(FIAT_CODES),
         accountToken: id,
         accountMasked: z.string().regex(/^\*{4} \d{4}$/),
       })
@@ -428,7 +454,7 @@ export class OfframpService {
     return this.store.transaction((s) => {
       this.checkCustomer(s, v.customerId);
       demand(
-        this.config.routes[v.currency].country === v.country,
+        countryMatchesCurrency(v.currency, v.country),
         "ROUTE_MISMATCH",
         "Country and currency mismatch",
       );
@@ -1175,20 +1201,46 @@ export class OfframpService {
   /** Upgrade a historical administrator confirmation; never execute or record a second payout. */
   async completeRecordedPayment(actor: Actor, orderId: string) {
     authorize(actor, "payout.record");
-    demand(actor.role === "merchant_admin", "FORBIDDEN", "Merchant administrator required");
+    demand(
+      actor.role === "merchant_admin",
+      "FORBIDDEN",
+      "Merchant administrator required",
+    );
     return this.store.transaction((s) => {
       const o = this.order(s, orderId);
       const confirmation = o.paymentConfirmation;
-      demand(o.payoutStatus === "sent" && confirmation, "INVALID_STATE", "Existing administrator payment confirmation required");
-      demand(confirmation.confirmedBy &&
-        ["admin_attestation", "mock_internal_record"].includes(confirmation.verification) &&
-        confirmation.actualAmount === o.quote.payoutAmount &&
-        s.attempts.some(a => a.orderId === o.id && a.state === "sent" &&
-          a.providerReference === confirmation.providerReference &&
-          (a.referenceKind ?? "external") === (confirmation.referenceKind ?? "external")),
-        "PAYMENT_CONFIRMATION_MISMATCH", "Existing confirmation and sent attempt must match the order");
-      demand(!s.refunds.some(r => r.orderId === o.id && r.kind === "principal"), "REFUND_CONFLICT", "Principal refund blocks completion");
-      demand(!s.discrepancies.some(d => d.orderId === o.id && d.status === "open"), "OPEN_DISCREPANCY", "Resolve open discrepancies before completion");
+      demand(
+        o.payoutStatus === "sent" && confirmation,
+        "INVALID_STATE",
+        "Existing administrator payment confirmation required",
+      );
+      demand(
+        confirmation.confirmedBy &&
+          ["admin_attestation", "mock_internal_record"].includes(
+            confirmation.verification,
+          ) &&
+          confirmation.actualAmount === o.quote.payoutAmount &&
+          s.attempts.some(
+            (a) =>
+              a.orderId === o.id &&
+              a.state === "sent" &&
+              a.providerReference === confirmation.providerReference &&
+              (a.referenceKind ?? "external") ===
+                (confirmation.referenceKind ?? "external"),
+          ),
+        "PAYMENT_CONFIRMATION_MISMATCH",
+        "Existing confirmation and sent attempt must match the order",
+      );
+      demand(
+        !s.refunds.some((r) => r.orderId === o.id && r.kind === "principal"),
+        "REFUND_CONFLICT",
+        "Principal refund blocks completion",
+      );
+      demand(
+        !s.discrepancies.some((d) => d.orderId === o.id && d.status === "open"),
+        "OPEN_DISCREPANCY",
+        "Resolve open discrepancies before completion",
+      );
       this.completePayout(s, o, actor, confirmation.verification);
       return this.orderView(o, actor);
     });
@@ -1568,7 +1620,9 @@ export class OfframpService {
     });
   }
   /** Small, unscanned DEMO attachment stored in the existing mock state, never public object storage. */
-  get receipts() { return new ReceiptService(this.store, this.clock); }
+  get receipts() {
+    return new ReceiptService(this.store, this.clock);
+  }
   async uploadReceiptFile(actor: Actor, orderId: string, input: unknown) {
     authorize(actor, "receipt.upload");
     const v = z
@@ -1651,7 +1705,11 @@ export class OfframpService {
       "NOT_FOUND",
       "No demo file attached; metadata alone is not a file",
     );
-    demand(!o.receiptFile.privateOriginal || actor.role === "merchant_admin", "FORBIDDEN", "New receipt originals are administrator private; publish a redacted single-customer copy instead");
+    demand(
+      !o.receiptFile.privateOriginal || actor.role === "merchant_admin",
+      "FORBIDDEN",
+      "New receipt originals are administrator private; publish a redacted single-customer copy instead",
+    );
     return structuredClone(o.receiptFile);
   }
   async uploadReceipt(actor: Actor, orderId: string, objectKey: string) {
@@ -1758,11 +1816,26 @@ export class OfframpService {
     actor: Actor,
     basis: NonNullable<Order["completion"]>["basis"],
   ) {
-    demand(o.payoutStatus === "sent", "INVALID_STATE", "Sent payout required for completion");
+    demand(
+      o.payoutStatus === "sent",
+      "INVALID_STATE",
+      "Sent payout required for completion",
+    );
     if (!o.completion) {
-      demand(!s.discrepancies.some(d => d.orderId === o.id && d.status === "open"), "OPEN_DISCREPANCY", "Resolve open discrepancies before completing payment");
-      o.completion = { basis, completedAt: this.clock().toISOString(), completedBy: actor.id };
-      this.audit(s, actor, "order.completed", o.id, { ...o.completion, bankVerified: false });
+      demand(
+        !s.discrepancies.some((d) => d.orderId === o.id && d.status === "open"),
+        "OPEN_DISCREPANCY",
+        "Resolve open discrepancies before completing payment",
+      );
+      o.completion = {
+        basis,
+        completedAt: this.clock().toISOString(),
+        completedBy: actor.id,
+      };
+      this.audit(s, actor, "order.completed", o.id, {
+        ...o.completion,
+        bankVerified: false,
+      });
     }
     this.accrueCommission(s, o);
   }
@@ -2169,51 +2242,130 @@ export class OfframpService {
   }
   /** Merchant-provided target-payout rows. Raw account data is never persisted. */
   async importMerchantBatch(actor: Actor, input: unknown) {
-    const v = z.object({ customerId: id, clientBatchId: id, rows: z.array(z.unknown()).min(1).max(100) }).strict().parse(input);
+    const v = z
+      .object({
+        customerId: id,
+        clientBatchId: id,
+        rows: z.array(z.unknown()).min(1).max(100),
+      })
+      .strict()
+      .parse(input);
     authorize(actor, "batch.create", v.customerId);
     authorize(actor, "beneficiary.create", v.customerId);
     return this.store.transaction((s) => {
-      demand(this.checkCustomer(s, v.customerId).kind === "company", "MERCHANT_REQUIRED", "商户模板仅适用于企业商户，请先选择商户");
-      const digest = createHash("sha256").update(JSON.stringify(v.rows.map(raw => raw && typeof raw === "object" && !Array.isArray(raw) ? Object.fromEntries(Object.entries(raw).sort(([a], [b]) => a.localeCompare(b))) : raw))).digest("hex");
-      const existing = s.batches.find(b => b.customerId === v.customerId && b.clientBatchId === v.clientBatchId);
+      demand(
+        this.checkCustomer(s, v.customerId).kind === "company",
+        "MERCHANT_REQUIRED",
+        "商户模板仅适用于企业商户，请先选择商户",
+      );
+      const digest = createHash("sha256")
+        .update(
+          JSON.stringify(
+            v.rows.map((raw) =>
+              raw && typeof raw === "object" && !Array.isArray(raw)
+                ? Object.fromEntries(
+                    Object.entries(raw).sort(([a], [b]) => a.localeCompare(b)),
+                  )
+                : raw,
+            ),
+          ),
+        )
+        .digest("hex");
+      const existing = s.batches.find(
+        (b) =>
+          b.customerId === v.customerId && b.clientBatchId === v.clientBatchId,
+      );
       if (existing) {
-        demand(s.merchantImportDigests?.[existing.id] === digest, "IDEMPOTENCY_CONFLICT", "批次编号已用于不同内容，请重新选择文件");
-        return { batch: existing, items: s.batchItems.filter(i => i.batchId === existing.id) };
+        demand(
+          s.merchantImportDigests?.[existing.id] === digest,
+          "IDEMPOTENCY_CONFLICT",
+          "批次编号已用于不同内容，请重新选择文件",
+        );
+        return {
+          batch: existing,
+          items: s.batchItems.filter((i) => i.batchId === existing.id),
+        };
       }
-      const batch = { id: randomUUID(), customerId: v.customerId, clientBatchId: v.clientBatchId, itemIds: [] as string[], createdAt: this.clock().toISOString() };
+      const batch = {
+        id: randomUUID(),
+        customerId: v.customerId,
+        clientBatchId: v.clientBatchId,
+        itemIds: [] as string[],
+        createdAt: this.clock().toISOString(),
+      };
       const seen = new Set<string>();
       v.rows.forEach((raw, index) => {
         const validated = validateMerchantRow(raw, index + 2);
         const { row, errors } = validated;
-        if (raw && typeof raw === "object" && (typeof (raw as Record<string, unknown>).clientItemId !== "string" || !((raw as Record<string, unknown>).clientItemId as string).trim())) row.clientItemId = `row_${index + 2}_${randomUUID()}`;
+        if (
+          raw &&
+          typeof raw === "object" &&
+          (typeof (raw as Record<string, unknown>).clientItemId !== "string" ||
+            !((raw as Record<string, unknown>).clientItemId as string).trim())
+        )
+          row.clientItemId = `row_${index + 2}_${randomUUID()}`;
         if (seen.has(row.clientItemId)) errors.push("商户行号重复");
         seen.add(row.clientItemId);
-        if (s.batchItems.some(i => i.clientItemId === row.clientItemId && i.status !== "error" && s.batches.some(b => b.id === i.batchId && b.customerId === v.customerId))) errors.push("该商户行号已导入，请勿重复提交");
+        if (
+          s.batchItems.some(
+            (i) =>
+              i.clientItemId === row.clientItemId &&
+              i.status !== "error" &&
+              s.batches.some(
+                (b) => b.id === i.batchId && b.customerId === v.customerId,
+              ),
+          )
+        )
+          errors.push("该商户行号已导入，请勿重复提交");
         let beneficiaryId = "";
         if (!errors.length) {
           const beneficiary: Beneficiary = {
-            id: randomUUID(), customerId: v.customerId, name: row.name, bankName: row.bankName,
-            country: row.targetCurrency === "CNY" ? "CN" : "US", currency: row.targetCurrency,
-            accountMasked: "**** " + row.accountNumber.slice(-4), accountToken: "demo_" + randomUUID(),
-            status: "saved", createdBy: actor.id,
+            id: randomUUID(),
+            customerId: v.customerId,
+            name: row.name,
+            bankName: row.bankName,
+            country: defaultPayoutCountry(row.targetCurrency),
+            currency: row.targetCurrency,
+            accountMasked: "**** " + row.accountNumber.slice(-4),
+            accountToken: "demo_" + randomUUID(),
+            status: "saved",
+            createdBy: actor.id,
           };
           s.beneficiaries.push(beneficiary);
           beneficiaryId = beneficiary.id;
         }
         const item: import("./types").BatchItem = {
-          id: randomUUID(), batchId: batch.id, clientItemId: row.clientItemId,
-          beneficiaryId, sourceCurrency: row.sourceCurrency, sourceAmount: "0.000000",
-          amountMode: "target_payout", targetAmount: row.targetAmount, targetCurrency: row.targetCurrency,
-          recipientName: row.name, bankName: row.bankName,
-          accountMasked: /^\d{8,34}$/.test(row.accountNumber) ? "**** " + row.accountNumber.slice(-4) : undefined,
-          rowNumber: row.sourceRowNumber, status: errors.length ? "error" : "valid", errors,
+          id: randomUUID(),
+          batchId: batch.id,
+          clientItemId: row.clientItemId,
+          beneficiaryId,
+          sourceCurrency: row.sourceCurrency,
+          sourceAmount: "0.000000",
+          amountMode: "target_payout",
+          targetAmount: row.targetAmount,
+          targetCurrency: row.targetCurrency,
+          recipientName: row.name,
+          bankName: row.bankName,
+          accountMasked: /^\d{8,34}$/.test(row.accountNumber)
+            ? "**** " + row.accountNumber.slice(-4)
+            : undefined,
+          rowNumber: row.sourceRowNumber,
+          status: errors.length ? "error" : "valid",
+          errors,
         };
-        s.batchItems.push(item); batch.itemIds.push(item.id);
+        s.batchItems.push(item);
+        batch.itemIds.push(item.id);
       });
       s.batches.push(batch);
       (s.merchantImportDigests ??= {})[batch.id] = digest;
-      this.audit(s, actor, "batch.imported", batch.id, { rowCount: v.rows.length, format: "merchant_target_v1" });
-      return { batch, items: s.batchItems.filter(i => i.batchId === batch.id) };
+      this.audit(s, actor, "batch.imported", batch.id, {
+        rowCount: v.rows.length,
+        format: "merchant_target_v1",
+      });
+      return {
+        batch,
+        items: s.batchItems.filter((i) => i.batchId === batch.id),
+      };
     });
   }
   async importBatch(
@@ -2350,7 +2502,13 @@ export class OfframpService {
           customerId: batch.customerId,
           beneficiaryId: item.beneficiaryId,
           sourceCurrency: item.sourceCurrency,
-          ...(item.amountMode === "target_payout" ? { amountMode: "target_payout" as const, targetAmount: item.targetAmount, payoutCurrency: item.targetCurrency } : { sourceAmount: item.sourceAmount }),
+          ...(item.amountMode === "target_payout"
+            ? {
+                amountMode: "target_payout" as const,
+                targetAmount: item.targetAmount,
+                payoutCurrency: item.targetCurrency,
+              }
+            : { sourceAmount: item.sourceAmount }),
         });
         item.quoteId = q.id;
         item.sourceAmount = q.sourceAmount;
@@ -2440,7 +2598,13 @@ export class OfframpService {
                 customerId: batch.customerId,
                 beneficiaryId: item.beneficiaryId,
                 sourceCurrency: item.sourceCurrency,
-                ...(item.amountMode === "target_payout" ? { amountMode: "target_payout" as const, targetAmount: item.targetAmount, payoutCurrency: item.targetCurrency } : { sourceAmount: item.sourceAmount }),
+                ...(item.amountMode === "target_payout"
+                  ? {
+                      amountMode: "target_payout" as const,
+                      targetAmount: item.targetAmount,
+                      payoutCurrency: item.targetCurrency,
+                    }
+                  : { sourceAmount: item.sourceAmount }),
               });
         demand(
           q,
@@ -2481,10 +2645,18 @@ export class OfframpService {
     const view = {
       ...structuredClone(o),
       quote: this.quoteView(o.quote, actor),
-      completionStatus: this.isCompleted(o) ? "completed" : o.payoutStatus === "sent" ? "pending_review" : "in_progress",
-      completionBasis: o.completion?.basis ?? (o.reconciled && o.payoutStatus === "sent" ? "financial_review" : null),
+      completionStatus: this.isCompleted(o)
+        ? "completed"
+        : o.payoutStatus === "sent"
+          ? "pending_review"
+          : "in_progress",
+      completionBasis:
+        o.completion?.basis ??
+        (o.reconciled && o.payoutStatus === "sent" ? "financial_review" : null),
     } as Record<string, unknown>;
-    view.receiptFileAvailable = !!o.receiptFile && (!o.receiptFile.privateOriginal || actor.role === "merchant_admin");
+    view.receiptFileAvailable =
+      !!o.receiptFile &&
+      (!o.receiptFile.privateOriginal || actor.role === "merchant_admin");
     delete view.receiptFile;
     if (actor.role !== "merchant_admin") delete view.receiptAttachmentIds;
     if (actor.role === "customer") {
@@ -2551,7 +2723,7 @@ export class OfframpService {
       actor,
       walletRates: this.currentPricing(s)
         .rates.filter(
-          (r) => this.currentPricing(s).routes[r.payoutCurrency].enabled,
+          (r) => this.currentPricing(s).routes[r.payoutCurrency]?.enabled,
         )
         .map((r) => ({
           sourceCurrency: r.sourceCurrency,

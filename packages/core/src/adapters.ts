@@ -111,7 +111,7 @@ export interface ExternalConversionRecord {
   orderId: string;
   sourceCurrency: "USDT" | "USDC";
   sourceAmount: string;
-  payoutCurrency: "CNY" | "USD";
+  payoutCurrency: "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
   allocatedPayoutAmount: string;
   actualRate: string;
   effectiveAt: string;
@@ -119,7 +119,7 @@ export interface ExternalConversionRecord {
 }
 export interface ProviderStatementRow {
   providerReference: string;
-  currency: "CNY" | "USD";
+  currency: "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
   amount: string;
   status: "sent" | "failed" | "unknown";
   effectiveAt: string;

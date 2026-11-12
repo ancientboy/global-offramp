@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CONFIG } from "./fixtures";
-import { amount, decimal, demand, units } from "./money";
+import { FIAT_CODES, amount, decimal, demand, units } from "./money";
 import { PricingVersion, PayoutProvider } from "./types";
 const value = z.string().regex(/^(0|[1-9]\d{0,19})(\.\d{1,8})?$/);
 const route = z
@@ -19,11 +19,24 @@ export const pricingInput = z
         USDT_USD: value,
         USDC_USD: value,
         USD_CNY: value,
+        USD_EUR: value.optional(),
+        USD_GBP: value.optional(),
+        USD_MXN: value.optional(),
+        USD_BRL: value.optional(),
         asOf: z.string().datetime({ offset: true }),
         expiresAt: z.string().datetime({ offset: true }),
       })
       .strict(),
-    routes: z.object({ CNY: route, USD: route }).strict(),
+    routes: z
+      .object({
+        CNY: route,
+        USD: route,
+        EUR: route.optional(),
+        GBP: route.optional(),
+        MXN: route.optional(),
+        BRL: route.optional(),
+      })
+      .strict(),
     serviceFee: value,
     channelFee: value,
   })
@@ -37,10 +50,7 @@ export const providerInput = z
     name: z.string().trim().min(1).max(100),
     status: z.enum(["active", "disabled"]),
     scope: z.enum(["official", "third_party"]),
-    routes: z
-      .array(z.enum(["CNY", "USD"]))
-      .min(1)
-      .max(2),
+    routes: z.array(z.enum(FIAT_CODES)).min(1).max(6),
     isDefault: z.boolean(),
   })
   .strict();
@@ -80,17 +90,25 @@ export function calculatePricing(
       "Mock base rate must be positive and at most 1000000",
     );
   for (const sourceCurrency of ["USDT", "USDC"] as const)
-    for (const payoutCurrency of ["CNY", "USD"] as const) {
+    for (const payoutCurrency of FIAT_CODES) {
+      const r = v.routes[payoutCurrency];
+      if (!r) continue;
+      const cross =
+        payoutCurrency === "USD"
+          ? "1"
+          : v.baseline[("USD_" + payoutCurrency) as keyof typeof v.baseline];
+      if (!cross && !r.enabled) continue;
+      demand(
+        cross,
+        "REFERENCE_UNAVAILABLE",
+        "Currency reference is not configured",
+      );
       const base = units(
         v.baseline[sourceCurrency === "USDT" ? "USDT_USD" : "USDC_USD"],
         8,
       );
-      const reference =
-        payoutCurrency === "CNY"
-          ? (base * units(v.baseline.USD_CNY, 8)) / 100000000n
-          : base;
-      const r = v.routes[payoutCurrency],
-        adjustment = units(r.adjustment, 8);
+      const reference = (base * units(cross, 8)) / 100000000n;
+      const adjustment = units(r.adjustment, 8);
       demand(
         r.adjustmentMode !== "percentage" || adjustment < 100000000n,
         "INVALID_ADJUSTMENT",
@@ -131,23 +149,25 @@ export function initialPricing(
       expiresAt: new Date(now.getTime() + 86400000).toISOString(),
     },
     routes: Object.fromEntries(
-      Object.entries(config.routes).map(([key, r]) => [
-        key,
-        {
-          enabled: r.enabled,
-          adjustmentMode: "fixed",
-          adjustmentDirection:
-            units(r.customerRate, 8) > units(r.referenceRate, 8)
-              ? "add"
-              : "subtract",
-          adjustment: decimal(
-            units(r.referenceRate, 8) > units(r.customerRate, 8)
-              ? units(r.referenceRate, 8) - units(r.customerRate, 8)
-              : units(r.customerRate, 8) - units(r.referenceRate, 8),
-            8,
-          ),
-        },
-      ]),
+      Object.entries(config.routes)
+        .filter(([key]) => key === "CNY" || key === "USD")
+        .map(([key, r]) => [
+          key,
+          {
+            enabled: r.enabled,
+            adjustmentMode: "fixed",
+            adjustmentDirection:
+              units(r.customerRate, 8) > units(r.referenceRate, 8)
+                ? "add"
+                : "subtract",
+            adjustment: decimal(
+              units(r.referenceRate, 8) > units(r.customerRate, 8)
+                ? units(r.referenceRate, 8) - units(r.customerRate, 8)
+                : units(r.customerRate, 8) - units(r.referenceRate, 8),
+              8,
+            ),
+          },
+        ]),
     ) as PricingVersion["routes"],
     serviceFee: config.serviceFee,
     channelFee: config.channelFee,
@@ -165,10 +185,10 @@ export function initialProviders(): PayoutProvider[] {
   return [
     {
       id: "official-self-operated",
-      name: "官方自营（MOCK）",
+      name: "官方自营",
       scope: "official",
       status: "active",
-      routes: ["CNY", "USD"],
+      routes: [...FIAT_CODES],
       isDefault: true,
       updatedAt: "2026-01-01T00:00:00.000Z",
     },

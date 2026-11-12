@@ -1,4 +1,6 @@
 "use client";
+import SelectField from "./SelectField";
+import MarketRatesPanel from "./MarketRatesPanel";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
@@ -49,7 +51,7 @@ export function OverviewPanel({
     <section className="admin-panel">
       <header className="admin-heading">
         <div>
-          <span className="admin-eyebrow">运营总览 · MOCK</span>
+          <span className="admin-eyebrow">运营总览</span>
           <h2>业务动态，一目了然</h2>
           <p>按实际业务时间统计，每种币种独立展示。</p>
         </div>
@@ -177,13 +179,7 @@ export function OverviewPanel({
       <details className="admin-definition">
         <summary>统计口径与数据范围</summary>
         <p>
-          新增订单按 createdAt；付款笔数、金额及费用仅纳入已付款且存在
-          paymentConfirmation 的订单，按 paidAt
-          统计，不使用创建时间代替付款时间。没有付款凭据的历史数据不纳入已付款统计。不同币种不相加，退款未冲减，费用为毛额。当前为
-          MOCK 演示数据，非财务报表。
-          {persistence !== "d1_mock"
-            ? "未配置持久存储：仅当前会话内保存，会话失效可能丢失，最长约 30 分钟。"
-            : "当前数据按已登录账户隔离保存；仍为模拟交易。"}
+          新增订单按创建时间统计，付款金额和费用按登记付款时间统计。不同币种分别汇总，退款单独列示。
         </p>
       </details>
     </section>
@@ -197,7 +193,11 @@ export function PricingSettingsPanel({
   onPreview,
   onPublish,
   persistence,
+  automatic = false,
+  onReload,
 }: {
+  automatic?: boolean;
+  onReload?: () => void;
   persistence?: string;
   current?: PricingVersion;
   history: PricingVersion[];
@@ -285,23 +285,34 @@ export function PricingSettingsPanel({
           <h2>汇率与费用</h2>
           <p>先设定参考基准，再调整客户执行汇率。</p>
         </div>
-        <Badge status="pending">MOCK 参考源</Badge>
+        <Badge status="pending">参考汇率</Badge>
       </header>
-      <Note>
-        当前为人工填写的模拟基准，不是银行实时汇率。发布只影响后续新报价，已锁定报价与订单保持原版本；最终可用性由服务端校验。
-      </Note>
+      <MarketRatesPanel
+        authenticated={automatic}
+        admin={automatic}
+        onUpdated={onReload}
+      />
       <fieldset disabled={locked} className="admin-fieldset">
         <div className="admin-card">
-          <h3>1. 模拟市场基准</h3>
-          <p>
-            稳定币 → USD → CNY 组合定价；USD 路线直接使用稳定币 / USD 基准。
-          </p>
+          <h3>1. 市场参考基准</h3>
+          <p>参考汇率自动更新；各市场可分别配置客户汇率调整和手续费。</p>
           <div className="admin-form-grid">
-            {(["USDT_USD", "USDC_USD", "USD_CNY"] as const).map((key) => (
+            {(
+              [
+                "USDT_USD",
+                "USDC_USD",
+                "USD_CNY",
+                "USD_EUR",
+                "USD_GBP",
+                "USD_MXN",
+                "USD_BRL",
+              ] as const
+            ).map((key) => (
               <label key={key}>
                 {key.replace("_", " / ")}
                 <input
                   inputMode="decimal"
+                  readOnly={automatic}
                   value={draft.baseline[key]}
                   onChange={(e) =>
                     change({
@@ -313,9 +324,16 @@ export function PricingSettingsPanel({
               </label>
             ))}
             <label>
-              基准时间（ISO 8601 / UTC）
+              参考价更新时间
               <input
-                value={draft.baseline.asOf}
+                readOnly={automatic}
+                value={
+                  automatic
+                    ? new Date(draft.baseline.asOf).toLocaleString("zh-CN", {
+                        hour12: false,
+                      })
+                    : draft.baseline.asOf
+                }
                 onChange={(e) =>
                   change({
                     ...draft,
@@ -325,9 +343,17 @@ export function PricingSettingsPanel({
               />
             </label>
             <label>
-              基准过期时间（ISO 8601 / UTC）
+              参考价有效期至
               <input
-                value={draft.baseline.expiresAt}
+                readOnly={automatic}
+                value={
+                  automatic
+                    ? new Date(draft.baseline.expiresAt).toLocaleString(
+                        "zh-CN",
+                        { hour12: false },
+                      )
+                    : draft.baseline.expiresAt
+                }
                 onChange={(e) =>
                   change({
                     ...draft,
@@ -346,14 +372,35 @@ export function PricingSettingsPanel({
             0.005 = 0.5%。
           </p>
           <div className="admin-route-grid">
-            {(["CNY", "USD"] as const).map((currency) => (
-              <div className="admin-route" key={currency}>
-                <div className="admin-card-heading">
-                  <strong>{currency} 出款</strong>
-                  <label className="admin-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={draft.routes[currency].enabled}
+            {(["CNY", "USD", "EUR", "GBP", "MXN", "BRL"] as const).map(
+              (currency) => (
+                <div className="admin-route" key={currency}>
+                  <div className="admin-card-heading">
+                    <strong>{currency} 出款</strong>
+                    <label className="admin-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={draft.routes[currency].enabled}
+                        onChange={(e) =>
+                          change({
+                            ...draft,
+                            routes: {
+                              ...draft.routes,
+                              [currency]: {
+                                ...draft.routes[currency],
+                                enabled: e.target.checked,
+                              },
+                            },
+                          })
+                        }
+                      />
+                      启用路线
+                    </label>
+                  </div>
+                  <label>
+                    调整方式
+                    <SelectField
+                      value={draft.routes[currency].adjustmentMode}
                       onChange={(e) =>
                         change({
                           ...draft,
@@ -361,91 +408,72 @@ export function PricingSettingsPanel({
                             ...draft.routes,
                             [currency]: {
                               ...draft.routes[currency],
-                              enabled: e.target.checked,
+                              adjustmentMode: e.target.value as
+                                "fixed" | "percentage",
+                            },
+                          },
+                        })
+                      }
+                    >
+                      <option value="fixed">
+                        固定点差（{currency} / 稳定币）
+                      </option>
+                      <option value="percentage">比例调整（小数比例）</option>
+                    </SelectField>
+                  </label>
+                  <label>
+                    调整方向
+                    <SelectField
+                      value={
+                        draft.routes[currency].adjustmentDirection ?? "subtract"
+                      }
+                      onChange={(e) =>
+                        change({
+                          ...draft,
+                          routes: {
+                            ...draft.routes,
+                            [currency]: {
+                              ...draft.routes[currency],
+                              adjustmentDirection: e.target.value as
+                                "add" | "subtract",
+                            },
+                          },
+                        })
+                      }
+                    >
+                      <option value="subtract">下调 − 客户汇率降低</option>
+                      <option value="add">上调 + 客户汇率提高</option>
+                    </SelectField>
+                  </label>
+                  <label>
+                    调整数值（
+                    {draft.routes[currency].adjustmentMode === "fixed"
+                      ? `${currency} / 稳定币`
+                      : "小数比例"}
+                    ）
+                    <input
+                      inputMode="decimal"
+                      value={draft.routes[currency].adjustment}
+                      onChange={(e) =>
+                        change({
+                          ...draft,
+                          routes: {
+                            ...draft.routes,
+                            [currency]: {
+                              ...draft.routes[currency],
+                              adjustment: e.target.value,
                             },
                           },
                         })
                       }
                     />
-                    启用路线
                   </label>
+                  <p>
+                    {pricingAdjustmentLabel(draft.routes[currency], currency)}
+                  </p>
                 </div>
-                <label>
-                  调整方式
-                  <select
-                    value={draft.routes[currency].adjustmentMode}
-                    onChange={(e) =>
-                      change({
-                        ...draft,
-                        routes: {
-                          ...draft.routes,
-                          [currency]: {
-                            ...draft.routes[currency],
-                            adjustmentMode: e.target.value as
-                              "fixed" | "percentage",
-                          },
-                        },
-                      })
-                    }
-                  >
-                    <option value="fixed">
-                      固定点差（{currency} / 稳定币）
-                    </option>
-                    <option value="percentage">比例调整（小数比例）</option>
-                  </select>
-                </label>
-                <label>
-                  调整方向
-                  <select
-                    value={
-                      draft.routes[currency].adjustmentDirection ?? "subtract"
-                    }
-                    onChange={(e) =>
-                      change({
-                        ...draft,
-                        routes: {
-                          ...draft.routes,
-                          [currency]: {
-                            ...draft.routes[currency],
-                            adjustmentDirection: e.target.value as
-                              "add" | "subtract",
-                          },
-                        },
-                      })
-                    }
-                  >
-                    <option value="subtract">下调 − 客户汇率降低</option>
-                    <option value="add">上调 + 客户汇率提高</option>
-                  </select>
-                </label>
-                <label>
-                  调整数值（
-                  {draft.routes[currency].adjustmentMode === "fixed"
-                    ? `${currency} / 稳定币`
-                    : "小数比例"}
-                  ）
-                  <input
-                    inputMode="decimal"
-                    value={draft.routes[currency].adjustment}
-                    onChange={(e) =>
-                      change({
-                        ...draft,
-                        routes: {
-                          ...draft.routes,
-                          [currency]: {
-                            ...draft.routes[currency],
-                            adjustment: e.target.value,
-                          },
-                        },
-                      })
-                    }
-                  />
-                </label>
-                <p>
-                  {pricingAdjustmentLabel(draft.routes[currency], currency)}
-                </p>
-              </div>
-            ))}
+              ),
+            )}
           </div>
         </div>
         <div className="admin-card">
@@ -514,11 +542,7 @@ export function PricingSettingsPanel({
       )}
       <div className="admin-card">
         <h3>定价版本历史</h3>
-        <p>
-          {persistence !== "d1_mock"
-            ? "仅当前 MOCK 会话可见，不是持久审计记录。"
-            : "按当前登录账户保存的模拟定价版本。"}
-        </p>
+        <p>查看各次发布的汇率和费用配置。</p>
         {history.length ? (
           <div className="admin-history">
             {[...history].reverse().map((v) => (
@@ -692,7 +716,7 @@ export function PayoutProvidersPanel({
               </label>
               <label>
                 主体类型
-                <select
+                <SelectField
                   value={draft.scope}
                   onChange={(e) =>
                     setDraft({
@@ -703,11 +727,11 @@ export function PayoutProvidersPanel({
                 >
                   <option value="official">官方</option>
                   <option value="third_party">第三方</option>
-                </select>
+                </SelectField>
               </label>
               <label>
                 状态
-                <select
+                <SelectField
                   value={draft.status}
                   onChange={(e) =>
                     setDraft({
@@ -718,27 +742,29 @@ export function PayoutProvidersPanel({
                 >
                   <option value="active">启用</option>
                   <option value="disabled">停用</option>
-                </select>
+                </SelectField>
               </label>
             </div>
             <div className="admin-checkboxes">
-              {(["CNY", "USD"] as const).map((r) => (
-                <label className="admin-checkbox" key={r}>
-                  <input
-                    type="checkbox"
-                    checked={draft.routes.includes(r)}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        routes: e.target.checked
-                          ? [...draft.routes, r]
-                          : draft.routes.filter((v) => v !== r),
-                      })
-                    }
-                  />
-                  {r} 出款
-                </label>
-              ))}
+              {(["CNY", "USD", "EUR", "GBP", "MXN", "BRL"] as const).map(
+                (r) => (
+                  <label className="admin-checkbox" key={r}>
+                    <input
+                      type="checkbox"
+                      checked={draft.routes.includes(r)}
+                      onChange={(e) =>
+                        setDraft({
+                          ...draft,
+                          routes: e.target.checked
+                            ? [...draft.routes, r]
+                            : draft.routes.filter((v) => v !== r),
+                        })
+                      }
+                    />
+                    {r} 出款
+                  </label>
+                ),
+              )}
               <label className="admin-checkbox">
                 <input
                   type="checkbox"

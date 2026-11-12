@@ -134,7 +134,7 @@ export default function CustomerWallet({
             </p>
           )}
           <p className="wallet-disclaimer">
-            <Lock size={14} /> 无真实充值地址，请勿转入真实资金。
+            <Lock size={14} /> 模拟充值直接增加测试余额。
           </p>
         </>
       ) : (

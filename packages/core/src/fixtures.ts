@@ -104,6 +104,34 @@ export const CONFIG = Object.freeze({
   quoteTtlSeconds: 300,
   commissionHoldDays: 7,
   routes: {
+    EUR: {
+      enabled: false,
+      country: "DE",
+      costRate: "0.00000000",
+      referenceRate: "0.00000000",
+      customerRate: "0.00000000",
+    },
+    GBP: {
+      enabled: false,
+      country: "GB",
+      costRate: "0.00000000",
+      referenceRate: "0.00000000",
+      customerRate: "0.00000000",
+    },
+    MXN: {
+      enabled: false,
+      country: "MX",
+      costRate: "0.00000000",
+      referenceRate: "0.00000000",
+      customerRate: "0.00000000",
+    },
+    BRL: {
+      enabled: false,
+      country: "BR",
+      costRate: "0.00000000",
+      referenceRate: "0.00000000",
+      customerRate: "0.00000000",
+    },
     CNY: {
       enabled: true,
       country: "CN",

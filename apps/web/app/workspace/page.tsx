@@ -1,4 +1,5 @@
 "use client";
+import SelectField from "../SelectField";
 import { FormEvent, useEffect, useState } from "react";
 import Home from "../page";
 import { WorkspaceContext, type WorkspaceAccount } from "../workspace-context";
@@ -96,8 +97,7 @@ export default function Workspace() {
       style={{ maxWidth: 480, margin: "8vh auto", padding: 32 }}
     >
       <h1>汇途 · {register ? "注册账号" : "业务登录"}</h1>
-      <p>账号内测 / 资金沙箱 · 无真实资金操作</p>
-      <p>支持用户名或邮箱登录，客户可使用邮箱注册。当前为内测，客户邮箱验证、MFA 和真实 KYC 尚未接入。</p>
+      <p>登录后管理钱包、订单和收款账户。</p>
       <form onSubmit={(e) => void submit(e)}>
         {register && (
           <>
@@ -107,10 +107,10 @@ export default function Workspace() {
             </label>
             <label>
               客户类型
-              <select name="kind">
+              <SelectField name="kind">
                 <option value="personal">个人</option>
                 <option value="company">企业</option>
-              </select>
+              </SelectField>
             </label>
           </>
         )}
@@ -154,7 +154,7 @@ export default function Workspace() {
         </button>
       </form>
       <p>
-        <a href="/">返回公开模拟演示</a>
+        <a href="/">返回首页</a>
       </p>
     </main>
   );

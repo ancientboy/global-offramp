@@ -11,13 +11,37 @@ export const receiptFields = z
       .string()
       .regex(/^(0|[1-9]\d{0,15})(\.\d{1,8})?$/)
       .optional(),
-    currency: z.enum(["CNY", "CNH", "USD", "HKD", "USDT", "USDC"]).optional(),
+    currency: z
+      .enum([
+        "CNY",
+        "CNH",
+        "USD",
+        "EUR",
+        "GBP",
+        "MXN",
+        "BRL",
+        "HKD",
+        "USDT",
+        "USDC",
+      ])
+      .optional(),
     payoutAmount: z
       .string()
       .regex(/^(0|[1-9]\d{0,15})(\.\d{1,8})?$/)
       .optional(),
     payoutCurrency: z
-      .enum(["CNY", "CNH", "USD", "HKD", "USDT", "USDC"])
+      .enum([
+        "CNY",
+        "CNH",
+        "USD",
+        "EUR",
+        "GBP",
+        "MXN",
+        "BRL",
+        "HKD",
+        "USDT",
+        "USDC",
+      ])
       .optional(),
     recipientName: z.string().trim().min(1).max(120).optional(),
     accountTail: z

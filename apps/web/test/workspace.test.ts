@@ -33,16 +33,16 @@ test("workspace customer renders only its own portal and logout, with no demo ro
   const html = render(account);
   assert.match(html, /Independent customer/);
   assert.match(html, /退出/);
-  assert.match(html, /账号内测/);
+  assert.doesNotMatch(html, /MOCK|内测|沙箱|PostgreSQL|MFA|D1/);
   assert.match(html, /商户工作台/);
-  assert.doesNotMatch(html, /演示角色切换|经营概览|管理后台/);
+  assert.doesNotMatch(html, /切换工作台|经营概览|管理后台/);
 });
 test("workspace administrator starts in its own overview while public demo retains its picker", () => {
   const html = render({ ...account, role: "merchant_admin", customerId: null });
   assert.match(html, /经营概览/);
   assert.match(html, /管理后台/);
-  assert.doesNotMatch(html, /演示角色切换/);
+  assert.doesNotMatch(html, /切换工作台|MOCK|内测|沙箱|PostgreSQL|MFA|D1/);
   const demo = renderToStaticMarkup(createElement(Home));
-  assert.match(demo, /演示角色切换/);
-  assert.match(demo, /业务账号内测/);
+  assert.match(demo, /切换工作台/);
+  assert.match(demo, /登录账户/);
 });

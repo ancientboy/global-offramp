@@ -23,7 +23,15 @@ async function main() {
       await pool.query(
         readFileSync("db/migrations/003_route_drafts.sql", "utf8"),
       );
-      await pool.query(readFileSync("db/migrations/004_operator_customer_username.sql", "utf8"));
+      await pool.query(
+        readFileSync(
+          "db/migrations/004_operator_customer_username.sql",
+          "utf8",
+        ),
+      );
+      await pool.query(
+        readFileSync("db/migrations/005_multi_fiat.sql", "utf8"),
+      );
       console.log("Workspace schemas installed; no demo database touched");
     } else {
       // Piped JSON from a protected terminal prompt or secret manager; never argv/env/log.

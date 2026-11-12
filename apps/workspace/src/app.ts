@@ -2,6 +2,7 @@ import { ZodError } from "zod";
 import { Auth, actorFor, HttpError, publicAccount } from "./auth";
 import { OfframpService } from "../../../packages/core/src/service";
 import { routeCatalog, saveRouteDraft, validateRouteRecipient } from "./routes";
+import { MarketRatesService, MarketRateError } from "./market-rates";
 import {
   dispatchBusinessCommand,
   type ReceiptBucket,
@@ -52,6 +53,10 @@ export function workspaceApp(
   auth: Auth,
   bucket: ReceiptBucket,
   origin: string,
+  options: {
+    enableSimulatedTopups?: boolean;
+    marketRates?: MarketRatesService;
+  } = {},
 ) {
   if (new URL(origin).origin !== origin || !origin.startsWith("https://"))
     throw new Error("WORKSPACE_ORIGIN must be an HTTPS origin");
@@ -95,6 +100,7 @@ export function workspaceApp(
             accountMode: "beta",
             emailVerified: false,
             mfaEnabled: false,
+            simulatedTopupsEnabled: options.enableSimulatedTopups === true,
           },
           healthy ? 200 : 503,
         );
@@ -102,6 +108,13 @@ export function workspaceApp(
       if (request.method === "POST" && path === "/auth/register") {
         await auth.rate("register:" + ip, 5, 60 * 60_000);
         return json({ account: await auth.register(await body()) }, 201);
+      }
+      if (request.method === "GET" && path === "/public-market-rates") {
+        if (!options.marketRates)
+          throw new HttpError(503, "REFERENCE_UNAVAILABLE");
+        const { snapshot, stale, expiresAt } =
+          await options.marketRates.status();
+        return json({ snapshot, stale, expiresAt });
       }
       if (request.method === "POST" && path === "/auth/login") {
         const value = await auth.login(await body(), ip);
@@ -119,6 +132,37 @@ export function workspaceApp(
         await auth.logout(token!, account);
         return json({ loggedOut: true }, 200, cookie("", 0));
       }
+      if (request.method === "GET" && path === "/market-rates") {
+        if (!options.marketRates)
+          throw new HttpError(503, "REFERENCE_UNAVAILABLE");
+        return json(await options.marketRates.status());
+      }
+      if (request.method === "POST" && path === "/market-rates/refresh") {
+        if (account.role !== "merchant_admin")
+          throw new HttpError(403, "FORBIDDEN");
+        if (!options.marketRates)
+          throw new HttpError(503, "REFERENCE_UNAVAILABLE");
+        await auth.rate("market-refresh:" + account.id, 3, 60000);
+        if (Object.keys(await body()).length)
+          throw new HttpError(400, "INVALID_INPUT");
+        return json(await options.marketRates.refresh());
+      }
+      let forwarded = request;
+      if (options.marketRates && request.method === "POST") {
+        if (path === "/quotes" || /^\/batches\/[\w-]+\/quote$/.test(path))
+          await options.marketRates.baseline();
+        if (/^\/admin\/pricing\/(preview|publish)$/.test(path)) {
+          if (account.role !== "merchant_admin")
+            throw new HttpError(403, "FORBIDDEN");
+          const input = await body();
+          input.baseline = await options.marketRates.baseline();
+          forwarded = new Request(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body: JSON.stringify(input),
+          });
+        }
+      }
       if (request.method === "GET" && path === "/routes")
         return json(await routeCatalog(auth, account));
       const routeMatch =
@@ -134,9 +178,20 @@ export function workspaceApp(
         );
       }
       if (
+        request.method === "POST" &&
+        path === "/wallet/deposits" &&
+        !options.enableSimulatedTopups
+      )
+        throw new HttpError(403, "SIMULATED_TOPUPS_DISABLED");
+      if (
         !businessRoutes.some(
           ([method, pattern]) =>
             method === request.method && pattern.test(path),
+        ) &&
+        !(
+          request.method === "POST" &&
+          path === "/wallet/deposits" &&
+          options.enableSimulatedTopups
         )
       )
         throw new HttpError(403, "SANDBOX_ROUTE_DISABLED");
@@ -144,7 +199,7 @@ export function workspaceApp(
       const translated = new URL(request.url);
       translated.pathname = "/api" + path;
       const result = await dispatchBusinessCommand({
-        request: new Request(translated, request),
+        request: new Request(translated, forwarded),
         core,
         actor: actorFor(account),
         bucket,
@@ -154,6 +209,11 @@ export function workspaceApp(
       // The shared adapter has its own safe domain errors; no auth internals are returned.
       return result;
     } catch (error) {
+      if (error instanceof MarketRateError)
+        return json(
+          { error: error.code, message: "参考汇率暂不可用，请稍后重试。" },
+          503,
+        );
       if (error instanceof HttpError)
         return json({ error: error.code }, error.status);
       if (error instanceof ZodError || error instanceof SyntaxError)

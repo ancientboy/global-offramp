@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {scryptSync,randomUUID} from "node:crypto";
+import { scryptSync, randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -12,6 +12,7 @@ import { Auth, digest } from "../src/auth";
 import { workspaceApp, COOKIE } from "../src/app";
 import { PrivateFiles } from "../src/files";
 import { initializeWorkspace } from "../src/database";
+import { MarketRatesService, ECB_URL } from "../src/market-rates";
 const origin = "https://workspace.example";
 const password = "test-only-long-password-42";
 const migrations = [
@@ -26,7 +27,7 @@ function poolFor(db: PGlite): SqlPool {
     connect: async () => ({ query: (s, p) => db.query(s, p) }),
   };
 }
-async function fixture(path?: string) {
+async function fixture(path?: string, enableSimulatedTopups = false) {
   const db = new PGlite(path);
   for (const sql of migrations) await db.exec(sql);
   const pool = poolFor(db),
@@ -39,7 +40,7 @@ async function fixture(path?: string) {
   const auth = new Auth(pool, store, () => now);
   const dir = await mkdtemp(join(tmpdir(), "offramp-files-"));
   const bucket = new PrivateFiles(dir),
-    app = workspaceApp(auth, bucket, origin);
+    app = workspaceApp(auth, bucket, origin, { enableSimulatedTopups });
   async function call(
     path: string,
     body?: unknown,
@@ -659,38 +660,118 @@ test("administrator uses a username without an email; clients cannot self-regist
 test("login accepts an operator-set short existing password while customer registration keeps its creation policy", async () => {
   const f = await fixture();
   try {
-    await f.auth.createAdmin({username:"short_login",password},"Operator");
-    const salt="0123456789abcdef0123456789abcdef";
-    const stored="scrypt-v1$"+salt+"$"+scryptSync("test123",salt,32,{N:32768,r:8,p:1,maxmem:64*1024*1024}).toString("hex");
-    await f.db.query("UPDATE workspace.accounts SET password_hash=$1 WHERE username='short_login'",[stored]);
-    const r=await f.call("auth/login",{identifier:"short_login",password:"test123"});
-    assert.equal(r.status,200);
-    assert.equal((await f.call("auth/login",{username:"short_login",password:"wrong12"})).status,401);
-    assert.equal((await f.call("auth/register",{email:"short@example.com",name:"Client",kind:"personal",password:"test123"})).status,400);
-    const cookie=r.headers.get("set-cookie")!.split(";")[0];
-    assert.equal((await f.call("auth/logout",{},cookie)).status,200);
-    assert.equal((await f.call("auth/me",undefined,cookie)).status,401);
-  } finally {await f.close();}
+    await f.auth.createAdmin({ username: "short_login", password }, "Operator");
+    const salt = "0123456789abcdef0123456789abcdef";
+    const stored =
+      "scrypt-v1$" +
+      salt +
+      "$" +
+      scryptSync("test123", salt, 32, {
+        N: 32768,
+        r: 8,
+        p: 1,
+        maxmem: 64 * 1024 * 1024,
+      }).toString("hex");
+    await f.db.query(
+      "UPDATE workspace.accounts SET password_hash=$1 WHERE username='short_login'",
+      [stored],
+    );
+    const r = await f.call("auth/login", {
+      identifier: "short_login",
+      password: "test123",
+    });
+    assert.equal(r.status, 200);
+    assert.equal(
+      (
+        await f.call("auth/login", {
+          username: "short_login",
+          password: "wrong12",
+        })
+      ).status,
+      401,
+    );
+    assert.equal(
+      (
+        await f.call("auth/register", {
+          email: "short@example.com",
+          name: "Client",
+          kind: "personal",
+          password: "test123",
+        })
+      ).status,
+      400,
+    );
+    const cookie = r.headers.get("set-cookie")!.split(";")[0];
+    assert.equal((await f.call("auth/logout", {}, cookie)).status, 200);
+    assert.equal((await f.call("auth/me", undefined, cookie)).status, 401);
+  } finally {
+    await f.close();
+  }
 });
 
 test("operator-provisioned username customer can log in but cannot enter the admin scope", async () => {
-  const f=await fixture();
+  const f = await fixture();
   try {
-    const customerId=randomUUID(),accountId=randomUUID(),at=new Date();
-    const salt="0123456789abcdef0123456789abcdef";
-    const stored="scrypt-v1$"+salt+"$"+scryptSync("test123",salt,32,{N:32768,r:8,p:1,maxmem:64*1024*1024}).toString("hex");
-    await f.store.transactionWithClient(async(s,c)=>{
-      await c.query("INSERT INTO workspace.customers(id,kind,created_at) VALUES($1,'personal',$2)",[customerId,at]);
-      await c.query("INSERT INTO workspace.accounts(id,username,display_name,password_hash,role,customer_id,created_at) VALUES($1,'test_user','Customer',$2,'customer',$3,$4)",[accountId,stored,customerId,at]);
-      s.customers.push({id:customerId,kind:"personal",name:"Customer",status:"pending"});
+    const customerId = randomUUID(),
+      accountId = randomUUID(),
+      at = new Date();
+    const salt = "0123456789abcdef0123456789abcdef";
+    const stored =
+      "scrypt-v1$" +
+      salt +
+      "$" +
+      scryptSync("test123", salt, 32, {
+        N: 32768,
+        r: 8,
+        p: 1,
+        maxmem: 64 * 1024 * 1024,
+      }).toString("hex");
+    await f.store.transactionWithClient(async (s, c) => {
+      await c.query(
+        "INSERT INTO workspace.customers(id,kind,created_at) VALUES($1,'personal',$2)",
+        [customerId, at],
+      );
+      await c.query(
+        "INSERT INTO workspace.accounts(id,username,display_name,password_hash,role,customer_id,created_at) VALUES($1,'test_user','Customer',$2,'customer',$3,$4)",
+        [accountId, stored, customerId, at],
+      );
+      s.customers.push({
+        id: customerId,
+        kind: "personal",
+        name: "Customer",
+        status: "pending",
+      });
     });
-    const login=await f.call("auth/login",{identifier:"test_user",password:"test123"});assert.equal(login.status,200);
-    const cookie=login.headers.get("set-cookie")!.split(";")[0];
-    const dashboard=await (await f.call("dashboard",undefined,cookie,{'x-demo-actor':'admin-demo'})).json();
-    assert.equal(dashboard.actor.role,"customer");assert.deepEqual(dashboard.customers.map((c:any)=>c.id),[customerId]);
-    assert.equal((await f.call("customers/"+customerId+"/review",{status:"approved"},cookie)).status,403);
-    assert.equal((await f.call("audit",undefined,cookie)).status,403);
-  } finally {await f.close();}
+    const login = await f.call("auth/login", {
+      identifier: "test_user",
+      password: "test123",
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const dashboard = await (
+      await f.call("dashboard", undefined, cookie, {
+        "x-demo-actor": "admin-demo",
+      })
+    ).json();
+    assert.equal(dashboard.actor.role, "customer");
+    assert.deepEqual(
+      dashboard.customers.map((c: any) => c.id),
+      [customerId],
+    );
+    assert.equal(
+      (
+        await f.call(
+          "customers/" + customerId + "/review",
+          { status: "approved" },
+          cookie,
+        )
+      ).status,
+      403,
+    );
+    assert.equal((await f.call("audit", undefined, cookie)).status, 403);
+  } finally {
+    await f.close();
+  }
 });
 
 test("route drafts require admin, preserve optimistic versions and never enable money; recipient checks echo no account values", async () => {
@@ -784,6 +865,161 @@ test("route drafts require admin, preserve optimistic versions and never enable 
       "SELECT * FROM workspace.auth_audit WHERE action='route.draft.saved'",
     );
     assert.equal(audits.rows.length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("explicitly enabled simulated topups credit only the authenticated customer and remain idempotent", async () => {
+  const f = await fixture(undefined, true);
+  try {
+    const a = await f.register("topup-a@example.com"),
+      b = await f.register("topup-b@example.com");
+    const ac = await f.login(a.email);
+    await f.auth.createAdmin({ username: "topup_admin", password }, "Admin");
+    const admin = await f.login("topup_admin");
+    for (const customer of [a, b])
+      assert.equal(
+        (
+          await f.call(
+            `customers/${customer.customerId}/review`,
+            { status: "approved" },
+            admin,
+          )
+        ).status,
+        200,
+      );
+    const input = {
+      customerId: a.customerId,
+      currency: "USDT",
+      amount: "100.123456",
+      idempotencyKey: "topup-isolation-once",
+    };
+    const first = await f.call("wallet/deposits", input, ac);
+    assert.equal(first.status, 200);
+    assert.equal((await first.json()).available, "100.123456");
+    const repeated = await f.call("wallet/deposits", input, ac);
+    assert.equal(repeated.status, 200);
+    assert.equal((await repeated.json()).duplicate, true);
+    assert.equal(
+      (
+        await f.call(
+          "wallet/deposits",
+          { ...input, customerId: b.customerId },
+          ac,
+          { "x-demo-actor": "admin-demo" },
+        )
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await f.call(
+          "wallet/deposits",
+          { ...input, idempotencyKey: "other-origin" },
+          ac,
+          { origin: "https://evil.invalid" },
+        )
+      ).status,
+      403,
+    );
+    const health = await (await f.call("health")).json();
+    assert.equal(health.realExecutionEnabled, false);
+    assert.equal(health.simulatedTopupsEnabled, true);
+    const dashboard = await (await f.call("dashboard", undefined, ac)).json();
+    assert.equal(
+      dashboard.walletBalances.find((w: any) => w.currency === "USDT")
+        .available,
+      "100.123456",
+    );
+    assert.equal(
+      (await f.store.read()).journals.filter((j) =>
+        j.businessKey.includes("topup-isolation-once"),
+      ).length,
+      1,
+    );
+  } finally {
+    await f.close();
+  }
+  const disabled = await fixture();
+  try {
+    await disabled.register("topup-off@example.com");
+    const cookie = await disabled.login("topup-off@example.com");
+    assert.equal(
+      (await disabled.call("wallet/deposits", {}, cookie)).status,
+      403,
+    );
+  } finally {
+    await disabled.close();
+  }
+});
+
+test("market references require no customer data, only staff can refresh, and pricing cannot substitute a caller-supplied baseline", async () => {
+  const f = await fixture();
+  try {
+    await f.register("market-client@example.com");
+    const customer = await f.login("market-client@example.com");
+    await f.auth.createAdmin({ username: "market_admin", password }, "Admin");
+    const admin = await f.login("market_admin");
+    let calls = 0;
+    const day = new Date(f.auth.now()).toISOString().slice(0, 10);
+    const xml = `<Envelope><Cube time='${day}'><Cube currency='USD' rate='1.25'/><Cube currency='CNY' rate='8'/><Cube currency='GBP' rate='0.85'/><Cube currency='MXN' rate='25'/><Cube currency='BRL' rate='6.25'/></Cube></Envelope>`;
+    const fetcher = (async (url: any) => {
+      calls++;
+      return new Response(
+        String(url) === ECB_URL
+          ? xml
+          : JSON.stringify({
+              error: [],
+              result: {
+                USDTZUSD: { b: ["0.999"], a: ["1.001"] },
+                USDCUSD: { b: ["0.999"], a: ["1.001"] },
+              },
+            }),
+      );
+    }) as typeof fetch;
+    const service = new MarketRatesService(f.store, fetcher, f.auth.now),
+      app = workspaceApp(f.auth, f.bucket, origin, { marketRates: service });
+    const call = async (path: string, body?: unknown, cookie?: string) =>
+      app(
+        new Request(origin + "/workspace/api/" + path, {
+          method: body === undefined ? "GET" : "POST",
+          headers: {
+            origin,
+            "content-type": "application/json",
+            ...(cookie ? { cookie } : {}),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }),
+        "rate-client",
+      );
+    assert.equal((await call("quotes", {}, customer)).status, 503);
+    assert.equal(
+      (await call("market-rates/refresh", {}, customer)).status,
+      403,
+    );
+    assert.equal(calls, 0);
+    assert.equal((await call("market-rates/refresh", {}, admin)).status, 200);
+    assert.equal(calls, 2);
+    const status = await (await call("public-market-rates")).json();
+    assert.equal(status.snapshot.rates.length, 12);
+    assert.ok(!JSON.stringify(status).includes("market-client@example.com"));
+    const current = await service.currentPricing();
+    const published = await call(
+      "admin/pricing/publish",
+      {
+        expectedVersion: current.version,
+        baseline: { ...current.baseline, USD_CNY: "999" },
+        routes: current.routes,
+        serviceFee: "7",
+        channelFee: "2",
+      },
+      admin,
+    );
+    assert.equal(published.status, 200);
+    const p = await published.json();
+    assert.equal(p.baseline.USD_CNY, "6.40000000");
+    assert.ok(p.marketReference.batchId);
   } finally {
     await f.close();
   }

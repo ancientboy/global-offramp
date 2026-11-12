@@ -7,6 +7,7 @@ import { initializeWorkspace } from "./database";
 import { Auth } from "./auth";
 import { workspaceApp } from "./app";
 import { PrivateFiles } from "./files";
+import { MarketRatesService } from "./market-rates";
 
 async function main() {
   const { WORKSPACE_DATABASE_URL, WORKSPACE_ORIGIN, WORKSPACE_RECEIPT_DIR } =
@@ -22,10 +23,33 @@ async function main() {
     console.error("Workspace database connection unavailable"),
   );
   const store = await initializeWorkspace(pool);
+  const marketRates = new MarketRatesService(store);
+  await marketRates
+    .refresh()
+    .catch(() =>
+      console.error(
+        "Market reference refresh unavailable; retained last valid data",
+      ),
+    );
+  const rateTimer = setInterval(() => {
+    void marketRates
+      .refresh()
+      .catch(() =>
+        console.error(
+          "Market reference refresh unavailable; retained last valid data",
+        ),
+      );
+  }, 15 * 60_000);
+  rateTimer.unref();
   const app = workspaceApp(
     new Auth(pool, store),
     new PrivateFiles(WORKSPACE_RECEIPT_DIR),
     WORKSPACE_ORIGIN,
+    {
+      enableSimulatedTopups:
+        process.env.WORKSPACE_ENABLE_SIMULATED_TOPUPS === "true",
+      marketRates,
+    },
   );
   const server = createServer(async (req, res) => {
     try {
@@ -137,6 +161,7 @@ async function main() {
   for (const signal of ["SIGTERM", "SIGINT"])
     process.on(signal, () =>
       server.close(() => {
+        clearInterval(rateTimer);
         void pool.end();
       }),
     );

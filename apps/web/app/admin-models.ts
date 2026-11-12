@@ -1,5 +1,5 @@
 import { decimalUnits, percentage, type Order } from "./models";
-export type FiatCurrency = "CNY" | "USD";
+export type FiatCurrency = "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
 export interface PricingRoute {
   enabled: boolean;
   adjustmentMode: "fixed" | "percentage";
@@ -12,6 +12,10 @@ export interface PricingInput {
     USDT_USD: string;
     USDC_USD: string;
     USD_CNY: string;
+    USD_EUR?: string;
+    USD_GBP?: string;
+    USD_MXN?: string;
+    USD_BRL?: string;
     asOf: string;
     expiresAt: string;
   };
@@ -19,7 +23,12 @@ export interface PricingInput {
   serviceFee: string;
   channelFee: string;
 }
-export interface PricingVersion extends Omit<PricingInput, "expectedVersion"> {
+export interface PricingVersion extends Omit<
+  PricingInput,
+  "expectedVersion" | "routes"
+> {
+  routes: Record<"CNY" | "USD", PricingRoute> &
+    Partial<Record<"EUR" | "GBP" | "MXN" | "BRL", PricingRoute>>;
   version: string;
   rates: {
     sourceCurrency: string;
@@ -107,16 +116,29 @@ export function pricingDraft(current: PricingVersion): PricingInput {
   return {
     expectedVersion: current.version,
     baseline: { ...current.baseline },
-    routes: { CNY: { ...current.routes.CNY }, USD: { ...current.routes.USD } },
+    routes: Object.fromEntries(
+      (["CNY", "USD", "EUR", "GBP", "MXN", "BRL"] as const).map((key) => [
+        key,
+        {
+          ...(current.routes[key] ?? {
+            enabled: false,
+            adjustmentMode: "fixed",
+            adjustmentDirection: "subtract",
+            adjustment: "0",
+          }),
+        },
+      ]),
+    ) as PricingInput["routes"],
     serviceFee: current.serviceFee,
     channelFee: current.channelFee,
   };
 }
 
 export function pricingAdjustmentLabel(
-  route: PricingRoute,
+  route: PricingRoute | undefined,
   currency: FiatCurrency,
 ): string {
+  if (!route) return "未配置";
   const direction = route.adjustmentDirection === "add" ? "上调 +" : "下调 −";
   return route.adjustmentMode === "percentage"
     ? `${direction}${percentage(route.adjustment)}（基准比例）`
