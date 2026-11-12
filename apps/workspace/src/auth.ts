@@ -128,6 +128,7 @@ export const actorFor = (a: Account): Actor => ({
   id: a.id,
   role: a.role,
   ...(a.customer_id ? { customerId: a.customer_id } : {}),
+  ...(a.payout_provider_id ? { payoutProviderId: a.payout_provider_id } : {}),
 });
 export class Auth {
   constructor(

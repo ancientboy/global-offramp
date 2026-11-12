@@ -21,6 +21,22 @@ export async function providerDashboard(auth: Auth, account: Account) {
           id: o.id,
           orderNumber: o.orderNumber ?? o.clientOrderId,
           createdAt: o.createdAt,
+          depositStatus: o.depositStatus,
+          fundingStatus: o.walletFundingStatus ?? null,
+          canRecordPayment:
+            o.depositStatus === "confirmed" &&
+            ["draft", "approved", "awaiting_approval"].includes(
+              o.payoutStatus,
+            ) &&
+            (o.fundingSource !== "wallet" ||
+              o.walletFundingStatus === "reserved"),
+          paymentConfirmation: o.paymentConfirmation
+            ? {
+                actualAmount: o.paymentConfirmation.actualAmount,
+                paidAt: o.paymentConfirmation.paidAt,
+                providerReference: o.paymentConfirmation.providerReference,
+              }
+            : null,
           payoutCurrency: o.quote.payoutCurrency,
           payoutAmount: o.quote.payoutAmount,
           payoutStatus: o.payoutStatus,
@@ -35,4 +51,11 @@ export async function providerDashboard(auth: Auth, account: Account) {
         };
       }),
   };
+}
+
+export async function providerOrder(auth: Auth, account: Account, id: string) {
+  const dashboard = await providerDashboard(auth, account),
+    order = dashboard.orders.find((o) => o.id === id);
+  if (!order) throw new HttpError(404, "NOT_FOUND");
+  return order;
 }

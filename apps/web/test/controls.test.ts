@@ -217,3 +217,77 @@ test("fiat choices inside conditional fragments expose all six currencies and su
     await f.close();
   }
 });
+
+test("provider orders open details and payment registration requires confirmation", async () => {
+  const ProviderPortal = require("../app/ProviderPortal").default;
+  const { WorkspaceContext } = require("../app/workspace-context");
+  const savedFetch = globalThis.fetch;
+  const order = {
+    id: "assigned-order",
+    orderNumber: "ORDER-001",
+    createdAt: "2026-11-13T01:00:00Z",
+    payoutCurrency: "CNY",
+    payoutAmount: "100.00",
+    payoutStatus: "draft",
+    receiptStatus: "none",
+    depositStatus: "confirmed",
+    canRecordPayment: true,
+    recipient: { name: "收款人", country: "CN", accountMasked: "**** 1234" },
+    paymentConfirmation: null,
+  };
+  globalThis.fetch = (async (url: any) =>
+    new Response(
+      JSON.stringify(
+        String(url).endsWith("/dashboard")
+          ? {
+              provider: { id: "official", name: "官方自营", routes: ["CNY"] },
+              orders: [order],
+            }
+          : order,
+      ),
+      { headers: { "content-type": "application/json" } },
+    )) as typeof fetch;
+  const f = await mount(
+    createElement(
+      WorkspaceContext.Provider,
+      {
+        value: {
+          account: {
+            id: "provider-account",
+            name: "服务商",
+            role: "payout_provider",
+          },
+          logout: async () => {},
+          expired: () => {},
+        },
+      },
+      createElement(ProviderPortal),
+    ),
+  );
+  try {
+    const button = (name: string) =>
+      [...f.document.querySelectorAll("button")].find(
+        (b: any) => b.textContent === name,
+      ) as HTMLButtonElement;
+    await act(async () => button("查看 / 处理").click());
+    assert.ok(f.document.querySelector("[role=dialog]"));
+    assert.match(
+      f.document.querySelector("[role=dialog]").textContent,
+      /100.00 CNY/,
+    );
+    await act(async () => button("登记已付款").click());
+    assert.ok(f.document.querySelector('input[aria-label="付款参考号"]'));
+    assert.equal(button("确认登记已付款").disabled, true);
+    await act(async () =>
+      f.document.querySelector("input[type=checkbox]").click(),
+    );
+    assert.equal(button("确认登记已付款").disabled, false);
+    assert.match(
+      f.document.querySelector("[role=dialog]").textContent,
+      /不会发起银行或链上转账/,
+    );
+  } finally {
+    await f.close();
+    globalThis.fetch = savedFetch;
+  }
+});

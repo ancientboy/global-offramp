@@ -1438,11 +1438,24 @@ export class OfframpService {
       return this.orderView(o, actor);
     });
   }
+  private requireProviderScope(s: State, actor: Actor, o: Order) {
+    if (actor.role !== "payout_provider") return;
+    demand(
+      !!actor.payoutProviderId &&
+        o.payoutProviderSnapshot?.id === actor.payoutProviderId &&
+        o.payoutProviderSnapshot.status === "active" &&
+        s.payoutProviders?.some(
+          (p) => p.id === actor.payoutProviderId && p.status === "active",
+        ),
+      "FORBIDDEN",
+      "Assigned active payout provider required",
+    );
+  }
   /** Mock bookkeeping only: the administrator attests a payment made outside this application. */
   async confirmManualPayout(actor: Actor, orderId: string, input: unknown) {
-    authorize(actor, "payout.record");
+    if (actor.role !== "payout_provider") authorize(actor, "payout.record");
     demand(
-      actor.role === "merchant_admin",
+      actor.role === "merchant_admin" || actor.role === "payout_provider",
       "FORBIDDEN",
       "Merchant administrator required",
     );
@@ -1462,6 +1475,7 @@ export class OfframpService {
       .digest("hex");
     return this.store.transaction((s) => {
       const o = this.order(s, orderId);
+      this.requireProviderScope(s, actor, o);
       demand(
         !s.audits.some(
           (a) =>
@@ -1477,8 +1491,10 @@ export class OfframpService {
       if (existing) {
         const audit = s.audits.find(
           (a) =>
-            a.action === "payout.admin_attested" &&
-            a.data.attemptId === existing.id,
+            a.action ===
+              (actor.role === "payout_provider"
+                ? "payout.provider_attested"
+                : "payout.admin_attested") && a.data.attemptId === existing.id,
         );
         demand(
           existing.orderId === orderId &&
@@ -1487,7 +1503,14 @@ export class OfframpService {
           "Payment key reused with changed details",
         );
         if (o.payoutStatus === "sent")
-          this.completePayout(s, o, actor, "admin_attestation");
+          this.completePayout(
+            s,
+            o,
+            actor,
+            actor.role === "payout_provider"
+              ? "provider_attestation"
+              : "admin_attestation",
+          );
         return this.orderView(o, actor);
       }
       this.requireWalletReservation(o);
@@ -1572,10 +1595,17 @@ export class OfframpService {
           providerReference: "MOCK-ALLOCATION-" + o.id,
           actualRate: o.quote.customerRate,
           evidence:
-            "Administrator attested manual external allocation; not bank verified",
+            "Operator recorded manual external allocation; not bank verified",
           recordedBy: actor.id,
         };
-        this.audit(s, actor, "allocation.admin_attested", o.id);
+        this.audit(
+          s,
+          actor,
+          actor.role === "payout_provider"
+            ? "allocation.provider_attested"
+            : "allocation.admin_attested",
+          o.id,
+        );
       }
       const attempt =
         previous && ["approved", "awaiting_approval"].includes(previous.state)
@@ -1601,20 +1631,41 @@ export class OfframpService {
           paidAt: v.paidAt!,
           providerReference: v.providerReference!,
           confirmedBy: actor.id,
-          verification: "admin_attestation",
+          verification:
+            actor.role === "payout_provider"
+              ? "provider_attestation"
+              : "admin_attestation",
         };
-        this.completePayout(s, o, actor, "admin_attestation");
+        this.completePayout(
+          s,
+          o,
+          actor,
+          actor.role === "payout_provider"
+            ? "provider_attestation"
+            : "admin_attestation",
+        );
       } else o.payoutStatus = "unknown";
-      this.audit(s, actor, "payout.admin_attested", o.id, {
-        attemptId: attempt.id,
-        fingerprint,
-        outcome: v.outcome,
-        actualAmount: v.actualAmount,
-        paidAt: v.paidAt,
-        providerReference: v.providerReference,
-      });
+      this.audit(
+        s,
+        actor,
+        actor.role === "payout_provider"
+          ? "payout.provider_attested"
+          : "payout.admin_attested",
+        o.id,
+        {
+          attemptId: attempt.id,
+          fingerprint,
+          outcome: v.outcome,
+          actualAmount: v.actualAmount,
+          paidAt: v.paidAt,
+          providerReference: v.providerReference,
+        },
+      );
       this.emit(s, "payout." + v.outcome, o.id, {
-        verification: "admin_attestation",
+        verification:
+          actor.role === "payout_provider"
+            ? "provider_attestation"
+            : "admin_attestation",
       });
       return this.orderView(o, actor);
     });
@@ -1624,7 +1675,7 @@ export class OfframpService {
     return new ReceiptService(this.store, this.clock);
   }
   async uploadReceiptFile(actor: Actor, orderId: string, input: unknown) {
-    authorize(actor, "receipt.upload");
+    if (actor.role !== "payout_provider") authorize(actor, "receipt.upload");
     const v = z
       .object({
         fileName: z
@@ -1668,6 +1719,7 @@ export class OfframpService {
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     return this.store.transaction((s) => {
       const o = this.order(s, orderId);
+      this.requireProviderScope(s, actor, o);
       demand(
         o.payoutStatus === "sent",
         "INVALID_STATE",
@@ -1699,14 +1751,18 @@ export class OfframpService {
   async downloadReceiptFile(actor: Actor, orderId: string) {
     const s = await this.store.read();
     const o = this.order(s, orderId);
-    authorize(actor, "order.read", o.customerId);
+    if (actor.role === "payout_provider")
+      this.requireProviderScope(s, actor, o);
+    else authorize(actor, "order.read", o.customerId);
     demand(
       o.receiptFile,
       "NOT_FOUND",
       "No demo file attached; metadata alone is not a file",
     );
     demand(
-      !o.receiptFile.privateOriginal || actor.role === "merchant_admin",
+      !o.receiptFile.privateOriginal ||
+        actor.role === "merchant_admin" ||
+        actor.role === "payout_provider",
       "FORBIDDEN",
       "New receipt originals are administrator private; publish a redacted single-customer copy instead",
     );

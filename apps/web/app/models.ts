@@ -65,9 +65,17 @@ export interface Order {
   reconciled: boolean;
   completionStatus?: "completed" | "pending_review" | "in_progress";
   completionBasis?:
-    "admin_attestation" | "mock_internal_record" | "financial_review" | null;
+    | "admin_attestation"
+    | "provider_attestation"
+    | "mock_internal_record"
+    | "financial_review"
+    | null;
   completion?: {
-    basis: "admin_attestation" | "mock_internal_record" | "financial_review";
+    basis:
+      | "admin_attestation"
+      | "provider_attestation"
+      | "mock_internal_record"
+      | "financial_review";
     completedAt: string;
     completedBy: string;
   };

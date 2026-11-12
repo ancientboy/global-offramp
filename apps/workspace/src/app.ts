@@ -1,4 +1,5 @@
-import { providerDashboard } from "./providers";
+import { DomainError } from "../../../packages/core/src/money";
+import { providerDashboard, providerOrder } from "./providers";
 import { ZodError } from "zod";
 import { Auth, actorFor, HttpError, publicAccount } from "./auth";
 import { OfframpService } from "../../../packages/core/src/service";
@@ -33,8 +34,8 @@ function json(body: unknown, status = 200, setCookie?: string) {
   if (status === 429) headers["retry-after"] = "60";
   return new Response(JSON.stringify(body), { status, headers });
 }
-// Intentionally omit all money/deposit/completion/provider-execution commands, including
-// manual payment attestation. Real channels are not wired. New routes default to denied.
+// The shared adapter omits execution commands. Provider payment records use a separate
+// scoped namespace below; no bank or blockchain execution is wired.
 const businessRoutes = [
   ["GET", /^\/(dashboard|audit|receipts)$/],
   ["GET", /^\/(orders|batches)\/[\w-]+\/published-receipts$/],
@@ -84,9 +85,9 @@ export function workspaceApp(
       // Never trust identity/role/proxy headers from callers.
       await auth.rate("requests:" + ip, 300, 60_000);
       const path = url.pathname.slice("/workspace/api".length);
-      const body = async () => {
+      const body = async (limit = 4096) => {
         const text = await request.text();
-        if (Buffer.byteLength(text) > 4096)
+        if (Buffer.byteLength(text) > limit)
           throw new HttpError(413, "BODY_TOO_LARGE");
         return JSON.parse(text);
       };
@@ -137,6 +138,48 @@ export function workspaceApp(
       if (account.role === "payout_provider") {
         if (request.method === "GET" && path === "/dashboard")
           return json(await providerDashboard(auth, account));
+        const match =
+          /^\/provider\/orders\/([a-zA-Z0-9_-]{1,100})(?:\/(payment|receipt))?$/.exec(
+            path,
+          );
+        if (match) {
+          const [, id, action] = match;
+          await providerOrder(auth, account, id);
+          if (request.method === "GET" && !action)
+            return json(await providerOrder(auth, account, id));
+          if (request.method === "GET" && action === "receipt") {
+            const file = await core.downloadReceiptFile(actorFor(account), id);
+            return new Response(Buffer.from(file.dataBase64, "base64"), {
+              headers: {
+                "content-type": file.contentType,
+                "content-disposition":
+                  "attachment; filename*=UTF-8''" +
+                  encodeURIComponent(file.fileName),
+                "cache-control": "private, no-store",
+                "x-content-type-options": "nosniff",
+              },
+            });
+          }
+          if (
+            request.method === "POST" &&
+            (action === "payment" || action === "receipt")
+          ) {
+            await auth.rate("provider-write:" + account.id, 20, 60000);
+            if (action === "payment")
+              await core.confirmManualPayout(
+                actorFor(account),
+                id,
+                await body(),
+              );
+            else
+              await core.uploadReceiptFile(
+                actorFor(account),
+                id,
+                await body(3 * 1024 * 1024),
+              );
+            return json(await providerOrder(auth, account, id));
+          }
+        }
         throw new HttpError(403, "FORBIDDEN");
       }
       if (request.method === "GET" && path === "/market-rates") {
@@ -220,6 +263,15 @@ export function workspaceApp(
         return json(
           { error: error.code, message: "参考汇率暂不可用，请稍后重试。" },
           503,
+        );
+      if (error instanceof DomainError)
+        return json(
+          { error: error.code },
+          error.code === "FORBIDDEN"
+            ? 403
+            : error.code === "NOT_FOUND"
+              ? 404
+              : 409,
         );
       if (error instanceof HttpError)
         return json({ error: error.code }, error.status);

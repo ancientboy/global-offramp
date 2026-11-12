@@ -12,6 +12,7 @@ export interface Actor {
   role: Role;
   customerId?: string;
   partnerId?: string;
+  payoutProviderId?: string;
 }
 export interface Customer {
   id: string;
@@ -145,7 +146,11 @@ export interface Order {
   reconciled: boolean;
   /** Business completion is separate from optional financial reconciliation. */
   completion?: {
-    basis: "admin_attestation" | "mock_internal_record" | "financial_review";
+    basis:
+      | "admin_attestation"
+      | "provider_attestation"
+      | "mock_internal_record"
+      | "financial_review";
     completedAt: string;
     completedBy: string;
   };
@@ -168,7 +173,8 @@ export interface Order {
     paidAt: string;
     providerReference: string;
     confirmedBy: string;
-    verification: "admin_attestation" | "mock_internal_record";
+    verification:
+      "admin_attestation" | "provider_attestation" | "mock_internal_record";
     referenceKind?: "mock_internal" | "external";
     internalRecordId?: string;
     confirmedAt?: string;

@@ -1170,3 +1170,257 @@ test("provider login exposes only assigned execution orders and cannot access cu
     await f.close();
   }
 });
+
+test("scoped provider payment and receipt flow records once, holds unknown outcomes and rejects foreign, unfunded or altered orders", async () => {
+  const f = await fixture();
+  try {
+    const { OfframpService } =
+      await import("../../../packages/core/src/service");
+    const core = new OfframpService(f.store, () => new Date(f.auth.now())),
+      admin = { id: randomUUID(), role: "merchant_admin" as const };
+    const customer = await f.register("provider-actions@example.com");
+    await core.reviewCustomer(admin, customer.customerId, "approved");
+    const beneficiary = await core.createBeneficiary(admin, {
+      customerId: customer.customerId,
+      name: "Payment scope",
+      country: "CN",
+      currency: "CNY",
+      accountToken: "never-expose-bank-token",
+      accountMasked: "**** 1234",
+    });
+    await core.depositWallet(admin, {
+      customerId: customer.customerId,
+      currency: "USDT",
+      amount: "1000",
+      idempotencyKey: "provider-action-credit",
+    });
+    async function order(key: string, funded = true) {
+      const q = await core.createQuote(admin, {
+        customerId: customer.customerId,
+        beneficiaryId: beneficiary.id,
+        sourceCurrency: "USDT",
+        sourceAmount: "10",
+      });
+      return (await core.createOrder(admin, {
+        quoteId: q.id,
+        clientOrderId: key,
+        fundingSource: funded ? "wallet" : "deposit",
+      })) as any;
+    }
+    const paid = await order("provider-paid"),
+      unknown = await order("provider-unknown"),
+      unfunded = await order("provider-unfunded", false);
+    const other = await core.upsertPayoutProvider(admin, {
+      name: "Other provider",
+      status: "active",
+      scope: "third_party",
+      routes: ["CNY", "USD"],
+      isDefault: true,
+    });
+    const foreign = await order("other-provider-order");
+    const salt = "1234567890abcdef1234567890abcdef",
+      hash =
+        "scrypt-v1$" +
+        salt +
+        "$" +
+        scryptSync(password, salt, 32, {
+          N: 32768,
+          r: 8,
+          p: 1,
+          maxmem: 64 * 1024 * 1024,
+        }).toString("hex");
+    for (const [name, id] of [
+      ["provider-actions", "official-self-operated"],
+      ["other-provider", other.id],
+    ])
+      await f.pool.query(
+        "INSERT INTO workspace.accounts(id,username,display_name,password_hash,role,payout_provider_id,created_at) VALUES($1,$2,$2,$3,'payout_provider',$4,now())",
+        [randomUUID(), name, hash, id],
+      );
+    const cookie = await f.login("provider-actions"),
+      otherCookie = await f.login("other-provider");
+    const path = (id: string, action = "") =>
+      "provider/orders/" + id + (action ? "/" + action : "");
+    const detail = await (
+      await f.call(path(paid.id), undefined, cookie)
+    ).json();
+    assert.equal(detail.canRecordPayment, true);
+    assert.equal(detail.depositStatus, "confirmed");
+    assert.doesNotMatch(
+      JSON.stringify(detail),
+      /never-expose-bank-token|costRate|customerId/,
+    );
+    for (const action of ["", "receipt"])
+      assert.equal(
+        (await f.call(path(foreign.id, action), undefined, cookie)).status,
+        404,
+      );
+    assert.equal(
+      (await f.call(path(paid.id), undefined, otherCookie)).status,
+      404,
+    );
+    const input = {
+      idempotencyKey: "provider-pay-once",
+      outcome: "sent",
+      actualAmount: paid.quote.payoutAmount,
+      paidAt: paid.createdAt,
+      providerReference: "provider-reference-once",
+      evidence: "已核对付款结果",
+    };
+    const before = await f.store.read();
+    await assert.rejects(
+      () =>
+        core.confirmManualPayout(
+          {
+            id: "other-provider-actor",
+            role: "payout_provider",
+            payoutProviderId: other.id,
+          },
+          paid.id,
+          input,
+        ),
+      (e: any) => e.code === "FORBIDDEN",
+    );
+    assert.equal(
+      (
+        await f.call(
+          path(paid.id, "payment"),
+          { ...input, actualAmount: "1.00" },
+          cookie,
+        )
+      ).status,
+      409,
+    );
+    assert.deepEqual(await f.store.read(), before);
+    assert.equal(
+      (await f.call(path(unfunded.id, "payment"), input, cookie)).status,
+      409,
+    );
+    assert.equal(
+      (await f.call(path(foreign.id, "payment"), input, cookie)).status,
+      404,
+    );
+    assert.equal(
+      (
+        await f.call(path(paid.id, "payment"), input, cookie, {
+          origin: "https://evil.invalid",
+        })
+      ).status,
+      403,
+    );
+    const first = await f.call(path(paid.id, "payment"), input, cookie);
+    assert.equal(first.status, 200);
+    assert.equal((await first.json()).payoutStatus, "sent");
+    assert.equal(
+      (await f.call(path(paid.id, "payment"), input, cookie)).status,
+      200,
+    );
+    assert.equal(
+      (
+        await f.call(
+          path(paid.id, "payment"),
+          { ...input, idempotencyKey: "new-repeat" },
+          cookie,
+        )
+      ).status,
+      409,
+    );
+    const state = await f.store.read(),
+      saved = state.orders.find((o) => o.id === paid.id)!;
+    assert.equal(
+      saved.paymentConfirmation?.confirmedBy,
+      (await (await f.call("auth/me", undefined, cookie)).json()).account.id,
+    );
+    assert.equal(
+      saved.paymentConfirmation?.verification,
+      "provider_attestation",
+    );
+    assert.equal(saved.completion?.basis, "provider_attestation");
+    assert.equal(saved.walletFundingStatus, "consumed");
+    assert.equal(
+      state.journals.filter((j) => j.businessKey === "payout:" + paid.id)
+        .length,
+      1,
+    );
+    const unknownInput = {
+      idempotencyKey: "provider-unknown-once",
+      outcome: "unknown",
+      evidence: "结果待核实，禁止重复付款",
+    };
+    assert.equal(
+      (await f.call(path(unknown.id, "payment"), unknownInput, cookie)).status,
+      200,
+    );
+    assert.equal(
+      (
+        await f.call(
+          path(unknown.id, "payment"),
+          { ...input, idempotencyKey: "retry-unknown" },
+          cookie,
+        )
+      ).status,
+      409,
+    );
+    assert.equal(
+      (await f.store.read()).orders.find((o) => o.id === unknown.id)!
+        .walletFundingStatus,
+      "reserved",
+    );
+    const bytes = Buffer.from("%PDF-1.4\nprovider receipt\n%%EOF");
+    const receipt = {
+      fileName: "payment.pdf",
+      contentType: "application/pdf",
+      dataBase64: bytes.toString("base64"),
+    };
+    assert.equal(
+      (
+        await f.call(
+          path(paid.id, "receipt"),
+          { ...receipt, dataBase64: Buffer.from("invalid").toString("base64") },
+          cookie,
+        )
+      ).status,
+      409,
+    );
+    assert.equal(
+      (await f.call(path(foreign.id, "receipt"), receipt, cookie)).status,
+      404,
+    );
+    assert.equal(
+      (await f.call(path(unknown.id, "receipt"), receipt, cookie)).status,
+      409,
+    );
+    assert.equal(
+      (await f.call(path(paid.id, "receipt"), receipt, cookie)).status,
+      200,
+    );
+    const download = await f.call(path(paid.id, "receipt"), undefined, cookie);
+    assert.equal(download.status, 200);
+    assert.equal(download.headers.get("content-type"), "application/pdf");
+    assert.deepEqual(Buffer.from(await download.arrayBuffer()), bytes);
+    assert.equal(
+      (await f.call(path(paid.id, "receipt"), undefined, otherCookie)).status,
+      404,
+    );
+    const customerCookie = await f.login("provider-actions@example.com");
+    assert.equal(
+      (
+        await f.call(
+          "orders/" + paid.id + "/receipt-file",
+          undefined,
+          customerCookie,
+        )
+      ).status,
+      403,
+    );
+    const customerDashboard = await (
+      await f.call("dashboard", undefined, customerCookie)
+    ).json();
+    assert.equal(
+      customerDashboard.orders.find((o: any) => o.id === paid.id).payoutStatus,
+      "sent",
+    );
+  } finally {
+    await f.close();
+  }
+});

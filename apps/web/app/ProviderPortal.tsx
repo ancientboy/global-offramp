@@ -1,41 +1,96 @@
 "use client";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { WorkspaceContext } from "./workspace-context";
-import { Badge } from "./ui";
+import { Badge, Modal } from "./ui";
+import SelectField from "./SelectField";
 import { date, money } from "./models";
+type Order = {
+  id: string;
+  orderNumber: string;
+  createdAt: string;
+  payoutCurrency: string;
+  payoutAmount: string;
+  payoutStatus: string;
+  receiptStatus: string;
+  depositStatus: string;
+  canRecordPayment: boolean;
+  recipient: null | { name: string; country: string; accountMasked: string };
+  paymentConfirmation: null | {
+    actualAmount: string;
+    paidAt: string;
+    providerReference: string;
+  };
+};
 type Data = {
   provider: { id: string; name: string; routes: string[] };
-  orders: {
-    id: string;
-    orderNumber: string;
-    createdAt: string;
-    payoutCurrency: string;
-    payoutAmount: string;
-    payoutStatus: string;
-    receiptStatus: string;
-    recipient: null | { name: string; country: string; accountMasked: string };
-  }[];
+  orders: Order[];
 };
+const errors: Record<string, string> = {
+  FUNDS_NOT_READY: "订单尚未入金，暂不能登记付款。",
+  PAYOUT_LOCKED: "订单状态已变化，或结果仍待核实，请刷新后处理。",
+  FORBIDDEN: "当前账号无权处理该订单。",
+  NOT_FOUND: "订单不存在或未分配给当前服务商。",
+  PAYOUT_AMOUNT_MISMATCH: "付款金额必须与订单金额一致。",
+  INVALID_PAYMENT_TIME: "付款时间应在下单之后，且不能晚于当前时间。",
+  DUPLICATE_REFERENCE: "该付款参考号已登记，请核对后重试。",
+  INVALID_FILE: "回单须为 PNG、JPG 或 PDF，且不超过 2 MB。",
+  INVALID_STATE: "当前订单状态不支持此操作。",
+  IDEMPOTENCY_CONFLICT: "本次操作内容已变化，请返回详情并重新登记。",
+  OPEN_DISCREPANCY: "订单存在待核实差异，请联系管理员处理。",
+  REFUND_CONFLICT: "订单存在退款申请，请联系管理员处理。",
+  PROVIDER_UNAVAILABLE: "服务商已停用，请联系管理员。",
+};
+const status = (o: Order) =>
+  o.payoutStatus === "draft"
+    ? o.depositStatus === "confirmed"
+      ? "待处理"
+      : "待入金"
+    : o.payoutStatus === "sent"
+      ? "已登记付款"
+      : o.payoutStatus === "unknown"
+        ? "待核实"
+        : o.payoutStatus === "cancelled"
+          ? "已取消"
+          : undefined;
+const pending = (o: Order) =>
+  ["draft", "approved", "awaiting_approval"].includes(o.payoutStatus);
 export default function ProviderPortal() {
   const workspace = useContext(WorkspaceContext)!;
   const [data, setData] = useState<Data | null>(null),
     [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
+    [notice, setNotice] = useState(""),
+    [busy, setBusy] = useState(false),
+    [filter, setFilter] = useState("pending"),
+    [selected, setSelected] = useState<Order | null>(null),
+    [action, setAction] = useState<"sent" | "unknown" | null>(null);
+  const [reference, setReference] = useState(""),
+    [paidAt, setPaidAt] = useState(""),
+    [evidence, setEvidence] = useState(""),
+    [checked, setChecked] = useState(false);
+  const key = useRef(""),
+    inFlight = useRef(false);
+  async function request(path: string, body?: unknown) {
+    const r = await fetch("/workspace/api/" + path, {
+      method: body === undefined ? "GET" : "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    if (r.status === 401) {
+      workspace.expired();
+      throw Error("登录已过期，请重新登录。");
+    }
+    const result = await r.json();
+    if (!r.ok)
+      throw Error(errors[result.error] ?? "操作未完成，请刷新订单后重试。");
+    return result;
+  }
   async function load() {
     setBusy(true);
     setError("");
     try {
-      const r = await fetch("/workspace/api/dashboard", {
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-      if (r.status === 401) {
-        workspace.expired();
-        return;
-      }
-      if (!r.ok)
-        throw Error("暂时无法读取服务商订单，请联系管理员或稍后重试。");
-      setData(await r.json());
+      setData(await request("dashboard"));
     } catch (e) {
       setError(e instanceof Error ? e.message : "读取失败");
     } finally {
@@ -45,13 +100,117 @@ export default function ProviderPortal() {
   useEffect(() => {
     void load();
   }, []);
+  async function open(order: Order) {
+    setError("");
+    setNotice("");
+    setBusy(true);
+    setAction(null);
+    try {
+      setSelected(await request("provider/orders/" + order.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "读取失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+  function begin(outcome: "sent" | "unknown") {
+    setAction(outcome);
+    key.current = crypto.randomUUID();
+    setReference("");
+    setPaidAt(
+      new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+        .toISOString()
+        .slice(0, 16),
+    );
+    setEvidence("");
+    setChecked(false);
+    setError("");
+  }
+  async function record(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected || !action || !checked || inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const input = {
+        idempotencyKey: key.current,
+        outcome: action,
+        evidence,
+        ...(action === "sent"
+          ? {
+              actualAmount: selected.payoutAmount,
+              paidAt: new Date(paidAt).toISOString(),
+              providerReference: reference,
+            }
+          : reference
+            ? { providerReference: reference }
+            : {}),
+      };
+      const order = await request(
+        "provider/orders/" + selected.id + "/payment",
+        input,
+      );
+      setSelected(order);
+      setData(await request("dashboard"));
+      setAction(null);
+      setNotice(
+        action === "sent"
+          ? "付款结果已登记，订单状态已更新。"
+          : "订单已标记待核实，禁止重复付款，请联系管理员核对。",
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "登记失败");
+    } finally {
+      setBusy(false);
+      inFlight.current = false;
+    }
+  }
+  async function upload(file: File) {
+    if (!selected || inFlight.current) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setError(errors.INVALID_FILE);
+      return;
+    }
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const dataBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1]);
+        reader.onerror = () => reject(Error("文件读取失败"));
+        reader.readAsDataURL(file);
+      });
+      const order = await request(
+        "provider/orders/" + selected.id + "/receipt",
+        { fileName: file.name, contentType: file.type, dataBase64 },
+      );
+      setSelected(order);
+      setData(await request("dashboard"));
+      setNotice("回单已上传，可由管理员核对。");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "上传失败");
+    } finally {
+      setBusy(false);
+      inFlight.current = false;
+    }
+  }
+  const rows = (data?.orders ?? [])
+    .filter(
+      (o) =>
+        filter === "all" ||
+        (filter === "pending" ? pending(o) : o.payoutStatus === filter),
+    )
+    .slice()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return (
     <main className="provider-portal">
       <header className="provider-top">
         <div>
           <span className="admin-eyebrow">汇途 · 出款服务商</span>
           <h1>{data?.provider.name ?? workspace.account.name}</h1>
-          <p>查看分配给您的出款订单</p>
+          <p>处理分配给您的出款订单</p>
         </div>
         <div className="actions">
           <button
@@ -63,6 +222,7 @@ export default function ProviderPortal() {
           </button>
           <button
             className="button text"
+            disabled={busy}
             onClick={() =>
               void workspace
                 .logout()
@@ -73,33 +233,52 @@ export default function ProviderPortal() {
           </button>
         </div>
       </header>
-      {error && (
+      {!selected && error && (
         <p role="alert" className="note danger">
           {error}
+        </p>
+      )}
+      {!selected && notice && (
+        <p role="status" className="note">
+          {notice}
         </p>
       )}
       {data && (
         <>
           <section className="provider-summary">
             <div className="card">
-              <span>所属服务商</span>
-              <strong>{data.provider.name}</strong>
+              <span>待处理订单</span>
+              <strong>{data.orders.filter(pending).length}</strong>
             </div>
             <div className="card">
               <span>支持币种</span>
               <strong>{data.provider.routes.join(" · ")}</strong>
             </div>
             <div className="card">
-              <span>分配订单</span>
-              <strong>{data.orders.length}</strong>
+              <span>待核实订单</span>
+              <strong>
+                {data.orders.filter((o) => o.payoutStatus === "unknown").length}
+              </strong>
             </div>
           </section>
           <section className="card">
             <div className="card-heading">
               <h2>出款订单</h2>
-              <Badge>{data.orders.length} 笔</Badge>
+              <div className="provider-filter">
+                <SelectField
+                  aria-label="筛选出款订单"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                >
+                  <option value="pending">待处理</option>
+                  <option value="unknown">待核实</option>
+                  <option value="sent">已登记付款</option>
+                  <option value="cancelled">已取消</option>
+                  <option value="all">全部订单</option>
+                </SelectField>
+              </div>
             </div>
-            {data.orders.length ? (
+            {rows.length ? (
               <div className="provider-orders">
                 <table>
                   <thead>
@@ -108,14 +287,20 @@ export default function ProviderPortal() {
                       <th>收款人</th>
                       <th>出款金额</th>
                       <th>付款状态</th>
-                      <th>回单</th>
+                      <th>操作</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.orders.map((o) => (
+                    {rows.map((o) => (
                       <tr key={o.id}>
                         <td>
-                          {o.orderNumber}
+                          <button
+                            className="link"
+                            disabled={busy}
+                            onClick={() => void open(o)}
+                          >
+                            {o.orderNumber}
+                          </button>
                           <small>{date(o.createdAt)}</small>
                         </td>
                         <td>
@@ -126,10 +311,16 @@ export default function ProviderPortal() {
                           {money(o.payoutAmount)} {o.payoutCurrency}
                         </td>
                         <td>
-                          <Badge status={o.payoutStatus} />
+                          <Badge status={o.payoutStatus}>{status(o)}</Badge>
                         </td>
                         <td>
-                          <Badge status={o.receiptStatus} />
+                          <button
+                            className="button outline"
+                            disabled={busy}
+                            onClick={() => void open(o)}
+                          >
+                            {pending(o) ? "查看 / 处理" : "查看详情"}
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -138,12 +329,244 @@ export default function ProviderPortal() {
               </div>
             ) : (
               <div className="provider-empty">
-                <h3>暂无分配订单</h3>
-                <p>管理员将订单分配至您的服务商后，会显示在这里。</p>
+                <h3>暂无{filter === "pending" ? "待处理" : "该状态"}订单</h3>
+                <p>订单状态更新后，可刷新列表查看。</p>
               </div>
             )}
           </section>
         </>
+      )}
+      {selected && (
+        <Modal
+          title={"订单 " + selected.orderNumber}
+          busy={busy}
+          onClose={() => {
+            setSelected(null);
+            setAction(null);
+            setError("");
+          }}
+        >
+          <div className="provider-detail">
+            <Badge status={selected.payoutStatus}>{status(selected)}</Badge>
+            <dl className="details">
+              <div>
+                <dt>出款金额</dt>
+                <dd>
+                  <strong>
+                    {money(selected.payoutAmount)} {selected.payoutCurrency}
+                  </strong>
+                </dd>
+              </div>
+              <div>
+                <dt>收款人</dt>
+                <dd>{selected.recipient?.name ?? "—"}</dd>
+              </div>
+              <div>
+                <dt>收款账户尾号</dt>
+                <dd>{selected.recipient?.accountMasked ?? "—"}</dd>
+              </div>
+              <div>
+                <dt>收款地区</dt>
+                <dd>
+                  {selected.recipient
+                    ? new Intl.DisplayNames(["zh-CN"], { type: "region" }).of(
+                        selected.recipient.country,
+                      )
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>入金状态</dt>
+                <dd>
+                  {selected.depositStatus === "confirmed" ? "已确认" : "未确认"}
+                </dd>
+              </div>
+              <div>
+                <dt>下单时间</dt>
+                <dd>{date(selected.createdAt)}</dd>
+              </div>
+            </dl>
+            {error && (
+              <p role="alert" className="note danger">
+                {error}
+              </p>
+            )}
+            {notice && (
+              <p role="status" className="note">
+                {notice}
+              </p>
+            )}
+            {selected.paymentConfirmation && (
+              <section className="provider-payment">
+                <h3>付款登记</h3>
+                <p>参考号：{selected.paymentConfirmation.providerReference}</p>
+                <p>付款时间：{date(selected.paymentConfirmation.paidAt)}</p>
+                <p>
+                  登记金额：{money(selected.paymentConfirmation.actualAmount)}{" "}
+                  {selected.payoutCurrency}
+                </p>
+              </section>
+            )}
+            {action ? (
+              <form
+                onSubmit={(e) => void record(e)}
+                className="provider-action-form"
+              >
+                <h3>
+                  {action === "sent" ? "登记线下付款结果" : "标记结果待核实"}
+                </h3>
+                <p className="muted small">
+                  此处只登记处理结果，不会发起银行或链上转账。完整收款资料请向管理员核实。
+                </p>
+                {action === "sent" && (
+                  <>
+                    <label>
+                      付款金额
+                      <input
+                        aria-label="付款金额"
+                        value={
+                          selected.payoutAmount + " " + selected.payoutCurrency
+                        }
+                        readOnly
+                      />
+                    </label>
+                    <label>
+                      付款时间
+                      <input
+                        aria-label="付款时间"
+                        type="datetime-local"
+                        required
+                        value={paidAt}
+                        onChange={(e) => setPaidAt(e.target.value)}
+                        disabled={busy}
+                      />
+                    </label>
+                  </>
+                )}
+                <label>
+                  付款参考号{action === "unknown" ? "（选填）" : ""}
+                  <input
+                    aria-label="付款参考号"
+                    required={action === "sent"}
+                    maxLength={100}
+                    value={reference}
+                    onChange={(e) => setReference(e.target.value)}
+                    disabled={busy}
+                  />
+                </label>
+                <label>
+                  处理说明
+                  <textarea
+                    aria-label="处理说明"
+                    required
+                    minLength={3}
+                    maxLength={1000}
+                    value={evidence}
+                    onChange={(e) => setEvidence(e.target.value)}
+                    disabled={busy}
+                  />
+                </label>
+                <label className="provider-check">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => setChecked(e.target.checked)}
+                    disabled={busy}
+                  />
+                  <span>
+                    {action === "sent"
+                      ? "我已核对收款人和金额，并确认线下付款结果。"
+                      : "当前付款结果仍需核实，不会重复发起付款。"}
+                  </span>
+                </label>
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="button outline"
+                    disabled={busy}
+                    onClick={() => setAction(null)}
+                  >
+                    返回详情
+                  </button>
+                  <button
+                    type="submit"
+                    className="button"
+                    disabled={busy || !checked}
+                  >
+                    {busy
+                      ? "提交中…"
+                      : action === "sent"
+                        ? "确认登记已付款"
+                        : "确认标记待核实"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                {selected.canRecordPayment ? (
+                  <div className="actions">
+                    <button
+                      className="button"
+                      disabled={busy}
+                      onClick={() => begin("sent")}
+                    >
+                      登记已付款
+                    </button>
+                    <button
+                      className="button outline"
+                      disabled={busy}
+                      onClick={() => begin("unknown")}
+                    >
+                      结果待核实
+                    </button>
+                  </div>
+                ) : selected.payoutStatus === "unknown" ? (
+                  <p className="note">
+                    结果待核实，订单已锁定。请联系管理员核对后处理，避免重复付款。
+                  </p>
+                ) : pending(selected) ? (
+                  <p className="note">
+                    入金尚未确认或余额未冻结，暂不能登记付款。请联系管理员核对。
+                  </p>
+                ) : null}
+                {selected.payoutStatus === "sent" && (
+                  <section className="provider-receipt">
+                    <h3>付款回单</h3>
+                    <p className="muted small">
+                      支持 PNG、JPG、PDF，最大 2 MB。
+                    </p>
+                    <label className="button outline">
+                      {busy ? "上传中…" : "上传 / 更新回单"}
+                      <input
+                        aria-label="上传付款回单"
+                        type="file"
+                        accept="image/png,image/jpeg,application/pdf"
+                        disabled={busy}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) void upload(file);
+                          e.target.value = "";
+                        }}
+                      />
+                    </label>
+                    {selected.receiptStatus !== "none" && (
+                      <a
+                        className="button text"
+                        href={
+                          "/workspace/api/provider/orders/" +
+                          selected.id +
+                          "/receipt"
+                        }
+                      >
+                        下载回单
+                      </a>
+                    )}
+                  </section>
+                )}
+              </>
+            )}
+          </div>
+        </Modal>
       )}
     </main>
   );
