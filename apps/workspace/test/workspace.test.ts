@@ -20,6 +20,8 @@ const migrations = [
   "db/migrations/002_workspace.sql",
   "db/migrations/003_route_drafts.sql",
   "db/migrations/004_operator_customer_username.sql",
+  "db/migrations/005_multi_fiat.sql",
+  "db/migrations/006_provider_accounts.sql",
 ].map((p) => readFileSync(p, "utf8"));
 function poolFor(db: PGlite): SqlPool {
   return {
@@ -1020,6 +1022,150 @@ test("market references require no customer data, only staff can refresh, and pr
     const p = await published.json();
     assert.equal(p.baseline.USD_CNY, "6.40000000");
     assert.ok(p.marketReference.batchId);
+  } finally {
+    await f.close();
+  }
+});
+
+test("provider login exposes only assigned execution orders and cannot access customer, pricing, audit or mutation routes", async () => {
+  const f = await fixture();
+  try {
+    const { OfframpService } =
+      await import("../../../packages/core/src/service");
+    const core = new OfframpService(f.store);
+    const admin = { id: randomUUID(), role: "merchant_admin" as const };
+    const customer = await f.register("provider-scope@example.com");
+    await core.reviewCustomer(admin, customer.customerId, "approved");
+    const b = await core.createBeneficiary(admin, {
+      customerId: customer.customerId,
+      name: "Scoped recipient",
+      country: "CN",
+      currency: "CNY",
+      accountToken: "never-expose-token",
+      accountMasked: "**** 4321",
+    });
+    const provider = await core.upsertPayoutProvider(admin, {
+      name: "Assigned provider",
+      status: "active",
+      scope: "third_party",
+      routes: ["CNY", "USD"],
+      isDefault: false,
+    });
+    const orders = [];
+    for (let i = 0; i < 2; i++) {
+      await core.upsertPayoutProvider(
+        admin,
+        i === 0
+          ? {
+              id: provider.id,
+              name: provider.name,
+              status: "active",
+              scope: "third_party",
+              routes: ["CNY", "USD"],
+              isDefault: true,
+            }
+          : {
+              id: "official-self-operated",
+              name: "官方自营",
+              status: "active",
+              scope: "official",
+              routes: ["CNY", "USD"],
+              isDefault: true,
+            },
+      );
+      const q = await core.createQuote(admin, {
+        customerId: customer.customerId,
+        beneficiaryId: b.id,
+        sourceCurrency: "USDT",
+        sourceAmount: "100",
+      });
+      orders.push(
+        await core.createOrder(admin, {
+          quoteId: q.id,
+          clientOrderId: "provider-scope-" + i,
+        }),
+      );
+    }
+
+    const providerId = randomUUID(),
+      salt = "1234567890abcdef1234567890abcdef";
+    const encoded =
+      "scrypt-v1$" +
+      salt +
+      "$" +
+      scryptSync(password, salt, 32, {
+        N: 32768,
+        r: 8,
+        p: 1,
+        maxmem: 64 * 1024 * 1024,
+      }).toString("hex");
+    await f.pool.query(
+      "INSERT INTO workspace.accounts(id,username,display_name,password_hash,role,payout_provider_id,created_at) VALUES($1,'provider-test','Provider test',$2,'payout_provider',$3,now())",
+      [providerId, encoded, provider.id],
+    );
+    const cookie = await f.login("provider-test");
+    const me = await (await f.call("auth/me", undefined, cookie)).json();
+    assert.equal(me.account.role, "payout_provider");
+    assert.equal(me.account.payoutProviderId, provider.id);
+    const response = await f.call("dashboard", undefined, cookie, {
+      "x-demo-actor": "admin-demo",
+    });
+    assert.equal(response.status, 200);
+    const d = await response.json();
+    assert.equal(d.orders.length, 1);
+    assert.equal(d.orders[0].id, orders[0].id);
+    assert.equal(d.orders[0].recipient.accountMasked, "**** 4321");
+    for (const key of [
+      "customers",
+      "walletBalances",
+      "commissions",
+      "pricingCurrent",
+      "audits",
+    ])
+      assert.equal(d[key], undefined);
+    assert.doesNotMatch(
+      JSON.stringify(d),
+      /never-expose-token|customerId|costRate|commissionRate/,
+    );
+    for (const path of ["audit", "receipts", "routes", "market-rates"])
+      assert.equal((await f.call(path, undefined, cookie)).status, 403, path);
+    for (const path of [
+      "wallet/deposits",
+      "admin/payout-providers",
+      "quotes",
+      "orders",
+      "receipts/upload",
+      "admin/pricing/publish",
+    ])
+      assert.equal((await f.call(path, {}, cookie)).status, 403, path);
+    assert.equal(
+      (
+        await f.call("auth/register", {
+          email: "escalate@example.com",
+          password,
+          name: "No escalation",
+          kind: "personal",
+          role: "payout_provider",
+          payoutProviderId: provider.id,
+        })
+      ).status,
+      400,
+    );
+    await f.pool.query(
+      "UPDATE workspace.accounts SET payout_provider_id=$1 WHERE id=$2",
+      ["other-provider", providerId],
+    );
+    assert.equal((await f.call("dashboard", undefined, cookie)).status, 403);
+    await f.pool.query(
+      "UPDATE workspace.accounts SET payout_provider_id=$1 WHERE id=$2",
+      [provider.id, providerId],
+    );
+    await f.store.transaction((s) => {
+      s.payoutProviders!.find((p) => p.id === provider.id)!.status = "disabled";
+    });
+    assert.equal((await f.call("dashboard", undefined, cookie)).status, 403);
+    assert.equal((await f.call("auth/logout", {}, cookie)).status, 200);
+    assert.equal((await f.call("auth/me", undefined, cookie)).status, 401);
   } finally {
     await f.close();
   }

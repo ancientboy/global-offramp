@@ -431,3 +431,73 @@ body .modal-overlay .modal {
     justify-content: center;
   }
 }
+.provider-portal {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 40px 28px;
+}
+.provider-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+.provider-top h1 {
+  font-size: 28px;
+  margin: 8px 0;
+}
+.provider-top p,
+.provider-summary span {
+  color: #81949c;
+  font-size: 13px;
+}
+.provider-summary {
+  display: grid;
+  grid-template-columns: 1fr 2fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.provider-summary .card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.provider-summary strong {
+  font-size: 17px;
+  color: #234c50;
+}
+.provider-orders {
+  overflow: auto;
+}
+.provider-orders small {
+  display: block;
+  font-size: 11px;
+  color: #81949c;
+  margin-top: 6px;
+}
+.provider-empty {
+  text-align: center;
+  padding: 64px 20px;
+  color: #80949c;
+}
+.provider-empty h3 {
+  color: #415f69;
+  font-size: 18px;
+}
+@media (max-width: 700px) {
+  .provider-portal {
+    padding: 24px 16px;
+  }
+  .provider-top {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .provider-summary {
+    grid-template-columns: 1fr;
+  }
+  .provider-top h1 {
+    font-size: 24px;
+  }
+}

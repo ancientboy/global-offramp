@@ -1,5 +1,6 @@
 import { Currency } from "./money";
 export type Role =
+  | "payout_provider"
   | "merchant_admin"
   | "customer"
   | "operations"

@@ -50,7 +50,9 @@ const identifier = z.union([credentials.shape.email, username]);
 const loginPassword = z.string().min(1).max(128);
 export const loginCredentials = z.union([
   z.object({ identifier, password: loginPassword }).strict(),
-  z.object({email: credentials.shape.email, password: loginPassword}).strict()
+  z
+    .object({ email: credentials.shape.email, password: loginPassword })
+    .strict()
     .transform((v) => ({ identifier: v.email, password: v.password })),
   z
     .object({ username, password: loginPassword })
@@ -109,6 +111,7 @@ export interface Account {
   display_name: string;
   role: Actor["role"];
   customer_id: string | null;
+  payout_provider_id?: string | null;
   customer_kind?: "personal" | "company";
 }
 export const publicAccount = (a: Account) => ({
@@ -118,6 +121,7 @@ export const publicAccount = (a: Account) => ({
   name: a.display_name,
   role: a.role,
   customerId: a.customer_id,
+  ...(a.payout_provider_id ? { payoutProviderId: a.payout_provider_id } : {}),
   kind: a.customer_kind,
 });
 export const actorFor = (a: Account): Actor => ({
@@ -237,7 +241,7 @@ export class Auth {
   async current(token: string | undefined): Promise<Account> {
     if (!token) throw new HttpError(401, "UNAUTHENTICATED");
     const r = await this.pool.query(
-      `SELECT a.id,a.email,a.username,a.display_name,a.role,a.customer_id,c.kind AS customer_kind FROM workspace.sessions s
+      `SELECT a.id,a.email,a.username,a.display_name,a.role,a.customer_id,a.payout_provider_id,c.kind AS customer_kind FROM workspace.sessions s
       JOIN workspace.accounts a ON a.id=s.account_id LEFT JOIN workspace.customers c ON c.id=a.customer_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>$2 AND a.enabled`,
       [digest(token), new Date(this.now())],
     );

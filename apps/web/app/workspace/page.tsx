@@ -2,6 +2,7 @@
 import SelectField from "../SelectField";
 import { FormEvent, useEffect, useState } from "react";
 import Home from "../page";
+import ProviderPortal from "../ProviderPortal";
 import { WorkspaceContext, type WorkspaceAccount } from "../workspace-context";
 
 const errors: Record<string, string> = {
@@ -88,7 +89,11 @@ export default function Workspace() {
           },
         }}
       >
-        <Home key={account.id} />
+        {account.role === "payout_provider" ? (
+          <ProviderPortal />
+        ) : (
+          <Home key={account.id} />
+        )}
       </WorkspaceContext.Provider>
     );
   return (

@@ -23,14 +23,22 @@ async function main() {
       await pool.query(
         readFileSync("db/migrations/003_route_drafts.sql", "utf8"),
       );
-      await pool.query(
-        readFileSync(
-          "db/migrations/004_operator_customer_username.sql",
-          "utf8",
-        ),
+      // The earlier two-role identity constraint is superseded by migration 006.
+      const providerSchema = await pool.query(
+        "SELECT 1 FROM information_schema.columns WHERE table_schema='workspace' AND table_name='accounts' AND column_name='payout_provider_id'",
       );
+      if (!providerSchema.rowCount)
+        await pool.query(
+          readFileSync(
+            "db/migrations/004_operator_customer_username.sql",
+            "utf8",
+          ),
+        );
       await pool.query(
         readFileSync("db/migrations/005_multi_fiat.sql", "utf8"),
+      );
+      await pool.query(
+        readFileSync("db/migrations/006_provider_accounts.sql", "utf8"),
       );
       console.log("Workspace schemas installed; no demo database touched");
     } else {

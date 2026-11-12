@@ -1,3 +1,4 @@
+import { providerDashboard } from "./providers";
 import { ZodError } from "zod";
 import { Auth, actorFor, HttpError, publicAccount } from "./auth";
 import { OfframpService } from "../../../packages/core/src/service";
@@ -131,6 +132,12 @@ export function workspaceApp(
       if (request.method === "POST" && path === "/auth/logout") {
         await auth.logout(token!, account);
         return json({ loggedOut: true }, 200, cookie("", 0));
+      }
+      // Dedicated service-provider identities never enter the broad business command adapter.
+      if (account.role === "payout_provider") {
+        if (request.method === "GET" && path === "/dashboard")
+          return json(await providerDashboard(auth, account));
+        throw new HttpError(403, "FORBIDDEN");
       }
       if (request.method === "GET" && path === "/market-rates") {
         if (!options.marketRates)
