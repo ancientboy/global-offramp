@@ -19,14 +19,14 @@ export default function Brand({
     >
       <img
         className="brand-lockup"
-        src={"/brand/flow-logo-" + (dark ? "dark" : "light") + "-v1.png"}
+        src={"/brand/flow-logo-" + (dark ? "dark" : "light") + "-v2.webp"}
         alt="汇途 HUITU"
         width={1774}
         height={887}
       />
       <img
         className="brand-symbol"
-        src="/brand/flow-symbol-v1.png"
+        src="/brand/flow-symbol-v2.webp"
         alt="汇途"
         width={1254}
         height={1254}

@@ -1,9 +1,15 @@
 "use client";
 import SelectField from "../SelectField";
+import dynamic from "next/dynamic";
 import { FormEvent, useEffect, useState } from "react";
-import Home from "../page";
-import ProviderPortal from "../ProviderPortal";
-import PartnerPortal from "../PartnerPortal";
+const Home = dynamic(() => import("../page"), {
+  ssr: false,
+  loading: () => <p className="auth-loading">正在加载工作台…</p>,
+});
+const ProviderPortal = dynamic(() => import("../ProviderPortal"), {
+  ssr: false,
+});
+const PartnerPortal = dynamic(() => import("../PartnerPortal"), { ssr: false });
 import Brand from "../Brand";
 import {
   ArrowRight,
@@ -163,7 +169,7 @@ export default function Workspace() {
         </div>
         <img
           className="auth-sculpture"
-          src="/brand/flow-sculpture-v1.png"
+          src="/brand/flow-sculpture-v2.webp"
           alt=""
           width={1448}
           height={1086}

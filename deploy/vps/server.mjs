@@ -1,7 +1,8 @@
+import { createAssetHandler, isPublicAsset } from "./assets.mjs";
 import { Miniflare } from "miniflare";
 import { createServer } from "node:http";
-import { readFile, stat } from "node:fs/promises";
-import { resolve, extname, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -13,49 +14,7 @@ const auth = publicMode
   ? null
   : JSON.parse(await readFile(process.env.AUTH_FILE, "utf8"));
 const owner = auth?.ownerId || "bhcbtc-public-synthetic-demo";
-const mime = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".webp": "image/webp",
-  ".ico": "image/x-icon",
-  ".wasm": "application/wasm",
-  ".gz": "application/gzip",
-};
-const assets = resolve(root, "sites-dist/client");
-async function asset(request) {
-  if (!["GET", "HEAD"].includes(request.method))
-    return new Response(null, { status: 405 });
-  let pathname;
-  try {
-    pathname = decodeURIComponent(new URL(request.url).pathname);
-  } catch {
-    return new Response(null, { status: 400 });
-  }
-  const path = resolve(assets, "." + pathname);
-  if (path !== assets && !path.startsWith(assets + sep))
-    return new Response(null, { status: 403 });
-  for (const candidate of [path, path + ".html", resolve(path, "index.html")]) {
-    try {
-      if (!(await stat(candidate)).isFile()) continue;
-      return new Response(
-        request.method === "HEAD" ? null : await readFile(candidate),
-        {
-          headers: {
-            "content-type":
-              mime[extname(candidate)] || "application/octet-stream",
-            "cache-control": "private, max-age=0, must-revalidate",
-          },
-        },
-      );
-    } catch {}
-  }
-  return new Response("Not found", { status: 404 });
-}
+const asset = createAssetHandler(resolve(root, "sites-dist/client"));
 const data = resolve(process.env.DATA_DIR || "/var/lib/global-offramp");
 const mf = new Miniflare({
   rootPath: root,
@@ -175,11 +134,13 @@ const server = createServer(async (req, res) => {
       }
       chunks.push(chunk);
     }
-    let response = await mf.dispatchFetch(url, {
-      method: req.method,
-      headers,
-      ...(chunks.length ? { body: Buffer.concat(chunks) } : {}),
-    });
+    let response = isPublicAsset(url.pathname)
+      ? await asset(new Request(url, { method: req.method, headers }))
+      : await mf.dispatchFetch(url, {
+          method: req.method,
+          headers,
+          ...(chunks.length ? { body: Buffer.concat(chunks) } : {}),
+        });
     if (publicMode && url.pathname === "/api/health" && response.ok) {
       const value = await response.json();
       value.accessMode = "public_demo";

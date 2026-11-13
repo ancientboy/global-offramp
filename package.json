@@ -19,7 +19,7 @@
     "migrate": "node --import tsx scripts/migrate.ts",
     "worker": "node --import tsx apps/api/src/worker.ts",
     "demo": "node --import tsx scripts/demo.ts",
-    "check": "npm run typecheck && npm test && npm run test:db",
+    "check": "npm run typecheck && npm test && npm run test:db && npm run test:assets",
     "format:check": "prettier --check \"packages/**/*.ts\" \"apps/api/**/*.ts\" \"apps/web/**/*.{tsx,ts,css}\" \"scripts/*.{ts,mjs}\" \"sites/**/*.{ts,json}\"",
     "build:sites": "SITE_EXPORT=true next build apps/web && node scripts/build-sites.mjs",
     "test:sites": "node --import tsx --test sites/*.test.ts",
@@ -34,7 +34,8 @@
     "start:workspace": "node dist/apps/workspace/src/main.js",
     "workspace:migrate": "node --import tsx apps/workspace/src/cli.ts migrate",
     "workspace:create-admin": "node --import tsx apps/workspace/src/cli.ts create-admin",
-    "test:workspace": "node --import tsx --test apps/workspace/test/*.test.ts"
+    "test:workspace": "node --import tsx --test apps/workspace/test/*.test.ts",
+    "test:assets": "node --test deploy/vps/assets.test.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^12.1.3",

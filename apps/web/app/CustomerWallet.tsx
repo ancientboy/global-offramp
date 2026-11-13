@@ -112,7 +112,7 @@ export default function CustomerWallet({
             </div>
             <img
               className="wallet-brand-symbol"
-              src="/brand/flow-symbol-v1.png"
+              src="/brand/flow-symbol-v2.webp"
               alt=""
               width={1280}
               height={1280}

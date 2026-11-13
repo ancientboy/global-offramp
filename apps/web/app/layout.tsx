@@ -7,8 +7,8 @@ export const metadata: Metadata = {
   description:
     "汇途 HUITU，连接全球价值，管理多币种结算、收款账户与每一笔业务记录。",
   icons: {
-    icon: "/brand/flow-app-icon-v1.png",
-    apple: "/brand/flow-app-icon-v1.png",
+    icon: "/brand/flow-app-icon-v2.webp",
+    apple: "/brand/flow-app-icon-v2.webp",
   },
 };
 export const viewport = { themeColor: "#0e2631", colorScheme: "light" };
