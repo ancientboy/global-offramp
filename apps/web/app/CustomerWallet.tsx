@@ -98,7 +98,7 @@ export default function CustomerWallet({
           <div className="wallet-focus-card">
             <div className="wallet-label">
               <span>可用余额 · {currency}</span>
-              <Badge>演示资产</Badge>
+              <span className="wallet-asset-label">{currency} ACCOUNT</span>
             </div>
             <strong className="wallet-focus-amount">
               {money(balance?.available ?? "0")}
@@ -110,6 +110,13 @@ export default function CustomerWallet({
                 {money(balance?.frozen ?? "0")} {currency}
               </strong>
             </div>
+            <img
+              className="wallet-brand-symbol"
+              src="/brand/flow-symbol-v1.png"
+              alt=""
+              width={1280}
+              height={1280}
+            />
             <div className="wallet-primary-actions">
               <button
                 className="button outline"
@@ -133,9 +140,20 @@ export default function CustomerWallet({
               草稿已保留，充值后返回将重新获取报价。
             </p>
           )}
-          <p className="wallet-disclaimer">
-            <Lock size={14} /> 模拟充值直接增加测试余额。
-          </p>
+          <div className="wallet-route-strip">
+            <div>
+              <ArrowRight size={21} />
+              <div>
+                <strong>连接稳定币与本地结算</strong>
+                <small>USDT / USDC · 每一笔，都有清晰去向</small>
+              </div>
+            </div>
+            <div className="wallet-route-currencies" aria-label="支持的法币">
+              {["CNY", "USD", "EUR", "MXN", "BRL", "GBP"].map((c) => (
+                <span key={c}>{c}</span>
+              ))}
+            </div>
+          </div>
         </>
       ) : (
         <div className="card wallet-history">

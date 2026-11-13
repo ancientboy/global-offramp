@@ -36,6 +36,7 @@ import MerchantOverview, {
 import OrderHistory from "./OrderHistory";
 import CustomerWallet from "./CustomerWallet";
 import PartnerAdminPanel from "./PartnerAdminPanel";
+import Brand from "./Brand";
 import CustomerOrders from "./CustomerOrders";
 import "./exchange-flow.css";
 import { customerOrderState } from "./customer-order-models";
@@ -2011,10 +2012,7 @@ export default function Home() {
     <div className={"app " + (role === "customer" ? "customer-workspace" : "")}>
       <aside className="sidebar">
         <button className="brand" onClick={() => go(navs[role][0][0])}>
-          <img src="/brand-mark.png" alt="" />
-          <span>
-            汇途<small>HUITU</small>
-          </span>
+          <Brand dark compact />
         </button>
         <div className="sidebar-label">
           {role === "admin"
@@ -2059,6 +2057,13 @@ export default function Home() {
       </aside>
       <div className="workspace">
         <header className="topbar">
+          <a
+            className="mobile-brand-link"
+            href="/workspace"
+            aria-label="汇途工作台"
+          >
+            <Brand />
+          </a>
           <div className="breadcrumb">
             <span>
               {role === "admin"
@@ -2114,6 +2119,11 @@ export default function Home() {
         <main>
           <div className="page-heading">
             <div>
+              <div className="page-kicker">
+                {role === "admin"
+                  ? "HUITU / OPERATIONS"
+                  : "YOUR GLOBAL WORKSPACE"}
+              </div>
               <h1>{title}</h1>
               <p>{subtitles[page]}</p>
             </div>

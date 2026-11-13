@@ -1,4 +1,5 @@
 "use client";
+import { PortalBrand } from "./Brand";
 import { useContext, useEffect, useRef, useState } from "react";
 import { WorkspaceContext } from "./workspace-context";
 import { Badge, Modal } from "./ui";
@@ -206,6 +207,7 @@ export default function ProviderPortal() {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return (
     <main className="provider-portal">
+      <PortalBrand area="出款服务商" code="PAYOUT OPERATIONS" />
       <header className="provider-top">
         <div>
           <span className="admin-eyebrow">汇途 · 出款服务商</span>
@@ -304,10 +306,14 @@ export default function ProviderPortal() {
                           <small>{date(o.createdAt)}</small>
                         </td>
                         <td>
+                          <span className="provider-mobile-label">收款人</span>
                           {o.recipient?.name ?? "—"}
                           <small>{o.recipient?.accountMasked ?? "—"}</small>
                         </td>
                         <td>
+                          <span className="provider-mobile-label">
+                            出款金额
+                          </span>
                           {money(o.payoutAmount)} {o.payoutCurrency}
                         </td>
                         <td>

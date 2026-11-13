@@ -116,7 +116,7 @@ export function OverviewPanel({
                 {m.createdCount}
                 <small>笔</small>
               </strong>
-              <p>按订单创建时间 createdAt</p>
+              <p>按下单时间统计</p>
             </article>
             <article>
               <Bank size={23} />
@@ -125,14 +125,14 @@ export function OverviewPanel({
                 {m.paidCount}
                 <small>笔</small>
               </strong>
-              <p>按付款登记时间 paidAt</p>
+              <p>按付款登记时间统计</p>
             </article>
             {m.payouts.map((p) => (
               <article key={p.currency}>
                 <CurrencyCircleDollar size={23} />
                 <span>已记录金额 · {p.currency}</span>
                 <strong>{money(p.amount)}</strong>
-                <p>模拟确认或人工登记金额，非银行到账验证</p>
+                <p>按已登记付款金额统计</p>
               </article>
             ))}
           </div>

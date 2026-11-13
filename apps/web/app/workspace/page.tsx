@@ -4,6 +4,14 @@ import { FormEvent, useEffect, useState } from "react";
 import Home from "../page";
 import ProviderPortal from "../ProviderPortal";
 import PartnerPortal from "../PartnerPortal";
+import Brand from "../Brand";
+import {
+  ArrowRight,
+  Eye,
+  EyeSlash,
+  LockKey,
+  UserCircle,
+} from "@phosphor-icons/react";
 import { WorkspaceContext, type WorkspaceAccount } from "../workspace-context";
 
 const errors: Record<string, string> = {
@@ -32,6 +40,7 @@ async function authRequest(path: string, body?: unknown) {
   return result;
 }
 export default function Workspace() {
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [account, setAccount] = useState<WorkspaceAccount | null>(null);
   const [loading, setLoading] = useState(true),
     [register, setRegister] = useState(false),
@@ -105,8 +114,9 @@ export default function Workspace() {
   }
   if (loading)
     return (
-      <main className="card" style={{ maxWidth: 480, margin: "10vh auto" }}>
-        正在核对账号会话…
+      <main className="auth-loading">
+        <Brand />
+        <p>正在核对账号会话…</p>
       </main>
     );
   if (account)
@@ -131,86 +141,158 @@ export default function Workspace() {
       </WorkspaceContext.Provider>
     );
   return (
-    <main
-      className="card"
-      style={{ maxWidth: 480, margin: "8vh auto", padding: 32 }}
-    >
-      <h1>汇途 · {register ? "注册账号" : "业务登录"}</h1>
-      <p>登录后管理钱包、订单和收款账户。</p>
-      {register && inviteCode && (
-        <div className="invited-registration">
-          {inviteLoading
-            ? "正在核对邀请链接…"
-            : inviteValid
-              ? "由 " + inviter + " 邀请注册，成功后将自动建立客户归属。"
-              : "邀请链接不可用，请联系邀请人。"}
+    <main className="auth-shell">
+      <aside className="auth-story" aria-label="汇途品牌介绍">
+        <a href="/" className="auth-brand-link" aria-label="汇途首页">
+          <Brand dark />
+        </a>
+        <div className="auth-story-copy">
+          <span className="auth-eyebrow">
+            GLOBAL PAYMENTS. CLEARER CONNECTIONS.
+          </span>
+          <h2>
+            让每一笔，
+            <br />
+            <em>清晰抵达。</em>
+          </h2>
+          <p>
+            从稳定币到本地结算，
+            <br />
+            连接更广阔的生意。
+          </p>
         </div>
-      )}
-      <form onSubmit={(e) => void submit(e)}>
-        {register && (
-          <>
+        <img
+          className="auth-sculpture"
+          src="/brand/flow-sculpture-v1.png"
+          alt=""
+          width={1448}
+          height={1086}
+          loading="lazy"
+        />
+        <div className="auth-story-foot">
+          <div className="auth-currencies" aria-label="支持的法币">
+            {["CNY", "USD", "EUR", "MXN", "BRL", "GBP"].map((c) => (
+              <span key={c}>{c}</span>
+            ))}
+          </div>
+          <span>USDT / USDC · 多币种结算</span>
+        </div>
+      </aside>
+      <section className="auth-form-panel">
+        <div className="auth-mobile-brand">
+          <Brand />
+        </div>
+        <div className="auth-form-card">
+          <span className="auth-overline">
+            {register ? "START YOUR GLOBAL JOURNEY" : "YOUR GLOBAL WORKSPACE"}
+          </span>
+          <h1>{register ? "注册账号" : "欢迎回到汇途"}</h1>
+          <p className="auth-intro">
+            {register
+              ? "一个账户，开启你的全球业务。"
+              : "登录账户，继续你的全球业务。"}
+          </p>
+          {register && inviteCode && (
+            <div className="invited-registration">
+              {inviteLoading
+                ? "正在核对邀请链接…"
+                : inviteValid
+                  ? "由 " + inviter + " 邀请注册，成功后将自动建立客户归属。"
+                  : "邀请链接不可用，请联系邀请人。"}
+            </div>
+          )}
+          <form className="auth-form" onSubmit={(e) => void submit(e)}>
+            {register && (
+              <>
+                <label>
+                  姓名或企业名称
+                  <input
+                    name="name"
+                    required
+                    maxLength={100}
+                    autoComplete="name"
+                  />
+                </label>
+                <label>
+                  客户类型
+                  <SelectField name="kind">
+                    <option value="personal">个人</option>
+                    <option value="company">企业</option>
+                  </SelectField>
+                </label>
+              </>
+            )}
             <label>
-              姓名或企业名称
-              <input name="name" required maxLength={100} autoComplete="name" />
+              {register ? "邮箱" : "用户名 / 邮箱"}
+              <div className="auth-input">
+                <UserCircle size={19} aria-hidden="true" />
+                <input
+                  name="identifier"
+                  type={register ? "email" : "text"}
+                  required
+                  maxLength={254}
+                  autoComplete="username"
+                  placeholder={
+                    register ? "请输入邮箱地址" : "请输入用户名或邮箱"
+                  }
+                />
+              </div>
             </label>
             <label>
-              客户类型
-              <SelectField name="kind">
-                <option value="personal">个人</option>
-                <option value="company">企业</option>
-              </SelectField>
+              密码
+              <div className="auth-input">
+                <LockKey size={18} aria-hidden="true" />
+                <input
+                  name="password"
+                  type={passwordVisible ? "text" : "password"}
+                  required
+                  minLength={register ? 12 : 1}
+                  maxLength={128}
+                  autoComplete={register ? "new-password" : "current-password"}
+                  placeholder={register ? "设置至少 12 位密码" : "请输入密码"}
+                />
+                <button
+                  className="auth-reveal"
+                  type="button"
+                  aria-label={passwordVisible ? "隐藏密码" : "显示密码"}
+                  onClick={() => setPasswordVisible(!passwordVisible)}
+                >
+                  {passwordVisible ? <EyeSlash size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
             </label>
-          </>
-        )}
-        <label>
-          {register ? "邮箱" : "用户名 / 邮箱"}
-          <input
-            name="identifier"
-            type={register ? "email" : "text"}
-            required
-            maxLength={254}
-            autoComplete="username"
-          />
-        </label>
-        <label>
-          密码
-          <input
-            name="password"
-            type="password"
-            required
-            minLength={register ? 12 : 1}
-            maxLength={128}
-            autoComplete={register ? "new-password" : "current-password"}
-          />
-        </label>
-        {error && <p role="alert">{error}</p>}
-        {notice && <p role="status">{notice}</p>}
-        <button
-          className="button"
-          disabled={
-            busy ||
-            (register && !!inviteCode && (!inviteValid || inviteLoading))
-          }
-          type="submit"
-        >
-          {busy ? "处理中…" : register ? "创建客户账号" : "登录"}
-        </button>
-        <button
-          className="button text"
-          disabled={busy}
-          type="button"
-          onClick={() => {
-            setRegister(!register);
-            setError("");
-            setNotice("");
-          }}
-        >
-          {register ? "已有账号，去登录" : "注册个人 / 企业账号"}
-        </button>
-      </form>
-      <p>
-        <a href="/">返回首页</a>
-      </p>
+            {error && <p role="alert">{error}</p>}
+            {notice && <p role="status">{notice}</p>}
+            <button
+              className="button"
+              disabled={
+                busy ||
+                (register && !!inviteCode && (!inviteValid || inviteLoading))
+              }
+              type="submit"
+            >
+              {busy ? "处理中…" : register ? "创建客户账号" : "登录"}
+              <ArrowRight size={18} aria-hidden="true" />
+            </button>
+            <button
+              className="button text"
+              disabled={busy}
+              type="button"
+              onClick={() => {
+                setRegister(!register);
+                setError("");
+                setNotice("");
+              }}
+            >
+              {register ? "已有账号，去登录" : "注册个人 / 企业账号"}
+            </button>
+          </form>
+        </div>
+        <footer className="auth-footer">
+          <span>HUITU · 连接全球价值</span>
+          <a href="/">返回首页</a>
+        </footer>
+      </section>
     </main>
   );
 }

@@ -1,4 +1,5 @@
 "use client";
+import { PortalBrand } from "./Brand";
 import { useContext, useEffect, useState } from "react";
 import { WorkspaceContext } from "./workspace-context";
 import { Badge, downloadCSV } from "./ui";
@@ -102,6 +103,7 @@ export default function PartnerPortal() {
   }
   return (
     <main className="partner-portal">
+      <PortalBrand area="推广伙伴" code="PARTNER NETWORK" />
       <header className="provider-top">
         <div>
           <span className="admin-eyebrow">汇途 · 推广伙伴</span>
