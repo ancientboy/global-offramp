@@ -1556,3 +1556,22 @@ tbody tr:hover {
 .app .exchange-currency-row > .select-field {
   min-width: 0;
 }
+
+.recipient-search {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 18px;
+  color: var(--ink);
+  font-size: 13px;
+}
+.customer-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 20px;
+}
+.customer-pagination span {
+  font-size: 13px;
+  color: #647c80;
+}

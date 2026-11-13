@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -70,6 +70,8 @@ export default function CustomerOrders({
   const [mode, setMode] = useState<"orders" | "batches">("orders");
   const [filter, setFilter] = useState<CustomerOrderFilter>("all");
   const [search, setSearch] = useState("");
+  const [orderPage, setOrderPage] = useState(1);
+  useEffect(() => setOrderPage(1), [mode, filter, search]);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [receiptOrderId, setReceiptOrderId] = useState<string | null>(null);
   const orders = data.orders ?? [];
@@ -86,6 +88,12 @@ export default function CustomerOrders({
     beneficiaries,
     filter,
     search,
+  );
+  const totalPages = Math.max(1, Math.ceil(visibleOrders.length / 8));
+  const currentPage = Math.min(orderPage, totalPages);
+  const pageOrders = visibleOrders.slice(
+    (currentPage - 1) * 8,
+    currentPage * 8,
   );
   const visibleBatches = batches.filter(
     ({ batch, rows, summary }) =>
@@ -400,7 +408,6 @@ export default function CustomerOrders({
       <div className="co-heading">
         <div>
           <h2>订单记录</h2>
-          <p>查看处理进度、逐笔结果与回单。</p>
         </div>
         <button
           className="button outline"
@@ -468,9 +475,10 @@ export default function CustomerOrders({
         ))}
       </div>
       <p className="co-caption co-results">
-        显示 {mode === "orders" ? visibleOrders.length : visibleBatches.length}{" "}
-        {mode === "orders" ? "笔" : "个批次"} · 全部记录包含已取消
-        {mode === "batches" ? "及导入失败的批次" : "订单"}，回单不改变付款状态。
+        共{" "}
+        {mode === "orders"
+          ? visibleOrders.length + " 笔订单"
+          : visibleBatches.length + " 个批次"}
       </p>
       {mode === "orders" ? (
         <>
@@ -488,7 +496,7 @@ export default function CustomerOrders({
                 </tr>
               </thead>
               <tbody>
-                {visibleOrders.map((o) => {
+                {pageOrders.map((o) => {
                   const recipient = orderRecipient(o, beneficiaries),
                     batch = batches.find(
                       (b) =>
@@ -618,6 +626,35 @@ export default function CustomerOrders({
             </Empty>
           )}
         </div>
+      )}
+      {mode === "orders" && totalPages > 1 && (
+        <nav className="customer-pagination" aria-label="订单分页">
+          <button
+            className="button outline"
+            disabled={currentPage === 1}
+            onClick={() => {
+              setOrderPage(currentPage - 1);
+              setReceiptOrderId(null);
+              window.scrollTo(0, 0);
+            }}
+          >
+            上一页
+          </button>
+          <span>
+            {currentPage} / {totalPages}
+          </span>
+          <button
+            className="button outline"
+            disabled={currentPage === totalPages}
+            onClick={() => {
+              setOrderPage(currentPage + 1);
+              setReceiptOrderId(null);
+              window.scrollTo(0, 0);
+            }}
+          >
+            下一页
+          </button>
+        </nav>
       )}
       {(search || filter !== "all") && (
         <button

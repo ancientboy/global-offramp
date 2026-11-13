@@ -249,6 +249,8 @@ export default function Home() {
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState("single");
   const [profileTab, setProfileTab] = useState("home");
+  const [recipientSearch, setRecipientSearch] = useState("");
+  const [recipientLimit, setRecipientLimit] = useState(6);
   const [resumeDraft, setResumeDraft] = useState(false);
   const [batchChecked, setBatchChecked] = useState(false);
   const [batchPreview, setBatchPreview] = useState<BatchPreview | null>(null);
@@ -1085,6 +1087,16 @@ export default function Home() {
       setError(errorText(e));
     }
   }
+  const matchingRecipients = beneficiaries.filter((b) =>
+    [b.name, b.accountMasked, b.currency, b.country]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(recipientSearch.trim().toLocaleLowerCase()),
+  );
+  const shownRecipients =
+    role === "customer"
+      ? matchingRecipients.slice(0, recipientLimit)
+      : beneficiaries;
   function fundingPanel(o: Order) {
     if (o.fundingSource === "wallet")
       return (
@@ -1099,10 +1111,6 @@ export default function Home() {
                 ? "这笔结汇余额已结算扣减，可查看付款与回单状态。"
                 : "已从钱包冻结本笔本金与费用，无需再次转币。结果待核实时保持冻结，避免重复支出。"}
           </Note>
-          <div className="demo-address">
-            <Lock size={19} />
-            <strong>资金记录</strong>
-          </div>
         </>
       );
     const funding = o.fundingInstruction;
@@ -1158,9 +1166,11 @@ export default function Home() {
       <div className="card order-detail">
         <div className="card-heading">
           <h2>订单 {o.orderNumber ?? shortId(o.id)}</h2>
-          <Badge>
-            <Lock size={13} /> 报价快照已锁定
-          </Badge>
+          {admin && (
+            <Badge>
+              <Lock size={13} /> 报价快照已锁定
+            </Badge>
+          )}
         </div>
         {admin && <p className="record-id">系统 ID：{o.id}</p>}
         {!admin && (
@@ -1212,7 +1222,7 @@ export default function Home() {
             </span>
           </div>
           <div>
-            <small>目标出款金额</small>
+            <small>收款金额</small>
             <strong className="large-number">
               {symbol(o.quote.payoutCurrency)}
               {money(o.quote.payoutAmount)}
@@ -1259,7 +1269,9 @@ export default function Home() {
         )}
         <FeeRows quote={o.quote} />
         {!admin &&
-          (o.depositStatus === "awaiting" || o.fundingSource === "wallet") &&
+          (o.depositStatus === "awaiting" ||
+            (o.fundingSource === "wallet" &&
+              o.walletFundingStatus === "reserved")) &&
           fundingPanel(o)}
         {!admin &&
           o.fundingSource === "wallet" &&
@@ -1286,28 +1298,30 @@ export default function Home() {
               取消结汇并释放余额
             </button>
           )}
-        <dl className="details">
-          <div>
-            <dt>金额输入方式</dt>
-            <dd>
-              {o.quote.amountMode === "target_payout"
-                ? "目标出款金额"
-                : o.quote.amountMode === "total_deposit"
-                  ? "支付总额（含费用）"
-                  : "兑换本金（费用另加）"}
-            </dd>
-          </div>
-          {admin && (
+        {admin && (
+          <dl className="details">
             <div>
-              <dt>报价配置版本</dt>
-              <dd>{o.quote.configVersion.replace(/^mock-pricing-/i, "")}</dd>
+              <dt>金额输入方式</dt>
+              <dd>
+                {o.quote.amountMode === "target_payout"
+                  ? "收款金额"
+                  : o.quote.amountMode === "total_deposit"
+                    ? "支付总额（含费用）"
+                    : "兑换本金（费用另加）"}
+              </dd>
             </div>
-          )}
-          <div>
-            <dt>入金网络</dt>
-            <dd>模拟充值</dd>
-          </div>
-        </dl>
+            {admin && (
+              <div>
+                <dt>报价配置版本</dt>
+                <dd>{o.quote.configVersion.replace(/^mock-pricing-/i, "")}</dd>
+              </div>
+            )}
+            <div>
+              <dt>入金网络</dt>
+              <dd>模拟充值</dd>
+            </div>
+          </dl>
+        )}
         <div className="ruleline" />
         {admin && !workspace ? (
           <>
@@ -1656,102 +1670,108 @@ export default function Home() {
             回单可关联订单，并按客户归属提供下载。
           </p>
         )}
-        <div className="ruleline" />
-        <div className="card-heading">
-          <h3>退款记录</h3>
-          {maker &&
-            o.fundingSource !== "wallet" &&
-            o.depositStatus === "confirmed" &&
-            ((o.conversionStatus === "pending" &&
-              ["draft", "cancelled"].includes(o.payoutStatus)) ||
-              o.payoutStatus === "sent") && (
-              <button
-                className="button outline"
-                disabled={locked}
-                onClick={() =>
-                  openCommand({
-                    title:
-                      o.payoutStatus === "sent"
-                        ? "申请服务费退款记录"
-                        : "申请换汇前本金退款",
-                    description:
-                      "核对退款金额后创建退款记录，并登记后续处理结果。",
-                    path: `orders/${o.id}/refunds`,
-                    base: {
-                      idempotencyKey: "refund_" + uid(),
-                      kind:
-                        o.payoutStatus === "sent" ? "service_fee" : "principal",
-                    },
-                    fields: [
-                      {
-                        key: "amount",
-                        label: "退款金额（" + o.quote.sourceCurrency + "）",
-                        value: "1.000000",
-                      },
-                    ],
-                    button: "提交退款预留",
-                    success: "退款申请已预留，等待管理员确认。",
-                  })
-                }
-              >
-                申请模拟退款
-              </button>
-            )}
-        </div>
-        {o.fundingSource === "wallet" && (
-          <Note>
-            未处理的订单取消后，冻结金额会退回钱包。已处理或结果待确认的订单，如需退款请联系平台客服。
-          </Note>
-        )}
-        {!refunds.length ? (
-          <p className="muted small">尚无退款申请。</p>
-        ) : (
-          refunds.map((r) => (
-            <div className="refund-row" key={r.id}>
-              <div>
-                <strong>
-                  {r.kind === "principal" ? "本金退款" : "服务费退款"} ·{" "}
-                  {money(r.amount)} {r.currency}
-                </strong>
-                <small>{shortId(r.id)}</small>
-              </div>
-              <Badge status={r.status} />
-              {finance && r.status === "requested" && (
-                <button
-                  className="button outline"
-                  disabled={locked}
-                  onClick={() =>
-                    void mutate(
-                      `refunds/${r.id}/approve`,
-                      {},
-                      "退款已确认，请登记结果。",
-                    )
-                  }
-                >
-                  审批退款
-                </button>
-              )}
-              {maker && r.status === "approved" && (
-                <button
-                  className="button outline"
-                  disabled={locked}
-                  onClick={() =>
-                    openCommand({
-                      title: "登记模拟退款结果",
-                      description:
-                        "填写退款参考号和处理说明，相关佣金将按规则调整。",
-                      path: `refunds/${r.id}/record`,
-                      fields: [reference("refund_" + r.id), evidence("")],
-                      button: "登记退款",
-                      success: "模拟退款已登记，相关佣金调整由服务端计算。",
-                    })
-                  }
-                >
-                  登记退款
-                </button>
-              )}
+        {(admin || refunds.length > 0) && (
+          <>
+            <div className="ruleline" />
+            <div className="card-heading">
+              <h3>退款记录</h3>
+              {maker &&
+                o.fundingSource !== "wallet" &&
+                o.depositStatus === "confirmed" &&
+                ((o.conversionStatus === "pending" &&
+                  ["draft", "cancelled"].includes(o.payoutStatus)) ||
+                  o.payoutStatus === "sent") && (
+                  <button
+                    className="button outline"
+                    disabled={locked}
+                    onClick={() =>
+                      openCommand({
+                        title:
+                          o.payoutStatus === "sent"
+                            ? "申请服务费退款记录"
+                            : "申请换汇前本金退款",
+                        description:
+                          "核对退款金额后创建退款记录，并登记后续处理结果。",
+                        path: `orders/${o.id}/refunds`,
+                        base: {
+                          idempotencyKey: "refund_" + uid(),
+                          kind:
+                            o.payoutStatus === "sent"
+                              ? "service_fee"
+                              : "principal",
+                        },
+                        fields: [
+                          {
+                            key: "amount",
+                            label: "退款金额（" + o.quote.sourceCurrency + "）",
+                            value: "1.000000",
+                          },
+                        ],
+                        button: "提交退款预留",
+                        success: "退款申请已预留，等待管理员确认。",
+                      })
+                    }
+                  >
+                    申请模拟退款
+                  </button>
+                )}
             </div>
-          ))
+            {o.fundingSource === "wallet" && (
+              <Note>
+                未处理的订单取消后，冻结金额会退回钱包。已处理或结果待确认的订单，如需退款请联系平台客服。
+              </Note>
+            )}
+            {!refunds.length ? (
+              <p className="muted small">尚无退款申请。</p>
+            ) : (
+              refunds.map((r) => (
+                <div className="refund-row" key={r.id}>
+                  <div>
+                    <strong>
+                      {r.kind === "principal" ? "本金退款" : "服务费退款"} ·{" "}
+                      {money(r.amount)} {r.currency}
+                    </strong>
+                    <small>{shortId(r.id)}</small>
+                  </div>
+                  <Badge status={r.status} />
+                  {finance && r.status === "requested" && (
+                    <button
+                      className="button outline"
+                      disabled={locked}
+                      onClick={() =>
+                        void mutate(
+                          `refunds/${r.id}/approve`,
+                          {},
+                          "退款已确认，请登记结果。",
+                        )
+                      }
+                    >
+                      审批退款
+                    </button>
+                  )}
+                  {maker && r.status === "approved" && (
+                    <button
+                      className="button outline"
+                      disabled={locked}
+                      onClick={() =>
+                        openCommand({
+                          title: "登记模拟退款结果",
+                          description:
+                            "填写退款参考号和处理说明，相关佣金将按规则调整。",
+                          path: `refunds/${r.id}/record`,
+                          fields: [reference("refund_" + r.id), evidence("")],
+                          button: "登记退款",
+                          success: "模拟退款已登记，相关佣金调整由服务端计算。",
+                        })
+                      }
+                    >
+                      登记退款
+                    </button>
+                  )}
+                </div>
+              ))
+            )}
+          </>
         )}
       </div>
     );
@@ -2117,13 +2137,11 @@ export default function Home() {
         <main>
           <div className="page-heading">
             <div>
-              <div className="page-kicker">
-                {role === "admin"
-                  ? "HUITU / OPERATIONS"
-                  : "YOUR GLOBAL WORKSPACE"}
-              </div>
+              {role === "admin" && (
+                <div className="page-kicker">HUITU / OPERATIONS</div>
+              )}
               <h1>{title}</h1>
-              <p>{subtitles[page]}</p>
+              {role !== "customer" && <p>{subtitles[page]}</p>}
             </div>
           </div>
           {support && (
@@ -2205,11 +2223,18 @@ export default function Home() {
                     <div>
                       <h2>{currentCustomer?.name}</h2>
                       <p>
-                        {actor === "company-demo" ? "商户企业账户" : "个人账户"}{" "}
-                        · {workspace ? "已登录账户" : "账户资料"}
+                        {actor === "company-demo"
+                          ? "商户企业账户"
+                          : "个人账户"}{" "}
                       </p>
                     </div>
-                    <Badge status={currentCustomer?.status} />
+                    <Badge status={currentCustomer?.status}>
+                      {currentCustomer?.status === "approved"
+                        ? "正常"
+                        : currentCustomer?.status === "suspended"
+                          ? "已停用"
+                          : "待审核"}
+                    </Badge>
                   </section>
                   {profileTab === "home" ? (
                     <div className="profile-menu">
@@ -2219,9 +2244,7 @@ export default function Home() {
                         </span>
                         <div>
                           <strong>收款人管理</strong>
-                          <small>
-                            {beneficiaries.length} 个已保存账户 · 添加后即可使用
-                          </small>
+                          <small>{beneficiaries.length} 个收款账户</small>
                         </div>
                         <ArrowRight size={19} />
                       </button>
@@ -2254,7 +2277,7 @@ export default function Home() {
                         </span>
                         <div>
                           <strong>帮助与支持</strong>
-                          <small>资金、数据保存及回单使用说明</small>
+                          <small>结汇与订单帮助</small>
                         </div>
                         <ArrowRight size={19} />
                       </button>
@@ -2280,11 +2303,7 @@ export default function Home() {
                     <section className="card security-summary">
                       <h3>账户与数据保护</h3>
                       <p>请妥善保管登录信息，使用完毕后可退出账户。</p>
-                      <ul>
-                        <li>收款账户和订单按客户归属管理。</li>
-                        <li>回单由管理员按订单归属提供。</li>
-                        <li>需要调整账户资料时，请联系管理员。</li>
-                      </ul>
+                      <p>如需修改账户资料，请联系平台客服。</p>
                     </section>
                   )}
                   {profileTab === "recipients" && (
@@ -2409,13 +2428,13 @@ export default function Home() {
                         <label>
                           {amountMode === "total_deposit"
                             ? "支付总额（含费用）"
-                            : "目标出款金额"}
+                            : "收款金额"}
                           <div className="input-unit amount">
                             <input
                               aria-label={
                                 amountMode === "total_deposit"
                                   ? "支付总额（含费用）"
-                                  : "目标出款金额"
+                                  : "收款金额"
                               }
                               inputMode="decimal"
                               placeholder={
@@ -2573,9 +2592,7 @@ export default function Home() {
                             <Plus size={16} />
                             新增收款账户
                           </button>
-                          <span className="muted small">
-                            保存即用 · 仅格式校验
-                          </span>
+                          <span className="muted small">请核对收款信息</span>
                         </div>
                         <details className="exchange-details">
                           <summary>费用说明</summary>
@@ -2586,9 +2603,6 @@ export default function Home() {
                           </p>
                           <p>
                             报价在有效期内锁定汇率及费用，提交前请核对收款信息。
-                          </p>
-                          <p>
-                            付款回单可后补，不阻塞付款。历史订单与回单可在“订单”查看。
                           </p>
                         </details>
                       </section>
@@ -2622,7 +2636,7 @@ export default function Home() {
                           <div className="quote-placeholder">
                             <p>
                               {quoteBusy
-                                ? "正在获取服务器报价…"
+                                ? "正在获取报价…"
                                 : "填写金额并选择可用收款人"}
                             </p>
                           </div>
@@ -2687,13 +2701,6 @@ export default function Home() {
                         <p className="center muted small exchange-disclaimer">
                           下一步仍需确认，暂不冻结余额
                         </p>
-                        <details className="exchange-details">
-                          <summary>报价来源</summary>
-                          <p>
-                            {quote ? "费率已锁定" : "报价待生成"} ·
-                            样例费率，不构成实时市场报价。
-                          </p>
-                        </details>
                       </aside>
                     </div>
                   ) : step === 1 && mode === "batch" ? (
@@ -3316,7 +3323,7 @@ export default function Home() {
                           <span className="muted">收款人</span>
                           <span className="success-text">
                             <Bank size={18} />
-                            已保存 · 仅格式校验
+                            已保存
                           </span>
                         </div>
                         <h2>
@@ -3362,7 +3369,7 @@ export default function Home() {
                           <Lock size={18} />
                           确认后冻结 {money(quote.totalDeposit)}{" "}
                           {quote.sourceCurrency}
-                          （含本金与费用）。未知付款结果保持冻结，避免重复支出。
+                          （含费用），付款完成后扣除。
                         </p>
                         <details className="exchange-details">
                           <summary>报价详情</summary>
@@ -3372,24 +3379,16 @@ export default function Home() {
                               <dd>
                                 {quote.amountMode === "total_deposit"
                                   ? "支付总额（含费用）"
-                                  : "目标出款金额"}
+                                  : "收款金额"}
                               </dd>
                             </div>
-                            <div>
-                              <dt>报价版本</dt>
-                              <dd>
-                                {quote.configVersion.replace(
-                                  /^mock-pricing-/i,
-                                  "",
-                                )}
-                              </dd>
-                            </div>
+
                             <div>
                               <dt>到期时间</dt>
                               <dd>{date(quote.expiresAt)}</dd>
                             </div>
                           </dl>
-                          <p>提交订单时将再次核对报价有效期。</p>
+                          <p>未知付款结果保持冻结，平台确认后更新状态。</p>
                         </details>
                         <label className="checkbox">
                           <input
@@ -3398,7 +3397,7 @@ export default function Home() {
                             disabled={busy}
                             onChange={(e) => setChecked(e.target.checked)}
                           />
-                          我已核对模拟收款账户、费用与总额
+                          我已核对收款账户、费用与总额
                         </label>
                         {!enoughBalance && (
                           <>
@@ -3498,9 +3497,6 @@ export default function Home() {
                 (page === "profile" && profileTab === "recipients")) && (
                 <>
                   <div className="section-actions">
-                    <Note>
-                      保存后即可用于结汇付款。请准确填写收款信息，并确认账户归属及收款币种。
-                    </Note>
                     {maker && (
                       <button
                         className="button"
@@ -3551,8 +3547,22 @@ export default function Home() {
                       </button>
                     )}
                   </div>
+                  {role === "customer" && beneficiaries.length > 0 && (
+                    <label className="recipient-search">
+                      搜索收款人
+                      <input
+                        type="search"
+                        placeholder="姓名、账号尾号或币种"
+                        value={recipientSearch}
+                        onChange={(e) => {
+                          setRecipientSearch(e.target.value);
+                          setRecipientLimit(6);
+                        }}
+                      />
+                    </label>
+                  )}
                   <div className="recipient-grid">
-                    {beneficiaries.map((b) => (
+                    {shownRecipients.map((b) => (
                       <div className="card recipient-card" key={b.id}>
                         <div className="card-heading">
                           <div className="circle-icon">
@@ -3563,9 +3573,7 @@ export default function Home() {
                               recipientUsable(b.status) ? "valid" : "suspended"
                             }
                           >
-                            {recipientUsable(b.status)
-                              ? "已保存 · 可使用"
-                              : "已停用"}
+                            {recipientUsable(b.status) ? "可用" : "已停用"}
                           </Badge>
                         </div>
                         <h2>{b.name}</h2>
@@ -3576,7 +3584,9 @@ export default function Home() {
                           }).of(b.country)}{" "}
                           · {b.currency}
                         </span>
-                        <p className="record-id">收款账户 ID · {b.id}</p>
+                        {role === "admin" && (
+                          <p className="record-id">收款账户 ID · {b.id}</p>
+                        )}
                         <div className="ruleline" />
                         <div className="actions">
                           {role === "customer" && recipientUsable(b.status) && (
@@ -3596,15 +3606,27 @@ export default function Home() {
                               用于结汇 <ArrowRight size={16} />
                             </button>
                           )}
-                          <span className="muted small">
-                            {recipientUsable(b.status)
-                              ? "可用于结汇付款，请核对收款信息"
-                              : "账户已停用，无法用于新结汇"}
-                          </span>
+                          {!recipientUsable(b.status) && (
+                            <span className="muted small">账户已停用</span>
+                          )}
                         </div>
                       </div>
                     ))}
                   </div>
+                  {role === "customer" &&
+                    matchingRecipients.length > recipientLimit && (
+                      <button
+                        className="button outline full"
+                        onClick={() => setRecipientLimit((n) => n + 6)}
+                      >
+                        查看更多收款人
+                      </button>
+                    )}
+                  {role === "customer" &&
+                    beneficiaries.length > 0 &&
+                    !matchingRecipients.length && (
+                      <Empty title="没有匹配的收款人" />
+                    )}
                   {!beneficiaries.length && (
                     <div className="card">
                       <Empty title="暂无可见收款人" />
@@ -3660,29 +3682,67 @@ export default function Home() {
                           <div className="circle-icon">
                             <ShieldCheck size={32} />
                           </div>
-                          <Badge status={c.status} />
+                          <Badge status={c.status}>
+                            {role === "customer"
+                              ? c.status === "approved"
+                                ? "正常"
+                                : c.status === "suspended"
+                                  ? "已停用"
+                                  : "待审核"
+                              : undefined}
+                          </Badge>
                         </div>
                         <h2>
-                          {c.kind === "company" ? "企业认证" : "个人认证"} ·{" "}
-                          {c.name}
+                          {role === "customer"
+                            ? "账户资料"
+                            : c.kind === "company"
+                              ? "企业认证"
+                              : "个人认证"}{" "}
+                          · {c.name}
                         </h2>
-                        <p>来自服务端的演示主体资料。无需真实身份证件。</p>
-                        <div className="demo-profile">
-                          <div>
-                            主体类型{" "}
-                            <span>
-                              {c.kind === "company"
-                                ? "企业 KYB（样例）"
-                                : "个人 KYC（样例）"}
-                            </span>
-                          </div>
-                          <div>
-                            身份文件 <span>未收集，未接入真实核验</span>
-                          </div>
-                          <div>
-                            客户 ID <span>{c.id}</span>
-                          </div>
-                        </div>
+                        {role === "customer" && workspace ? (
+                          <dl className="details">
+                            <div>
+                              <dt>账户名称</dt>
+                              <dd>{workspace.account.name}</dd>
+                            </div>
+                            <div>
+                              <dt>登录账号</dt>
+                              <dd>
+                                {workspace.account.username ??
+                                  workspace.account.email ??
+                                  "—"}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt>账户类型</dt>
+                              <dd>
+                                {c.kind === "company" ? "企业账户" : "个人账户"}
+                              </dd>
+                            </div>
+                          </dl>
+                        ) : (
+                          <>
+                            {" "}
+                            <p>来自服务端的演示主体资料。无需真实身份证件。</p>
+                            <div className="demo-profile">
+                              <div>
+                                主体类型{" "}
+                                <span>
+                                  {c.kind === "company"
+                                    ? "企业 KYB（样例）"
+                                    : "个人 KYC（样例）"}
+                                </span>
+                              </div>
+                              <div>
+                                身份文件 <span>未收集，未接入真实核验</span>
+                              </div>
+                              <div>
+                                客户 ID <span>{c.id}</span>
+                              </div>
+                            </div>
+                          </>
+                        )}
                         {finance && (
                           <div className="actions">
                             {c.status !== "approved" && (
@@ -3722,9 +3782,11 @@ export default function Home() {
                             )}
                           </div>
                         )}
-                        <Note>
-                          本页面状态不代表已完成真实身份核验、合规审批或开户。
-                        </Note>
+                        {role === "admin" && (
+                          <Note>
+                            本页面状态不代表已完成真实身份核验、合规审批或开户。
+                          </Note>
+                        )}
                       </div>
                     ))}
                   </div>

@@ -144,8 +144,7 @@ export default function CustomerWallet({
             <div>
               <ArrowRight size={21} />
               <div>
-                <strong>连接稳定币与本地结算</strong>
-                <small>USDT / USDC · 每一笔，都有清晰去向</small>
+                <strong>支持结汇币种</strong>
               </div>
             </div>
             <div className="wallet-route-currencies" aria-label="支持的法币">
