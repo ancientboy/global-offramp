@@ -47,7 +47,7 @@ export default function OrderHistory({
         "出款方",
         "记录号类型",
         "内部记录号",
-        "人工登记渠道参考号",
+        "付款渠道参考号",
       ],
       ...rows.map((o) => [
         o.orderNumber ?? o.id,
@@ -66,7 +66,7 @@ export default function OrderHistory({
           o.paymentConfirmation?.referenceKind ?? "",
         )
           ? "系统内部记录"
-          : "人工登记",
+          : "渠道参考记录",
         o.paymentConfirmation?.internalRecordId ?? "",
         ["mock_internal", "system_internal"].includes(
           o.paymentConfirmation?.referenceKind ?? "",

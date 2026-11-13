@@ -43,13 +43,11 @@ export default function PublishedReceipts({
       {error && <p role="alert">{error}</p>}
       {items.length > 0 && (
         <>
-          <strong>
-            {batchId ? "本商户批次回单" : "可下载的单客户回单副本"}
-          </strong>
+          <strong>{batchId ? "本商户批次回单" : "付款回单"}</strong>
           <p className="muted small">
             {batchId
-              ? "由管理员确认仅属于本商户的这个批次后发布，整批回单可能包含成功和失败明细。"
-              : "由管理员人工确认并发布，仅限此订单。"}
+              ? "由平台发布的本批次回单，可能包含成功和失败明细。"
+              : "由平台发布，仅限此订单。"}
             回单不代表系统已验证银行付款，订单状态以平台逐笔处理结果为准。
           </p>
           <div className="actions">

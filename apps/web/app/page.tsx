@@ -155,7 +155,7 @@ const navs: Record<ViewRole, [Page, string, Icon][]> = {
   ],
 };
 const titles: Record<Page, string> = {
-  routes: "人工代付路线",
+  routes: "结汇付款地区",
   receipts: "回单资料库",
   overview: "经营概览",
   directory: "用户与商户",
@@ -178,7 +178,7 @@ const titles: Record<Page, string> = {
   settlements: "结算记录",
 };
 const subtitles: Record<Page, string> = {
-  routes: "首批六个法币方向，线下付款，汇率和费用按路线配置",
+  routes: "支持六种法币结汇付款，查看可用地区、汇率与费用",
   receipts: "私有存储、本地识别、人工关联，原件不会自动分享给客户",
   overview: "按订单创建、登记付款分别统计，不同币种独立核算",
   directory: "查看个人与企业资料、账户和订单",
@@ -1171,7 +1171,7 @@ export default function Home() {
             <p>{customerOrderState(o).detail}</p>
           </div>
         )}
-        {o.payoutProviderSnapshot && (
+        {admin && o.payoutProviderSnapshot && (
           <Note>
             出款方：{o.payoutProviderSnapshot.name} ·{" "}
             {o.payoutProviderSnapshot.scope === "official"
@@ -1180,7 +1180,7 @@ export default function Home() {
             ，按下单时配置锁定，与推广返佣伙伴无关。
           </Note>
         )}
-        {o.paymentConfirmation && (
+        {admin && o.paymentConfirmation && (
           <Note>
             {o.paymentConfirmation.referenceKind === "mock_internal"
               ? "内部确认记录："
@@ -1653,11 +1653,13 @@ export default function Home() {
           request={request}
           onDownload={downloadPublishedReceipt}
         />
-        <p className="muted small">
-          支持 PNG、JPEG、PDF 多附件，单个最大 2
-          MiB。新原件默认仅管理员可见；识别仅用于人工匹配，不证明真实付款。文件未经恶意软件扫描。
-          回单可关联订单，并按客户归属提供下载。
-        </p>
+        {admin && (
+          <p className="muted small">
+            支持 PNG、JPEG、PDF 多附件，单个最大 2
+            MiB。新原件默认仅管理员可见；识别仅用于人工匹配，不证明真实付款。文件未经恶意软件扫描。
+            回单可关联订单，并按客户归属提供下载。
+          </p>
+        )}
         <div className="ruleline" />
         <div className="card-heading">
           <h3>退款记录</h3>
@@ -3501,7 +3503,7 @@ export default function Home() {
                 <>
                   <div className="section-actions">
                     <Note>
-                      保存后即可用于结汇，无需人工审核。系统自动检查必填项、格式、地区和币种；不会核验真实账户归属。
+                      保存后即可用于结汇付款。请准确填写收款信息，并确认账户归属及收款币种。
                     </Note>
                     {maker && (
                       <button
@@ -3600,7 +3602,7 @@ export default function Home() {
                           )}
                           <span className="muted small">
                             {recipientUsable(b.status)
-                              ? "无需人工审核，未做真实账户验证"
+                              ? "可用于结汇付款，请核对收款信息"
                               : "账户已停用，无法用于新结汇"}
                           </span>
                         </div>

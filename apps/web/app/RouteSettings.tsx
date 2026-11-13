@@ -133,12 +133,14 @@ export default function RouteSettings({ admin }: { admin: boolean }) {
     <section className="card">
       <div className="card-heading">
         <h2>{admin ? "人工代付路线配置" : "首批出款地区"}</h2>
-        <span className="badge">人工代付</span>
+        <span className="badge">{admin ? "人工代付" : "平台结汇"}</span>
       </div>
       <MarketRatesPanel authenticated admin={admin} onSnapshot={setMarket} />
       <p>
-        支持方向：USDT / USDC →
-        CNY、USD、EUR、MXN、BRL、GBP。首版由运营线下付款，系统管理记录与对账。
+        支持方向：USDT / USDC → CNY、USD、EUR、MXN、BRL、GBP。
+        {admin
+          ? "首版由运营线下付款，系统管理记录与对账。"
+          : "由平台提供结汇与付款服务，可查看汇率、费用及订单进度。"}
       </p>
       <p className="muted small">各地区的可用状态以路线配置为准。</p>
       {error && <p role="alert">{error}</p>}
