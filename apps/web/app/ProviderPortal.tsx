@@ -4,11 +4,23 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { WorkspaceContext } from "./workspace-context";
 import { Badge, Modal } from "./ui";
 import SelectField from "./SelectField";
-import { date, money } from "./models";
+import {
+  accountFields,
+  OPTION_NAMES,
+  type FullRecipientInput,
+} from "../../../packages/core/src/recipient-account";
+import { money } from "./models";
+import {
+  initialPaymentTime,
+  localPaymentInput,
+  providerDate as date,
+} from "./provider-time";
 type Order = {
   id: string;
   orderNumber: string;
   createdAt: string;
+  serverTime?: string;
+  recipientDetails?: Pick<FullRecipientInput, "method" | "fields">;
   payoutCurrency: string;
   payoutAmount: string;
   payoutStatus: string;
@@ -70,6 +82,10 @@ export default function ProviderPortal() {
     [paidAt, setPaidAt] = useState(""),
     [evidence, setEvidence] = useState(""),
     [checked, setChecked] = useState(false);
+  const timeAnchor = useRef({
+    serverTime: new Date().toISOString(),
+    observed: Date.now(),
+  });
   const key = useRef(""),
     inFlight = useRef(false);
   async function request(path: string, body?: unknown) {
@@ -109,7 +125,12 @@ export default function ProviderPortal() {
     setBusy(true);
     setAction(null);
     try {
-      setSelected(await request("provider/orders/" + order.id));
+      const detail = await request("provider/orders/" + order.id);
+      timeAnchor.current = {
+        serverTime: detail.serverTime ?? new Date().toISOString(),
+        observed: Date.now(),
+      };
+      setSelected(detail);
     } catch (e) {
       setError(e instanceof Error ? e.message : "读取失败");
     } finally {
@@ -121,9 +142,11 @@ export default function ProviderPortal() {
     key.current = crypto.randomUUID();
     setReference("");
     setPaidAt(
-      new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
-        .toISOString()
-        .slice(0, 16),
+      initialPaymentTime(
+        selected!.createdAt,
+        timeAnchor.current.serverTime,
+        Date.now() - timeAnchor.current.observed,
+      ),
     );
     setEvidence("");
     setChecked(false);
@@ -402,6 +425,25 @@ export default function ProviderPortal() {
                 {notice}
               </p>
             )}
+            {selected.recipientDetails && (
+              <section className="card">
+                <h3>完整收款资料</h3>
+                <dl className="details">
+                  {accountFields(selected.recipientDetails.method)
+                    .filter((f) => selected.recipientDetails!.fields[f.id])
+                    .map((f) => (
+                      <div key={f.id}>
+                        <dt>{f.label}</dt>
+                        <dd style={{ overflowWrap: "anywhere" }}>
+                          {OPTION_NAMES[
+                            selected.recipientDetails!.fields[f.id]
+                          ] ?? selected.recipientDetails!.fields[f.id]}
+                        </dd>
+                      </div>
+                    ))}
+                </dl>
+              </section>
+            )}
             {selected.paymentConfirmation && (
               <section className="provider-payment">
                 <h3>付款登记</h3>
@@ -430,7 +472,9 @@ export default function ProviderPortal() {
                   {action === "sent" ? "登记线下付款结果" : "标记结果待核实"}
                 </h3>
                 <p className="muted small">
-                  此处只登记处理结果，不会发起银行或链上转账。完整收款资料请向管理员核实。
+                  此处只登记处理结果，不会发起银行或链上转账。
+                  {!selected.recipientDetails &&
+                    "此历史账户仅有尾号，请先核实完整收款资料。"}
                 </p>
                 {action === "sent" && (
                   <>
@@ -445,10 +489,16 @@ export default function ProviderPortal() {
                       />
                     </label>
                     <label>
-                      付款时间
+                      付款时间（本地时间）
                       <input
                         aria-label="付款时间"
                         type="datetime-local"
+                        step="0.001"
+                        min={
+                          selected
+                            ? localPaymentInput(new Date(selected.createdAt))
+                            : undefined
+                        }
                         required
                         value={paidAt}
                         onChange={(e) => setPaidAt(e.target.value)}

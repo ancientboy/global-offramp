@@ -1,3 +1,4 @@
+import { RecipientVault } from "./recipient-vault";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -49,6 +50,11 @@ async function main() {
       enableSimulatedTopups:
         process.env.WORKSPACE_ENABLE_SIMULATED_TOPUPS === "true",
       marketRates,
+      recipientVault: process.env.WORKSPACE_RECIPIENT_KEY_FILE
+        ? new RecipientVault(
+            await readFile(process.env.WORKSPACE_RECIPIENT_KEY_FILE),
+          )
+        : undefined,
     },
   );
   const server = createServer(async (req, res) => {

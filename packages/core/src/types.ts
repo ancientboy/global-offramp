@@ -35,6 +35,11 @@ export interface Beneficiary {
   status: "saved" | "pending" | "approved" | "suspended";
   createdBy: string;
   approvedBy?: string;
+  recipientAccount?: {
+    method: import("./route-catalog").RecipientMethodId;
+    encrypted: string;
+    boundAt: string;
+  };
 }
 export interface PricingBaseline {
   USDT_USD: string;

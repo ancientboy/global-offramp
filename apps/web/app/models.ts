@@ -111,6 +111,9 @@ export interface Beneficiary {
   country: string;
   currency: "CNY" | "USD" | "EUR" | "MXN" | "BRL" | "GBP";
   accountMasked: string;
+  bankName?: string;
+  recipientMethod?: import("../../../packages/core/src/route-catalog").RecipientMethodId;
+  detailsComplete?: boolean;
   status: string;
   createdBy: string;
 }

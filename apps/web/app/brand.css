@@ -1575,3 +1575,41 @@ tbody tr:hover {
   font-size: 13px;
   color: #647c80;
 }
+
+.recipient-account-form {
+  display: grid;
+  gap: 18px;
+}
+.recipient-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.recipient-form-grid label {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+.recipient-form-grid input {
+  margin: 0;
+  min-width: 0;
+  width: 100%;
+}
+.recipient-field-error {
+  color: #a13232;
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .recipient-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .recipient-form-grid input {
+    font-size: 16px;
+  }
+}

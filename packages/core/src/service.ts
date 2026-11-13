@@ -446,7 +446,28 @@ export class OfframpService {
         country: z.string().regex(/^[A-Z]{2}$/),
         currency: z.enum(FIAT_CODES),
         accountToken: id,
-        accountMasked: z.string().regex(/^\*{4} \d{4}$/),
+        accountMasked: z.string().regex(/^\*{4} (?:\d{4}|PIX)$/),
+        bankName: z.string().trim().min(1).max(100).optional(),
+        recipientAccount: z
+          .object({
+            method: z.enum([
+              "CN_BANK_ACCOUNT",
+              "US_BANK_ACCOUNT",
+              "EUR_IBAN",
+              "MX_CLABE",
+              "BR_BANK_ACCOUNT",
+              "BR_PIX",
+              "GB_LOCAL_ACCOUNT",
+              "GB_IBAN",
+            ]),
+            encrypted: z
+              .string()
+              .regex(/^v1\.[A-Za-z0-9_.-]+$/)
+              .max(20000),
+            boundAt: z.string().datetime(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .parse(input);
@@ -2896,7 +2917,15 @@ export class OfframpService {
         : s.customers,
       beneficiaries: s.beneficiaries
         .filter((b) => !customer || b.customerId === actor.customerId)
-        .map(({ accountToken, ...b }) => b),
+        .map(({ accountToken, recipientAccount, ...b }) => ({
+          ...b,
+          ...(recipientAccount
+            ? {
+                recipientMethod: recipientAccount.method,
+                detailsComplete: true,
+              }
+            : {}),
+        })),
       orders: s.orders
         .filter((o) => !customer || o.customerId === actor.customerId)
         .map((o) => this.orderView(o, actor)),

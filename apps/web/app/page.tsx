@@ -1,5 +1,11 @@
 "use client";
 import SelectField from "./SelectField";
+import RecipientAccountForm from "./RecipientAccountForm";
+import {
+  accountFields,
+  OPTION_NAMES,
+  type FullRecipientInput,
+} from "../../../packages/core/src/recipient-account";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
@@ -250,6 +256,13 @@ export default function Home() {
   const [mode, setMode] = useState("single");
   const [profileTab, setProfileTab] = useState("home");
   const [recipientSearch, setRecipientSearch] = useState("");
+  const [recipientForm, setRecipientForm] = useState<{
+    currency: string;
+    holder?: string;
+    customerId?: string;
+  } | null>(null);
+  const [recipientDetails, setRecipientDetails] =
+    useState<FullRecipientInput | null>(null);
   const [recipientLimit, setRecipientLimit] = useState(6);
   const [resumeDraft, setResumeDraft] = useState(false);
   const [batchChecked, setBatchChecked] = useState(false);
@@ -300,6 +313,7 @@ export default function Home() {
     (b) =>
       b.customerId === customerId &&
       recipientUsable(b.status) &&
+      (!workspace || b.detailsComplete) &&
       b.currency === market,
   );
   const recipient =
@@ -803,6 +817,10 @@ export default function Home() {
     }
   }
   function addRecipient() {
+    if (workspace) {
+      setRecipientForm({ currency: market });
+      return;
+    }
     openCommand({
       title: "新增收款账户",
       description: "保存收款信息后，可在单笔或批量结汇时选择使用。",
@@ -1092,6 +1110,9 @@ export default function Home() {
       .join(" ")
       .toLocaleLowerCase()
       .includes(recipientSearch.trim().toLocaleLowerCase()),
+  );
+  matchingRecipients.sort(
+    (a, b) => Number(!!b.detailsComplete) - Number(!!a.detailsComplete),
   );
   const shownRecipients =
     role === "customer"
@@ -3505,41 +3526,43 @@ export default function Home() {
                           !customers.some((c) => c.status === "approved")
                         }
                         onClick={() =>
-                          openCommand({
-                            title: "新增收款账户",
-                            description:
-                              "创建中国大陆 CNY 路线的虚构账户（尾号 8888）。保存后即可使用，无需人工审核，仅检查字段和格式；不收集或验证真实银行账号。",
-                            path: "beneficiaries",
-                            base: {
-                              country: "CN",
-                              currency: "CNY",
-                              accountMasked: "**** 8888",
-                              accountToken: "mock-vault-" + uid(),
-                            },
-                            fields: [
-                              {
-                                key: "customerId",
-                                label: "所属客户",
-                                value:
-                                  role === "customer"
-                                    ? customerId
-                                    : (customers.find(
-                                        (c) => c.status === "approved",
-                                      )?.id ?? ""),
-                                type: "select",
-                                options: customers
-                                  .filter((c) => c.status === "approved")
-                                  .map((c) => [c.id, c.name]),
-                              },
-                              {
-                                key: "name",
-                                label: "收款人名称",
-                                value: "新收款人",
-                              },
-                            ],
-                            button: "保存收款账户",
-                            success: "收款账户已保存，即可用于结汇。",
-                          })
+                          workspace
+                            ? setRecipientForm({ currency: market })
+                            : openCommand({
+                                title: "新增收款账户",
+                                description:
+                                  "创建中国大陆 CNY 路线的虚构账户（尾号 8888）。保存后即可使用，无需人工审核，仅检查字段和格式；不收集或验证真实银行账号。",
+                                path: "beneficiaries",
+                                base: {
+                                  country: "CN",
+                                  currency: "CNY",
+                                  accountMasked: "**** 8888",
+                                  accountToken: "mock-vault-" + uid(),
+                                },
+                                fields: [
+                                  {
+                                    key: "customerId",
+                                    label: "所属客户",
+                                    value:
+                                      role === "customer"
+                                        ? customerId
+                                        : (customers.find(
+                                            (c) => c.status === "approved",
+                                          )?.id ?? ""),
+                                    type: "select",
+                                    options: customers
+                                      .filter((c) => c.status === "approved")
+                                      .map((c) => [c.id, c.name]),
+                                  },
+                                  {
+                                    key: "name",
+                                    label: "收款人名称",
+                                    value: "新收款人",
+                                  },
+                                ],
+                                button: "保存收款账户",
+                                success: "收款账户已保存，即可用于结汇。",
+                              })
                         }
                       >
                         <Plus size={18} />
@@ -3573,11 +3596,18 @@ export default function Home() {
                               recipientUsable(b.status) ? "valid" : "suspended"
                             }
                           >
-                            {recipientUsable(b.status) ? "可用" : "已停用"}
+                            {workspace && !b.detailsComplete
+                              ? "资料待补全"
+                              : recipientUsable(b.status)
+                                ? "可用"
+                                : "已停用"}
                           </Badge>
                         </div>
                         <h2>{b.name}</h2>
                         <p>{b.accountMasked}</p>
+                        {b.bankName && (
+                          <p className="muted small">{b.bankName}</p>
+                        )}
                         <span className="tag">
                           {new Intl.DisplayNames(["zh-CN"], {
                             type: "region",
@@ -3589,21 +3619,51 @@ export default function Home() {
                         )}
                         <div className="ruleline" />
                         <div className="actions">
-                          {role === "customer" && recipientUsable(b.status) && (
+                          {role === "customer" &&
+                            recipientUsable(b.status) &&
+                            (!workspace || b.detailsComplete) && (
+                              <button
+                                className="button outline"
+                                disabled={locked}
+                                onClick={() => {
+                                  setMarket(b.currency);
+                                  setBeneficiaryId(b.id);
+                                  setMode("single");
+                                  setStep(1);
+                                  setQuote(null);
+                                  setChecked(false);
+                                  go("payment");
+                                }}
+                              >
+                                用于结汇 <ArrowRight size={16} />
+                              </button>
+                            )}
+                          {workspace && b.detailsComplete && (
+                            <button
+                              className="button text"
+                              onClick={() =>
+                                void request<FullRecipientInput>(
+                                  `beneficiaries/${b.id}/details`,
+                                )
+                                  .then(setRecipientDetails)
+                                  .catch((e) => setError(errorText(e)))
+                              }
+                            >
+                              查看账户
+                            </button>
+                          )}
+                          {workspace && !b.detailsComplete && (
                             <button
                               className="button outline"
-                              disabled={locked}
-                              onClick={() => {
-                                setMarket(b.currency);
-                                setBeneficiaryId(b.id);
-                                setMode("single");
-                                setStep(1);
-                                setQuote(null);
-                                setChecked(false);
-                                go("payment");
-                              }}
+                              onClick={() =>
+                                setRecipientForm({
+                                  currency: b.currency,
+                                  holder: b.name,
+                                  customerId: b.customerId,
+                                })
+                              }
                             >
-                              用于结汇 <ArrowRight size={16} />
+                              重新绑定
                             </button>
                           )}
                           {!recipientUsable(b.status) && (
@@ -4468,6 +4528,52 @@ export default function Home() {
             ))}
         </nav>
       </div>
+      {recipientForm && (
+        <RecipientAccountForm
+          initialCurrency={recipientForm.currency}
+          holder={recipientForm.holder}
+          customerId={recipientForm.customerId}
+          customers={
+            role === "admin"
+              ? customers
+                  .filter((c) => c.status === "approved")
+                  .map((c) => ({ id: c.id, name: c.name }))
+              : undefined
+          }
+          onClose={() => setRecipientForm(null)}
+          onSaved={async (id, currency) => {
+            await reload();
+            setBeneficiaryId(id);
+            setMarket(currency);
+            setRecipientSearch("");
+            setRecipientForm(null);
+            setQuote(null);
+            setChecked(false);
+            setToast("收款账户已绑定");
+          }}
+        />
+      )}
+      {recipientDetails && (
+        <Modal
+          title="收款账户"
+          busy={false}
+          onClose={() => setRecipientDetails(null)}
+        >
+          <dl className="details">
+            {accountFields(recipientDetails.method)
+              .filter((f) => recipientDetails.fields[f.id])
+              .map((f) => (
+                <div key={f.id}>
+                  <dt>{f.label}</dt>
+                  <dd style={{ overflowWrap: "anywhere" }}>
+                    {OPTION_NAMES[recipientDetails.fields[f.id]] ??
+                      recipientDetails.fields[f.id]}
+                  </dd>
+                </div>
+              ))}
+          </dl>
+        </Modal>
+      )}
       {toast && (
         <div className="toast" role="status">
           <CheckCircle size={19} />

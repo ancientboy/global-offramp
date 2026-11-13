@@ -1,3 +1,4 @@
+import type { RecipientVault } from "./recipient-vault";
 import { Auth, HttpError, type Account } from "./auth";
 /** Return only execution-facing data for the provider bound by the operator, never client-supplied identity. */
 export async function providerDashboard(auth: Auth, account: Account) {
@@ -63,9 +64,31 @@ export async function providerDashboard(auth: Auth, account: Account) {
   };
 }
 
-export async function providerOrder(auth: Auth, account: Account, id: string) {
+export async function providerOrder(
+  auth: Auth,
+  account: Account,
+  id: string,
+  vault?: RecipientVault,
+) {
   const dashboard = await providerDashboard(auth, account),
     order = dashboard.orders.find((o) => o.id === id);
   if (!order) throw new HttpError(404, "NOT_FOUND");
-  return order;
+  const state = await auth.store.read(),
+    raw = state.orders.find((o) => o.id === id),
+    b = state.beneficiaries.find(
+      (b) =>
+        b.id === raw?.quote.beneficiaryId && b.customerId === raw?.customerId,
+    );
+  return {
+    ...order,
+    serverTime: new Date(auth.now()).toISOString(),
+    ...(vault && b?.recipientAccount
+      ? {
+          recipientDetails: {
+            method: b.recipientAccount.method,
+            fields: vault.open(b),
+          },
+        }
+      : {}),
+  };
 }

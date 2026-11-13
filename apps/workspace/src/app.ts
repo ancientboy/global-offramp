@@ -1,3 +1,9 @@
+import { randomUUID } from "node:crypto";
+import {
+  validateFullRecipient,
+  type FullRecipientInput,
+} from "../../../packages/core/src/recipient-account";
+import { RecipientVault } from "./recipient-vault";
 import {
   publicInvitation,
   listPartners,
@@ -67,6 +73,7 @@ export function workspaceApp(
   options: {
     enableSimulatedTopups?: boolean;
     marketRates?: MarketRatesService;
+    recipientVault?: RecipientVault;
   } = {},
 ) {
   if (new URL(origin).origin !== origin || !origin.startsWith("https://"))
@@ -112,6 +119,7 @@ export function workspaceApp(
             emailVerified: false,
             mfaEnabled: false,
             simulatedTopupsEnabled: options.enableSimulatedTopups === true,
+            recipientAccountsEnabled: !!options.recipientVault,
           },
           healthy ? 200 : 503,
         );
@@ -142,6 +150,117 @@ export function workspaceApp(
       }
       const token = tokenOf(request);
       const account = await auth.current(token);
+      if (
+        path === "/beneficiaries" &&
+        request.method === "POST" &&
+        options.recipientVault
+      ) {
+        if (!["customer", "merchant_admin"].includes(account.role))
+          throw new HttpError(403, "FORBIDDEN");
+        const input = await body(8192);
+        if (
+          !input ||
+          Object.keys(input).some(
+            (k) =>
+              ![
+                "country",
+                "currency",
+                "method",
+                "fields",
+                "customerId",
+              ].includes(k),
+          ) ||
+          !input.fields ||
+          typeof input.fields !== "object" ||
+          Array.isArray(input.fields)
+        )
+          throw new HttpError(400, "RECIPIENT_DETAILS_REQUIRED");
+        const validation = validateFullRecipient(input as FullRecipientInput);
+        if (!validation.valid)
+          return json(
+            { error: "INVALID_RECIPIENT", fields: validation.errors },
+            400,
+          );
+        const customerId =
+          account.role === "customer" ? account.customer_id : input.customerId;
+        if (!customerId) throw new HttpError(400, "INVALID_INPUT");
+        if (
+          account.role === "customer" &&
+          input.customerId &&
+          input.customerId !== customerId
+        )
+          throw new HttpError(403, "FORBIDDEN");
+        const accountToken = "recipient-" + randomUUID(),
+          scope = {
+            customerId,
+            country: input.country,
+            currency: input.currency,
+            accountToken,
+          };
+        const normalized = {
+          ...input,
+          fields: validation.fields,
+        } as FullRecipientInput;
+        const primary =
+          validation.fields.accountNumber ??
+          validation.fields.iban ??
+          validation.fields.clabe ??
+          validation.fields.pixKey;
+        const tail = (primary?.replace(/\D/g, "").slice(-4) || "").padStart(
+          4,
+          "0",
+        );
+        const b = await core.createBeneficiary(actorFor(account), {
+          ...scope,
+          name: validation.fields.accountHolderName,
+          accountMasked:
+            "**** " +
+            (input.method === "BR_PIX" &&
+            ["email", "random"].includes(validation.fields.pixKeyType)
+              ? "PIX"
+              : tail),
+          ...(validation.fields.bankName
+            ? { bankName: validation.fields.bankName }
+            : {}),
+          recipientAccount: {
+            method: input.method,
+            encrypted: options.recipientVault.seal(scope, normalized),
+            boundAt: new Date(auth.now()).toISOString(),
+          },
+        });
+        const { accountToken: _, recipientAccount: __, ...publicValue } = b;
+        return json(
+          {
+            ...publicValue,
+            detailsComplete: true,
+            recipientMethod: input.method,
+          },
+          201,
+        );
+      }
+      const detailsMatch = /^\/beneficiaries\/([a-zA-Z0-9_-]+)\/details$/.exec(
+        path,
+      );
+      if (detailsMatch && request.method === "GET") {
+        if (!options.recipientVault)
+          throw new HttpError(503, "RECIPIENT_UNAVAILABLE");
+        if (!["customer", "merchant_admin"].includes(account.role))
+          throw new HttpError(403, "FORBIDDEN");
+        const state = await auth.store.read(),
+          b = state.beneficiaries.find(
+            (b) =>
+              b.id === detailsMatch[1] &&
+              (account.role === "merchant_admin" ||
+                b.customerId === account.customer_id),
+          );
+        if (!b?.recipientAccount) throw new HttpError(404, "NOT_FOUND");
+        return json({
+          country: b.country,
+          currency: b.currency,
+          method: b.recipientAccount.method,
+          fields: options.recipientVault.open(b),
+        });
+      }
       if (request.method === "GET" && path === "/auth/me")
         return json({ account: publicAccount(account) });
       if (request.method === "POST" && path === "/auth/logout") {
@@ -188,9 +307,11 @@ export function workspaceApp(
           );
         if (match) {
           const [, id, action] = match;
-          await providerOrder(auth, account, id);
+          await providerOrder(auth, account, id, options.recipientVault);
           if (request.method === "GET" && !action)
-            return json(await providerOrder(auth, account, id));
+            return json(
+              await providerOrder(auth, account, id, options.recipientVault),
+            );
           if (request.method === "GET" && action === "receipt") {
             const file = await core.downloadReceiptFile(actorFor(account), id);
             return new Response(Buffer.from(file.dataBase64, "base64"), {
@@ -221,7 +342,9 @@ export function workspaceApp(
                 id,
                 await body(3 * 1024 * 1024),
               );
-            return json(await providerOrder(auth, account, id));
+            return json(
+              await providerOrder(auth, account, id, options.recipientVault),
+            );
           }
         }
         throw new HttpError(403, "FORBIDDEN");

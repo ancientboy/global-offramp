@@ -1,3 +1,5 @@
+import { RecipientVault } from "../src/recipient-vault";
+import { examples } from "../../../packages/core/test/fixtures/recipient-accounts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { scryptSync, randomUUID } from "node:crypto";
@@ -30,7 +32,11 @@ function poolFor(db: PGlite): SqlPool {
     connect: async () => ({ query: (s, p) => db.query(s, p) }),
   };
 }
-async function fixture(path?: string, enableSimulatedTopups = false) {
+async function fixture(
+  path?: string,
+  enableSimulatedTopups = false,
+  withRecipientVault = false,
+) {
   const db = new PGlite(path);
   for (const sql of migrations) await db.exec(sql);
   const pool = poolFor(db),
@@ -43,7 +49,12 @@ async function fixture(path?: string, enableSimulatedTopups = false) {
   const auth = new Auth(pool, store, () => now);
   const dir = await mkdtemp(join(tmpdir(), "offramp-files-"));
   const bucket = new PrivateFiles(dir),
-    app = workspaceApp(auth, bucket, origin, { enableSimulatedTopups });
+    app = workspaceApp(auth, bucket, origin, {
+      enableSimulatedTopups,
+      recipientVault: withRecipientVault
+        ? new RecipientVault(Buffer.alloc(32, 7))
+        : undefined,
+    });
   async function call(
     path: string,
     body?: unknown,
@@ -1919,5 +1930,174 @@ test("invited customer completion accrues only service-fee commission to its bou
     );
   } finally {
     await f.close();
+  }
+});
+
+test("complete recipient binding persists encrypted country fields and scopes owner/admin/provider access", async () => {
+  const persisted = await mkdtemp(join(tmpdir(), "recipient-persist-"));
+  const f = await fixture(persisted, true, true);
+  try {
+    const a = await f.register("bank-owner@example.com"),
+      b = await f.register("other-owner@example.com"),
+      ac = await f.login("bank-owner@example.com"),
+      bc = await f.login("other-owner@example.com");
+    const core = new (
+      await import("../../../packages/core/src/service")
+    ).OfframpService(f.store, () => new Date(f.auth.now()));
+    const admin = { id: randomUUID(), role: "merchant_admin" as const };
+    await core.reviewCustomer(admin, a.customerId, "approved");
+    const ids: string[] = [];
+    for (const input of examples) {
+      const response = await f.call("beneficiaries", input, ac);
+      assert.equal(response.status, 201, await response.clone().text());
+      const created = await response.json();
+      ids.push(created.id);
+      assert.equal(created.detailsComplete, true);
+      assert.equal(created.accountToken, undefined);
+      assert.equal(created.recipientAccount, undefined);
+      const raw = JSON.stringify(await f.store.read());
+      for (const key of ["accountNumber", "iban", "clabe", "pixKey", "taxId"]) {
+        if (input.fields[key])
+          assert.ok(
+            !raw.includes(input.fields[key]),
+            "Full financial value leaked into runtime JSON",
+          );
+      }
+      const own = await f.call(
+        `beneficiaries/${created.id}/details`,
+        undefined,
+        ac,
+      );
+      assert.equal(own.status, 200);
+      const full = await own.json();
+      assert.equal(full.method, input.method);
+      assert.ok(full.fields.accountHolderName);
+      assert.equal(
+        (await f.call(`beneficiaries/${created.id}/details`, undefined, bc))
+          .status,
+        404,
+      );
+    }
+    await f.auth.createAdmin(
+      { username: "recipient-admin", password },
+      "Recipient admin",
+    );
+    const adminCookie = await f.login("recipient-admin");
+    assert.equal(
+      (await f.call(`beneficiaries/${ids[0]}/details`, undefined, adminCookie))
+        .status,
+      200,
+    );
+    assert.equal(
+      (
+        await f.call(
+          "beneficiaries",
+          { ...examples[0], customerId: a.customerId },
+          adminCookie,
+        )
+      ).status,
+      201,
+    );
+    const dashboard = await (await f.call("dashboard", undefined, ac)).json();
+    assert.equal(dashboard.beneficiaries.length, 9);
+    assert.ok(
+      dashboard.beneficiaries.every(
+        (v: any) => v.detailsComplete && !v.recipientAccount && !v.accountToken,
+      ),
+    );
+    const bad = await f.call(
+      "beneficiaries",
+      {
+        ...examples[1],
+        fields: { ...examples[1].fields, abaRoutingNumber: "021000022" },
+      },
+      ac,
+    );
+    assert.equal(bad.status, 400);
+    assert.ok(!(await bad.text()).includes("021000022"));
+    assert.equal(
+      (
+        await f.call(
+          "beneficiaries",
+          { ...examples[0], customerId: b.customerId },
+          ac,
+        )
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await f.call(
+          "beneficiaries",
+          {
+            name: "Legacy",
+            country: "CN",
+            currency: "CNY",
+            accountToken: "fake",
+            accountMasked: "**** 8888",
+          },
+          ac,
+        )
+      ).status,
+      400,
+    );
+    // Assigned providers receive complete execution details only through the protected detail view.
+    await core.upsertPayoutProvider(admin, {
+      id: "official-self-operated",
+      name: "官方自营",
+      scope: "official",
+      status: "active",
+      routes: ["CNY", "USD", "EUR", "MXN", "BRL", "GBP"],
+      isDefault: true,
+    });
+    const q = await core.createQuote(admin, {
+      customerId: a.customerId,
+      beneficiaryId: ids[0],
+      sourceCurrency: "USDT",
+      sourceAmount: "100",
+    });
+    const order = await core.createOrder(admin, {
+      quoteId: q.id,
+      clientOrderId: "recipient-details-scope",
+    });
+    const { providerOrder } = await import("../src/providers");
+    const provider: any = {
+      id: randomUUID(),
+      role: "payout_provider",
+      payout_provider_id: "official-self-operated",
+    };
+    const detail = await providerOrder(
+      f.auth,
+      provider,
+      String(order.id),
+      new RecipientVault(Buffer.alloc(32, 7)),
+    );
+    assert.equal(
+      detail.recipientDetails?.fields.accountNumber,
+      examples[0].fields.accountNumber,
+    );
+    await assert.rejects(() =>
+      providerOrder(
+        f.auth,
+        { ...provider, payout_provider_id: "foreign-provider" },
+        String(order.id),
+        new RecipientVault(Buffer.alloc(32, 7)),
+      ),
+    );
+    await f.db.close();
+    const reopened = new PGlite(persisted);
+    try {
+      const restored = await new PostgresStore(poolFor(reopened)).read();
+      const stored = restored.beneficiaries.find((b) => b.id === ids[0])!;
+      assert.equal(
+        new RecipientVault(Buffer.alloc(32, 7)).open(stored).accountNumber,
+        examples[0].fields.accountNumber,
+      );
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    await f.close();
+    await rm(persisted, { recursive: true, force: true });
   }
 });
