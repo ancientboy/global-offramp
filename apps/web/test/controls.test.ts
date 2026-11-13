@@ -8,10 +8,10 @@ const { JSDOM } = require("jsdom");
 Object.assign(globalThis, { React });
 const SelectField = require("../app/SelectField").default;
 const { Modal } = require("../app/ui");
-async function mount(component: React.ReactNode) {
+async function mount(component: React.ReactNode, url = "https://example.test") {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="root"></div></body></html>',
-    { url: "https://example.test", pretendToBeVisual: true },
+    { url, pretendToBeVisual: true },
   );
   const saved = new Map<string, PropertyDescriptor | undefined>();
   for (const key of [
@@ -19,6 +19,7 @@ async function mount(component: React.ReactNode) {
     "document",
     "HTMLElement",
     "HTMLSelectElement",
+    "FormData",
     "Node",
     "Event",
     "KeyboardEvent",
@@ -302,5 +303,177 @@ test("provider orders open details and payment registration requires confirmatio
   } finally {
     await f.close();
     globalThis.fetch = savedFetch;
+  }
+});
+
+test("invitation landing opens registration, submits the validated invite code and clears it after success", async () => {
+  const Workspace = require("../app/workspace/page").default;
+  const saved = globalThis.fetch,
+    code = "A".repeat(32);
+  let submitted: any;
+  globalThis.fetch = (async (url: any, options: any) => {
+    const path = String(url);
+    if (path.endsWith("/auth/me"))
+      return new Response(JSON.stringify({ error: "UNAUTHENTICATED" }), {
+        status: 401,
+      });
+    if (path.endsWith("/invites/" + code))
+      return new Response(JSON.stringify({ partnerName: "邀请伙伴" }));
+    if (path.endsWith("/auth/register")) {
+      submitted = JSON.parse(options.body);
+      return new Response(JSON.stringify({ account: { id: "registered" } }), {
+        status: 201,
+      });
+    }
+    throw Error("Unexpected request");
+  }) as typeof fetch;
+  const f = await mount(
+    createElement(Workspace),
+    "https://example.test/workspace?invite=" + code,
+  );
+  try {
+    assert.match(f.document.body.textContent, /邀请伙伴/);
+    assert.match(f.document.querySelector("h1").textContent, /注册账号/);
+    f.document.querySelector("input[name=name]").value = "邀请客户";
+    f.document.querySelector("input[name=identifier]").value =
+      "invited@example.test";
+    f.document.querySelector("input[name=password]").value =
+      "a-long-testing-password";
+    await act(async () =>
+      f.document
+        .querySelector("form")
+        .dispatchEvent(
+          new f.window.Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    assert.equal(submitted.inviteCode, code);
+    assert.equal(submitted.kind, "personal");
+    assert.equal(submitted.role, undefined);
+    assert.equal(submitted.partnerId, undefined);
+    assert.equal(f.window.location.search, "");
+    assert.match(f.document.body.textContent, /账号已创建/);
+  } finally {
+    await f.close();
+    globalThis.fetch = saved;
+  }
+});
+
+test("partner portal shows its own invite and registered leads before any commission exists", async () => {
+  const Portal = require("../app/PartnerPortal").default,
+    { WorkspaceContext } = require("../app/workspace-context");
+  const saved = globalThis.fetch;
+  const dashboard = {
+    partner: {
+      id: "own-partner",
+      name: "正式伙伴",
+      inviteUrl: "https://example.test/workspace?invite=" + "B".repeat(32),
+    },
+    customers: [
+      {
+        alias: "客户-123456",
+        displayName: "张**",
+        status: "pending",
+        kind: "personal",
+        registeredAt: "2026-11-13T01:00:00Z",
+      },
+    ],
+    commissions: [],
+    settlements: [],
+  };
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify(dashboard))) as typeof fetch;
+  const f = await mount(
+    createElement(
+      WorkspaceContext.Provider,
+      {
+        value: {
+          account: {
+            id: "partner",
+            name: "正式伙伴",
+            role: "partner",
+            customerId: null,
+          },
+          logout: async () => {},
+          expired: () => {},
+        },
+      },
+      createElement(Portal),
+    ),
+  );
+  try {
+    assert.equal(
+      f.document.querySelector('input[aria-label="专属邀请链接"]').value,
+      dashboard.partner.inviteUrl,
+    );
+    const find = (name: string) =>
+      [...f.document.querySelectorAll("button")].find(
+        (b: any) => b.textContent === name,
+      ) as HTMLButtonElement;
+    await act(async () => find("我的客户").click());
+    assert.match(f.document.body.textContent, /客户-123456/);
+    assert.match(f.document.body.textContent, /待审核/);
+    await act(async () => find("佣金明细").click());
+    assert.match(f.document.body.textContent, /暂无佣金记录/);
+    assert.equal(find("导出明细").disabled, true);
+    assert.doesNotMatch(
+      f.document.body.textContent,
+      /出款工作台|客户钱包|管理后台/,
+    );
+  } finally {
+    await f.close();
+    globalThis.fetch = saved;
+  }
+});
+
+test("admin can create a partner through the account dialog and receive a shareable invite", async () => {
+  const Panel = require("../app/PartnerAdminPanel").default,
+    saved = globalThis.fetch;
+  let body: any,
+    created = false;
+  const row = {
+    id: "new-partner",
+    name: "合作伙伴",
+    username: "newpartner",
+    status: "active",
+    customerCount: 0,
+    createdAt: "2026-11-13T00:00:00Z",
+    inviteUrl: "https://example.test/workspace?invite=" + "C".repeat(32),
+  };
+  globalThis.fetch = (async (url: any, options: any) => {
+    if (options?.method === "POST") {
+      body = JSON.parse(options.body);
+      created = true;
+      return new Response(JSON.stringify({ partner: row }), { status: 201 });
+    }
+    return new Response(JSON.stringify({ partners: created ? [row] : [] }));
+  }) as typeof fetch;
+  const f = await mount(createElement(Panel));
+  try {
+    const button = (text: string) =>
+      [...f.document.querySelectorAll("button")].find(
+        (b: any) => b.textContent === text,
+      ) as HTMLButtonElement;
+    await act(async () => button("创建伙伴").click());
+    assert.ok(f.document.querySelector("[role=dialog]"));
+    f.document.querySelector("input[name=name]").value = "合作伙伴";
+    f.document.querySelector("input[name=username]").value = "newpartner";
+    await act(async () =>
+      f.document
+        .querySelector("form")
+        .dispatchEvent(
+          new f.window.Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    assert.equal(body.username, "newpartner");
+    assert.ok(body.password.length >= 12);
+    assert.equal(body.role, undefined);
+    assert.equal(f.document.querySelector("[role=dialog]"), null);
+    assert.equal(
+      f.document.querySelector('input[aria-label="合作伙伴的邀请链接"]').value,
+      row.inviteUrl,
+    );
+  } finally {
+    await f.close();
+    globalThis.fetch = saved;
   }
 });

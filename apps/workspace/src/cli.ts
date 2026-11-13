@@ -37,8 +37,15 @@ async function main() {
       await pool.query(
         readFileSync("db/migrations/005_multi_fiat.sql", "utf8"),
       );
+      const partnerSchema = await pool.query(
+        "SELECT 1 FROM information_schema.columns WHERE table_schema='workspace' AND table_name='accounts' AND column_name='partner_id'",
+      );
+      if (!partnerSchema.rowCount)
+        await pool.query(
+          readFileSync("db/migrations/006_provider_accounts.sql", "utf8"),
+        );
       await pool.query(
-        readFileSync("db/migrations/006_provider_accounts.sql", "utf8"),
+        readFileSync("db/migrations/007_partner_invites.sql", "utf8"),
       );
       console.log("Workspace schemas installed; no demo database touched");
     } else {

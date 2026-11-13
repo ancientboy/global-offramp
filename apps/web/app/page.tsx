@@ -35,6 +35,7 @@ import MerchantOverview, {
 } from "./MerchantOverview";
 import OrderHistory from "./OrderHistory";
 import CustomerWallet from "./CustomerWallet";
+import PartnerAdminPanel from "./PartnerAdminPanel";
 import CustomerOrders from "./CustomerOrders";
 import "./exchange-flow.css";
 import { customerOrderState } from "./customer-order-models";
@@ -3787,11 +3788,17 @@ export default function Home() {
                 />
               )}
               {page === "referrals" && (
-                <ReferralPartnersPanel
-                  customers={customers}
-                  commissions={commissionRows}
-                  settlements={settlementRows}
-                />
+                <>
+                  {workspace ? (
+                    <PartnerAdminPanel />
+                  ) : (
+                    <ReferralPartnersPanel
+                      customers={customers}
+                      commissions={commissionRows}
+                      settlements={settlementRows}
+                    />
+                  )}
+                </>
               )}
               {page === "providers" && (
                 <PayoutProvidersPanel
@@ -4300,8 +4307,25 @@ export default function Home() {
                               fields: [
                                 {
                                   key: "partnerId",
-                                  label: "演示伙伴 ID",
-                                  value: "partner-1",
+                                  label: "推广伙伴",
+                                  value:
+                                    data?.partners?.filter(
+                                      (p) => p.status === "active",
+                                    )[0]?.id ?? "partner-1",
+                                  ...(workspace
+                                    ? {
+                                        type: "select" as const,
+                                        options: (data?.partners ?? [])
+                                          .filter((p) => p.status === "active")
+                                          .map(
+                                            (p) =>
+                                              [p.id, p.name] as [
+                                                string,
+                                                string,
+                                              ],
+                                          ),
+                                      }
+                                    : {}),
                                 },
                                 {
                                   key: "month",

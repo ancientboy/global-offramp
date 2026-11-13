@@ -18,5 +18,19 @@ export async function initializeWorkspace(pool: SqlPool) {
     throw new Error(
       "Workspace database contains unbound legacy/demo customers; use a dedicated database",
     );
+  const attributions = await pool.query(
+    "SELECT customer_id,partner_id FROM workspace.customer_attributions",
+  );
+  if (
+    attributions.rows.some(
+      (row) =>
+        !state.customers.some(
+          (c) => c.id === row.customer_id && c.partnerId === row.partner_id,
+        ),
+    )
+  )
+    throw new Error(
+      "Workspace customer attribution does not match the immutable registry",
+    );
   return store;
 }

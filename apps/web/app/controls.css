@@ -582,3 +582,128 @@ body .modal-overlay .modal {
   text-align: left;
   overflow-wrap: anywhere;
 }
+.partner-portal {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 40px 28px;
+}
+.partner-invitation {
+  margin-bottom: 24px;
+  background: linear-gradient(120deg, #edf8f4, #f9fbfd);
+  border: 1px solid #dcece7;
+}
+.partner-invitation h2 {
+  margin-top: 0;
+  font-size: 19px;
+}
+.partner-invitation p {
+  font-size: 13px;
+  color: #789099;
+}
+.partner-link {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 18px;
+}
+.partner-link input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+.partner-link .button {
+  white-space: nowrap;
+}
+.partner-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px;
+  margin-bottom: 24px;
+  border: 1px solid #e4eded;
+  background: #f3f7f7;
+  border-radius: 12px;
+}
+.partner-tabs button {
+  flex: 1;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 12px 20px;
+  font: inherit;
+  font-size: 13px;
+  color: #799099;
+  cursor: pointer;
+}
+.partner-tabs button.active {
+  background: #fff;
+  box-shadow: 0 2px 8px #264b4c0b;
+  color: #147e72;
+  font-weight: 600;
+}
+.partner-counts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.partner-counts .card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.partner-counts span {
+  color: #7f969e;
+  font-size: 13px;
+}
+.partner-counts strong {
+  font-size: 30px;
+  color: #235158;
+}
+.partner-admin {
+  margin-bottom: 24px;
+}
+.partner-admin .card-heading p {
+  font-size: 13px;
+  color: #81979e;
+}
+.partner-admin td input {
+  min-width: 220px;
+  font-size: 12px;
+}
+.partner-username {
+  display: block;
+  color: #879ba1;
+  font-size: 12px;
+  margin-top: 7px;
+}
+.invited-registration {
+  padding: 13px 16px;
+  margin: 16px 0;
+  background: #eaf6f1;
+  border: 1px solid #d6eae0;
+  border-radius: 10px;
+  color: #247967;
+  font-size: 13px;
+}
+@media (max-width: 640px) {
+  .partner-portal {
+    padding: 24px 16px;
+  }
+  .partner-link {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .partner-counts {
+    grid-template-columns: 1fr;
+  }
+  .partner-tabs button {
+    padding: 10px 8px;
+    min-width: 40%;
+  }
+  .partner-admin > .card-heading {
+    align-items: flex-start;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+}

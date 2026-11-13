@@ -1,3 +1,10 @@
+import {
+  publicInvitation,
+  listPartners,
+  createPartner,
+  setPartnerStatus,
+  partnerDashboard,
+} from "./partners";
 import { DomainError } from "../../../packages/core/src/money";
 import { providerDashboard, providerOrder } from "./providers";
 import { ZodError } from "zod";
@@ -43,6 +50,8 @@ const businessRoutes = [
   ["GET", /^\/orders\/[\w-]+\/receipt-file$/],
   ["POST", /^\/admin\/pricing\/(preview|publish)$/],
   ["POST", /^\/admin\/payout-providers$/],
+  ["POST", /^\/settlements$/],
+  ["POST", /^\/settlements\/[\w-]+\/(approve|cancel)$/],
   ["POST", /^\/customers\/[\w-]+\/review$/],
   ["POST", /^\/(beneficiaries|quotes|orders|batches|batches\/merchant)$/],
   ["POST", /^\/beneficiaries\/[\w-]+\/approve$/],
@@ -107,6 +116,11 @@ export function workspaceApp(
           healthy ? 200 : 503,
         );
       }
+      const inviteMatch = /^\/invites\/([A-Za-z0-9_-]{1,100})$/.exec(path);
+      if (request.method === "GET" && inviteMatch) {
+        await auth.rate("invite:" + ip, 60, 60000);
+        return json(await publicInvitation(auth, inviteMatch[1]));
+      }
       if (request.method === "POST" && path === "/auth/register") {
         await auth.rate("register:" + ip, 5, 60 * 60_000);
         return json({ account: await auth.register(await body()) }, 201);
@@ -133,6 +147,36 @@ export function workspaceApp(
       if (request.method === "POST" && path === "/auth/logout") {
         await auth.logout(token!, account);
         return json({ loggedOut: true }, 200, cookie("", 0));
+      }
+      if (
+        path === "/admin/partners" ||
+        /^\/admin\/partners\/[a-zA-Z0-9_-]+\/status$/.test(path)
+      ) {
+        if (account.role !== "merchant_admin")
+          throw new HttpError(403, "FORBIDDEN");
+        if (path === "/admin/partners" && request.method === "GET")
+          return json({ partners: await listPartners(auth, account, origin) });
+        if (path === "/admin/partners" && request.method === "POST") {
+          await auth.rate("partner-create:" + account.id, 10, 60000);
+          return json(
+            {
+              partner: await createPartner(auth, account, origin, await body()),
+            },
+            201,
+          );
+        }
+        const statusMatch =
+          /^\/admin\/partners\/([a-zA-Z0-9_-]+)\/status$/.exec(path);
+        if (statusMatch && request.method === "POST")
+          return json(
+            await setPartnerStatus(auth, account, statusMatch[1], await body()),
+          );
+        throw new HttpError(405, "METHOD_NOT_ALLOWED");
+      }
+      if (account.role === "partner") {
+        if (path === "/dashboard" && request.method === "GET")
+          return json(await partnerDashboard(auth, account, origin));
+        throw new HttpError(403, "FORBIDDEN");
       }
       // Dedicated service-provider identities never enter the broad business command adapter.
       if (account.role === "payout_provider") {
@@ -256,6 +300,22 @@ export function workspaceApp(
         owner: "workspace-v1",
         now: auth.now,
       });
+      if (
+        path === "/dashboard" &&
+        request.method === "GET" &&
+        account.role === "merchant_admin" &&
+        result.ok
+      ) {
+        const data = await result.json();
+        return json({
+          ...data,
+          partners: (await listPartners(auth, account, origin)).map((p) => ({
+            id: p.id,
+            name: p.name,
+            status: p.status,
+          })),
+        });
+      }
       // The shared adapter has its own safe domain errors; no auth internals are returned.
       return result;
     } catch (error) {

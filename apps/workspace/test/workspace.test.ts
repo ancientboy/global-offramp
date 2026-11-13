@@ -22,6 +22,7 @@ const migrations = [
   "db/migrations/004_operator_customer_username.sql",
   "db/migrations/005_multi_fiat.sql",
   "db/migrations/006_provider_accounts.sql",
+  "db/migrations/007_partner_invites.sql",
 ].map((p) => readFileSync(p, "utf8"));
 function poolFor(db: PGlite): SqlPool {
   return {
@@ -1452,6 +1453,469 @@ test("scoped provider payment and receipt flow records once, holds unknown outco
     assert.equal(
       customerDashboard.orders.find((o: any) => o.id === paid.id).payoutStatus,
       "sent",
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("formal partner invitations atomically attribute new registrations, isolate leads and reject reassignment, escalation and inactive links", async () => {
+  const f = await fixture();
+  try {
+    await f.auth.createAdmin(
+      { username: "partner-admin", password },
+      "Partner admin",
+    );
+    const admin = await f.login("partner-admin");
+    await f.db.exec("CREATE ROLE partner_app_test");
+    await f.db.exec(
+      readFileSync("deploy/workspace/grants.sql", "utf8").replaceAll(
+        ':"app_role"',
+        "partner_app_test",
+      ),
+    );
+    await f.db.exec("SET ROLE partner_app_test");
+    async function create(username: string, name: string) {
+      const r = await f.call(
+        "admin/partners",
+        { username, name, password },
+        admin,
+      );
+      assert.equal(r.status, 201, await r.clone().text());
+      const value = await r.json();
+      assert.doesNotMatch(JSON.stringify(value), /password|scrypt/);
+      return value.partner;
+    }
+    const p1 = await create("partner-one", "第一伙伴"),
+      p2 = await create("partner-two", "第二伙伴");
+    const code1 = new URL(p1.inviteUrl).searchParams.get("invite")!,
+      code2 = new URL(p2.inviteUrl).searchParams.get("invite")!;
+    assert.match(
+      p1.inviteUrl,
+      new RegExp("^" + origin.replaceAll(".", "\\.") + "/workspace\\?invite="),
+    );
+    assert.equal(code1.length, 32);
+    assert.notEqual(code1, code2);
+    const c1 = await f.login("partner-one"),
+      c2 = await f.login("partner-two");
+    assert.equal(
+      (await (await f.call("auth/me", undefined, c1)).json()).account.partnerId,
+      p1.id,
+    );
+    const publicInvite = await f.call("invites/" + code1);
+    assert.equal(publicInvite.status, 200);
+    assert.deepEqual(await publicInvite.json(), { partnerName: "第一伙伴" });
+    const input = {
+      email: "invited-one@example.com",
+      password,
+      name: "张三完整姓名",
+      kind: "personal",
+      inviteCode: code1,
+    };
+    const registered = await f.call(
+      "auth/register",
+      input,
+      undefined,
+      {},
+      "partner-reg-one",
+    );
+    assert.equal(registered.status, 201);
+    const customer = (await registered.json()).account;
+    const coreCustomer = (await f.store.read()).customers.find(
+      (c) => c.id === customer.customerId,
+    )!;
+    assert.equal(coreCustomer.partnerId, p1.id);
+    assert.equal(coreCustomer.attributionVersion, "invite-v1");
+    assert.equal(coreCustomer.status, "pending");
+    const registry = (
+      await f.pool.query(
+        "SELECT * FROM workspace.customer_attributions WHERE customer_id=$1",
+        [customer.customerId],
+      )
+    ).rows[0];
+    assert.equal(registry.partner_id, p1.id);
+    assert.equal(registry.invite_code_hash, digest(code1));
+    const view = await (
+      await f.call("dashboard", undefined, c1, { "x-demo-actor": "admin-demo" })
+    ).json();
+    assert.equal(view.customers.length, 1);
+    assert.equal(view.customers[0].displayName, "张**");
+    assert.equal(view.customers[0].status, "pending");
+    assert.equal(view.commissions.length, 0);
+    assert.doesNotMatch(
+      JSON.stringify(view),
+      /invited-one@example.com|张三完整姓名|walletBalances|pricingCurrent|password|accountMasked/,
+    );
+    assert.equal(
+      (
+        await (
+          await f.call("dashboard?partnerId=" + p1.id, undefined, c2)
+        ).json()
+      ).customers.length,
+      0,
+    );
+    assert.equal(
+      (
+        await f.call(
+          "auth/register",
+          { ...input, inviteCode: code2 },
+          undefined,
+          {},
+          "partner-duplicate",
+        )
+      ).status,
+      409,
+    );
+    assert.equal(
+      (
+        await f.pool.query(
+          "SELECT count(*)::int n FROM workspace.customer_attributions",
+        )
+      ).rows[0].n,
+      1,
+    );
+    assert.equal(
+      (await f.store.read()).customers.find(
+        (c) => c.id === customer.customerId,
+      )!.partnerId,
+      p1.id,
+    );
+    for (const patch of [
+      { partnerId: p2.id },
+      { role: "partner" },
+      { username: "spoofed" },
+    ])
+      assert.equal(
+        (
+          await f.call(
+            "auth/register",
+            { ...input, email: randomUUID() + "@example.com", ...patch },
+            undefined,
+            {},
+            randomUUID(),
+          )
+        ).status,
+        400,
+      );
+    const before = await f.store.read();
+    assert.equal(
+      (
+        await f.call(
+          "auth/register",
+          {
+            ...input,
+            email: "invalid-code@example.com",
+            inviteCode: "Z".repeat(32),
+          },
+          undefined,
+          {},
+          "invalid-code",
+        )
+      ).status,
+      400,
+    );
+    assert.deepEqual(await f.store.read(), before);
+    const plain = await f.register("plain-lead@example.com");
+    const plainCookie = await f.login("plain-lead@example.com");
+    await f.call("invites/" + code1, undefined, plainCookie);
+    assert.equal(
+      (await f.store.read()).customers.find((c) => c.id === plain.customerId)!
+        .partnerId,
+      undefined,
+    );
+    assert.equal(
+      (
+        await f.pool.query(
+          "SELECT count(*)::int n FROM workspace.customer_attributions WHERE customer_id=$1",
+          [plain.customerId],
+        )
+      ).rows[0].n,
+      0,
+    );
+    for (const path of [
+      "admin/partners",
+      "audit",
+      "routes",
+      "market-rates",
+      "receipts",
+    ])
+      assert.equal((await f.call(path, undefined, c1)).status, 403, path);
+    for (const path of [
+      "admin/partners",
+      "wallet/deposits",
+      "quotes",
+      "orders",
+      "receipts/upload",
+      "admin/pricing/publish",
+      "settlements",
+    ])
+      assert.equal((await f.call(path, {}, c1)).status, 403, path);
+    assert.equal(
+      (
+        await f.call(
+          "admin/partners",
+          { username: "nope", name: "Nope", password },
+          plainCookie,
+        )
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await f.call(
+          "admin/partners",
+          { username: "partner-one", name: "重复", password },
+          admin,
+        )
+      ).status,
+      409,
+    );
+    assert.equal(
+      (await f.pool.query("SELECT count(*)::int n FROM workspace.partners"))
+        .rows[0].n,
+      2,
+    );
+    await assert.rejects(
+      () =>
+        f.pool.query(
+          "UPDATE workspace.customer_attributions SET partner_id=$1 WHERE customer_id=$2",
+          [p2.id, customer.customerId],
+        ),
+      /append-only|permission denied/,
+    );
+    assert.equal(
+      (
+        await f.call(
+          "admin/partners/" + p1.id + "/status",
+          { status: "disabled" },
+          admin,
+        )
+      ).status,
+      200,
+    );
+    assert.equal((await f.call("auth/me", undefined, c1)).status, 401);
+    assert.equal(
+      (
+        await f.call(
+          "auth/login",
+          { identifier: "partner-one", password },
+          undefined,
+          {},
+          "disabled-partner-login",
+        )
+      ).status,
+      403,
+    );
+    assert.equal((await f.call("invites/" + code1)).status, 404);
+    assert.equal(
+      (
+        await f.call(
+          "auth/register",
+          { ...input, email: "disabled-link@example.com" },
+          undefined,
+          {},
+          "disabled-link",
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await f.call(
+          "admin/partners/" + p1.id + "/status",
+          { status: "active" },
+          admin,
+        )
+      ).status,
+      200,
+    );
+    assert.equal((await f.call("invites/" + code1)).status, 200);
+    const reenabled = await f.login("partner-one");
+    assert.equal(
+      (await (await f.call("dashboard", undefined, reenabled)).json()).customers
+        .length,
+      1,
+    );
+    await assert.rejects(
+      () =>
+        f.db.exec("UPDATE workspace.partners SET invite_code=repeat('A',32)"),
+      /permission denied/,
+    );
+    await assert.rejects(
+      () => f.db.exec("UPDATE workspace.accounts SET partner_id=NULL"),
+      /permission denied/,
+    );
+    await f.db.exec("RESET ROLE");
+    await f.db.exec(
+      readFileSync("db/migrations/007_partner_invites.sql", "utf8"),
+    );
+    await initializeWorkspace(f.pool);
+  } finally {
+    await f.close();
+  }
+});
+
+test("invited customer completion accrues only service-fee commission to its bound partner and exposes no payout or customer account data", async () => {
+  const f = await fixture();
+  try {
+    const { OfframpService } =
+      await import("../../../packages/core/src/service");
+    await f.auth.createAdmin(
+      { username: "commission-admin", password },
+      "Commission admin",
+    );
+    const ac = await f.login("commission-admin");
+    const adminAccount = await f.auth.current(ac.split("=")[1]);
+    const admin = { id: adminAccount.id, role: "merchant_admin" as const };
+    const p1 = (
+      await (
+        await f.call(
+          "admin/partners",
+          { username: "commission-one", name: "佣金伙伴一", password },
+          ac,
+        )
+      ).json()
+    ).partner;
+    const p2 = (
+      await (
+        await f.call(
+          "admin/partners",
+          { username: "commission-two", name: "佣金伙伴二", password },
+          ac,
+        )
+      ).json()
+    ).partner;
+    const code = new URL(p1.inviteUrl).searchParams.get("invite");
+    const r = await f.call(
+      "auth/register",
+      {
+        email: "commission-client@example.com",
+        password,
+        name: "佣金客户完整名字",
+        kind: "company",
+        inviteCode: code,
+      },
+      undefined,
+      {},
+      "commission-registration",
+    );
+    assert.equal(r.status, 201);
+    const customer = (await r.json()).account;
+    const core = new OfframpService(f.store, () => new Date(f.auth.now()));
+    await core.upsertPayoutProvider(admin, {
+      id: "official-self-operated",
+      name: "官方自营",
+      status: "active",
+      scope: "official",
+      routes: ["CNY", "USD"],
+      isDefault: true,
+    });
+    await core.reviewCustomer(admin, customer.customerId, "approved");
+    const b = await core.createBeneficiary(admin, {
+      customerId: customer.customerId,
+      name: "Hidden beneficiary",
+      country: "CN",
+      currency: "CNY",
+      accountToken: "never-show-bank-token",
+      accountMasked: "**** 4321",
+    });
+    const q = await core.createQuote(admin, {
+      customerId: customer.customerId,
+      beneficiaryId: b.id,
+      sourceCurrency: "USDT",
+      sourceAmount: "100",
+    });
+    assert.equal(q.partnerId, p1.id);
+    await core.depositWallet(admin, {
+      customerId: customer.customerId,
+      currency: "USDT",
+      amount: q.totalDeposit,
+      idempotencyKey: "affiliate-credit",
+    });
+    const order = (await core.createOrder(admin, {
+      quoteId: q.id,
+      clientOrderId: "affiliate-order",
+      fundingSource: "wallet",
+    })) as any;
+    await core.confirmManualPayout(
+      {
+        id: randomUUID(),
+        role: "payout_provider",
+        payoutProviderId: "official-self-operated",
+      },
+      order.id,
+      {
+        idempotencyKey: "affiliate-payment",
+        outcome: "sent",
+        actualAmount: q.payoutAmount,
+        paidAt: order.createdAt,
+      },
+    );
+    const c1 = await f.login("commission-one"),
+      c2 = await f.login("commission-two");
+    const dashboard = await (await f.call("dashboard", undefined, c1)).json();
+    assert.equal(dashboard.commissions.length, 1);
+    assert.equal(dashboard.commissions[0].base, "5.000000");
+    assert.equal(dashboard.commissions[0].value, "1.000000");
+    assert.equal(dashboard.commissions[0].eligibility, "hold");
+    assert.equal(
+      dashboard.commissions[0].customerAlias,
+      dashboard.customers[0].alias,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(dashboard),
+      /commission-client@example.com|Hidden beneficiary|never-show-bank-token|佣金客户完整名字|costRate|sourceAmount|accountMasked|walletBalances/,
+    );
+    const foreign = await (await f.call("dashboard", undefined, c2)).json();
+    assert.equal(foreign.customers.length, 0);
+    assert.equal(foreign.commissions.length, 0);
+    assert.equal(foreign.settlements.length, 0);
+    const list = await (await f.call("admin/partners", undefined, ac)).json();
+    assert.equal(
+      list.partners.find((p: any) => p.id === p1.id).customerCount,
+      1,
+    );
+    assert.equal(
+      list.partners.find((p: any) => p.id === p2.id).customerCount,
+      0,
+    );
+    const adminDashboard = await (
+      await f.call("dashboard", undefined, ac)
+    ).json();
+    assert.equal(adminDashboard.partners.length, 2);
+    f.advance(70 * 86400000);
+    const month = new Date(f.auth.now());
+    month.setUTCDate(1);
+    month.setUTCMonth(month.getUTCMonth() - 1);
+    const freshAdmin = await f.login("commission-admin");
+    const settlement = await f.call(
+      "settlements",
+      {
+        partnerId: p1.id,
+        month: month.toISOString().slice(0, 7),
+        currency: "USDT",
+      },
+      freshAdmin,
+    );
+    assert.equal(settlement.status, 200);
+    const st = await settlement.json();
+    assert.equal(st.amount, "1.000000");
+    assert.equal(
+      (await f.call("settlements/" + st.id + "/approve", {}, freshAdmin))
+        .status,
+      200,
+    );
+    const freshOne = await f.login("commission-one"),
+      freshTwo = await f.login("commission-two");
+    assert.equal(
+      (await (await f.call("dashboard", undefined, freshOne)).json())
+        .settlements[0].status,
+      "approved",
+    );
+    assert.equal(
+      (await (await f.call("dashboard", undefined, freshTwo)).json())
+        .settlements.length,
+      0,
     );
   } finally {
     await f.close();

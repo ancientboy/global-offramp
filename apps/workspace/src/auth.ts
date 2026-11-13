@@ -38,6 +38,10 @@ export const registration = credentials
       .max(100)
       .refine((v) => !/[\x00-\x1f\x7f]/.test(v)),
     kind: z.enum(["personal", "company"]),
+    inviteCode: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{32}$/)
+      .optional(),
   })
   .strict();
 export const username = z
@@ -112,6 +116,7 @@ export interface Account {
   role: Actor["role"];
   customer_id: string | null;
   payout_provider_id?: string | null;
+  partner_id?: string | null;
   customer_kind?: "personal" | "company";
 }
 export const publicAccount = (a: Account) => ({
@@ -122,6 +127,7 @@ export const publicAccount = (a: Account) => ({
   role: a.role,
   customerId: a.customer_id,
   ...(a.payout_provider_id ? { payoutProviderId: a.payout_provider_id } : {}),
+  ...(a.partner_id ? { partnerId: a.partner_id } : {}),
   kind: a.customer_kind,
 });
 export const actorFor = (a: Account): Actor => ({
@@ -129,6 +135,7 @@ export const actorFor = (a: Account): Actor => ({
   role: a.role,
   ...(a.customer_id ? { customerId: a.customer_id } : {}),
   ...(a.payout_provider_id ? { payoutProviderId: a.payout_provider_id } : {}),
+  ...(a.partner_id ? { partnerId: a.partner_id } : {}),
 });
 export class Auth {
   constructor(
@@ -173,6 +180,15 @@ export class Auth {
       at = new Date(this.now());
     try {
       return await this.store.transactionWithClient(async (state, c) => {
+        let partnerId: string | undefined;
+        if (v.inviteCode) {
+          const found = await c.query(
+            "SELECT p.id FROM workspace.partners p JOIN workspace.accounts a ON a.partner_id=p.id AND a.role='partner' AND a.enabled WHERE p.invite_code=$1 AND p.status='active' FOR SHARE OF p",
+            [v.inviteCode],
+          );
+          if (!found.rows[0]) throw new HttpError(400, "INVITE_UNAVAILABLE");
+          partnerId = found.rows[0].id;
+        }
         await c.query(
           "INSERT INTO workspace.customers(id,kind,created_at) VALUES($1,$2,$3)",
           [customerId, v.kind, at],
@@ -187,7 +203,15 @@ export class Auth {
           name: v.name,
           kind: v.kind,
           status: "pending",
+          ...(partnerId ? { partnerId, attributionVersion: "invite-v1" } : {}),
         });
+        if (partnerId) {
+          await c.query(
+            "INSERT INTO workspace.customer_attributions(customer_id,partner_id,invite_code_hash,created_at) VALUES($1,$2,$3,$4)",
+            [customerId, partnerId, digest(v.inviteCode!), at],
+          );
+          await this.audit(c, "customer.attributed", id, partnerId);
+        }
         state.audits.push({
           id: randomUUID(),
           actorId: id,
@@ -219,12 +243,26 @@ export class Auth {
       await this.audit(this.pool, "login.failed", undefined, v.identifier);
       throw new HttpError(401, "INVALID_CREDENTIALS");
     }
+    if (a.role === "partner") {
+      const active = await this.pool.query(
+        "SELECT id FROM workspace.partners WHERE id=$1 AND status='active'",
+        [a.partner_id],
+      );
+      if (!active.rows[0]) throw new HttpError(403, "PARTNER_UNAVAILABLE");
+    }
     const token = randomBytes(32).toString("hex");
     const at = new Date(this.now()),
       expires = new Date(this.now() + 8 * 60 * 60_000);
     const c = await this.pool.connect();
     try {
       await c.query("BEGIN");
+      if (a.role === "partner") {
+        const active = await c.query(
+          "SELECT id FROM workspace.partners WHERE id=$1 AND status='active' FOR SHARE",
+          [a.partner_id],
+        );
+        if (!active.rows[0]) throw new HttpError(403, "PARTNER_UNAVAILABLE");
+      }
       await c.query(
         "INSERT INTO workspace.sessions(token_hash,account_id,created_at,expires_at) VALUES($1,$2,$3,$4)",
         [digest(token), a.id, at, expires],
@@ -242,7 +280,7 @@ export class Auth {
   async current(token: string | undefined): Promise<Account> {
     if (!token) throw new HttpError(401, "UNAUTHENTICATED");
     const r = await this.pool.query(
-      `SELECT a.id,a.email,a.username,a.display_name,a.role,a.customer_id,a.payout_provider_id,c.kind AS customer_kind FROM workspace.sessions s
+      `SELECT a.id,a.email,a.username,a.display_name,a.role,a.customer_id,a.payout_provider_id,a.partner_id,c.kind AS customer_kind FROM workspace.sessions s
       JOIN workspace.accounts a ON a.id=s.account_id LEFT JOIN workspace.customers c ON c.id=a.customer_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>$2 AND a.enabled`,
       [digest(token), new Date(this.now())],
     );

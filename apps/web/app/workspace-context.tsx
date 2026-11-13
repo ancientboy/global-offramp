@@ -5,7 +5,8 @@ export interface WorkspaceAccount {
   email: string | null;
   username?: string | null;
   name: string;
-  role: "customer" | "merchant_admin" | "payout_provider";
+  role: "customer" | "merchant_admin" | "payout_provider" | "partner";
+  partnerId?: string;
   payoutProviderId?: string;
   customerId: string | null;
   kind?: "personal" | "company";

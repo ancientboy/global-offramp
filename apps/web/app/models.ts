@@ -246,6 +246,7 @@ export interface WalletDeposit {
   at: string;
 }
 export interface Dashboard {
+  partners?: { id: string; name: string; status: string }[];
   walletRates?: {
     sourceCurrency?: string;
     payoutCurrency: string;

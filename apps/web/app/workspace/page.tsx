@@ -3,9 +3,12 @@ import SelectField from "../SelectField";
 import { FormEvent, useEffect, useState } from "react";
 import Home from "../page";
 import ProviderPortal from "../ProviderPortal";
+import PartnerPortal from "../PartnerPortal";
 import { WorkspaceContext, type WorkspaceAccount } from "../workspace-context";
 
 const errors: Record<string, string> = {
+  INVITE_UNAVAILABLE: "邀请链接不可用，请联系邀请人获取新链接。",
+  PARTNER_UNAVAILABLE: "伙伴账号已停用，请联系管理员。",
   EMAIL_IN_USE: "该邮箱已注册，请登录。",
   INVALID_INPUT: "请检查账号格式和密码（12–128个字符）。",
   INVALID_CREDENTIALS: "账号或密码不正确。",
@@ -35,7 +38,30 @@ export default function Workspace() {
     [busy, setBusy] = useState(false);
   const [error, setError] = useState(""),
     [notice, setNotice] = useState("");
+  const [inviteCode, setInviteCode] = useState(""),
+    [inviter, setInviter] = useState(""),
+    [inviteValid, setInviteValid] = useState(false),
+    [inviteLoading, setInviteLoading] = useState(false);
   useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("invite");
+    if (code) {
+      setRegister(true);
+      setInviteCode(code);
+      setInviteLoading(true);
+      fetch("/workspace/api/invites/" + encodeURIComponent(code), {
+        credentials: "same-origin",
+        cache: "no-store",
+      })
+        .then(async (r) => {
+          if (!r.ok) throw Error(errors.INVITE_UNAVAILABLE);
+          const value = await r.json();
+          setInviter(value.partnerName);
+          setInviteValid(true);
+        })
+        .catch((e) => setError(e.message))
+        .finally(() => setInviteLoading(false));
+    }
+
     void authRequest("me")
       .then((v) => setAccount(v.account))
       .catch(() => {})
@@ -52,13 +78,19 @@ export default function Workspace() {
       password = String(form.get("password"));
     try {
       if (register) {
+        if (inviteCode && !inviteValid) throw Error(errors.INVITE_UNAVAILABLE);
         await authRequest("register", {
           email: identifier,
           password,
           name: String(form.get("name")),
           kind: String(form.get("kind")),
+          ...(inviteCode ? { inviteCode } : {}),
         });
         setRegister(false);
+        setInviteCode("");
+        setInviter("");
+        setInviteValid(false);
+        window.history.replaceState({}, "", window.location.pathname);
         setNotice("账号已创建，请登录。客户审核待管理员处理。");
         formElement.reset();
       } else {
@@ -89,7 +121,9 @@ export default function Workspace() {
           },
         }}
       >
-        {account.role === "payout_provider" ? (
+        {account.role === "partner" ? (
+          <PartnerPortal />
+        ) : account.role === "payout_provider" ? (
           <ProviderPortal />
         ) : (
           <Home key={account.id} />
@@ -103,6 +137,15 @@ export default function Workspace() {
     >
       <h1>汇途 · {register ? "注册账号" : "业务登录"}</h1>
       <p>登录后管理钱包、订单和收款账户。</p>
+      {register && inviteCode && (
+        <div className="invited-registration">
+          {inviteLoading
+            ? "正在核对邀请链接…"
+            : inviteValid
+              ? "由 " + inviter + " 邀请注册，成功后将自动建立客户归属。"
+              : "邀请链接不可用，请联系邀请人。"}
+        </div>
+      )}
       <form onSubmit={(e) => void submit(e)}>
         {register && (
           <>
@@ -142,7 +185,14 @@ export default function Workspace() {
         </label>
         {error && <p role="alert">{error}</p>}
         {notice && <p role="status">{notice}</p>}
-        <button className="button" disabled={busy} type="submit">
+        <button
+          className="button"
+          disabled={
+            busy ||
+            (register && !!inviteCode && (!inviteValid || inviteLoading))
+          }
+          type="submit"
+        >
           {busy ? "处理中…" : register ? "创建客户账号" : "登录"}
         </button>
         <button
