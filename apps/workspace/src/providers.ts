@@ -52,6 +52,14 @@ export async function providerDashboard(auth: Auth, account: Account) {
           payoutAmount: o.quote.payoutAmount,
           payoutStatus: o.payoutStatus,
           receiptStatus: o.receiptStatus,
+          receiptFile: o.receiptFile
+            ? {
+                fileName: o.receiptFile.fileName,
+                contentType: o.receiptFile.contentType,
+                size: o.receiptFile.size,
+                sha256: o.receiptFile.sha256,
+              }
+            : null,
           recipient: b
             ? {
                 name: b.name,

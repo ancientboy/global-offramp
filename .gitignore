@@ -14,3 +14,5 @@ out/
 
 # Generated local OCR engine/model assets
 apps/web/public/ocr/
+
+/apps/web/public/vendor/pdfjs/

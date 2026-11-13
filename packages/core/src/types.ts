@@ -188,6 +188,8 @@ export interface Order {
   };
   receiptFile?: {
     privateOriginal?: boolean;
+    storageEncoding?: "gzip";
+    storedSize?: number;
     fileName: string;
     contentType: string;
     dataBase64: string;

@@ -5,6 +5,7 @@ import { gzipSync } from "node:zlib";
 const mime = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json",
   ".svg": "image/svg+xml",
@@ -18,6 +19,7 @@ const mime = {
 };
 export const isPublicAsset = (path) =>
   path.startsWith("/_next/static/") ||
+  /^\/vendor\/pdfjs\/v\d+\.\d+\.\d+\//.test(path) ||
   /^\/brand\/[a-zA-Z0-9_-]+-v\d+\.(png|webp|svg|ico)$/.test(path);
 export function createAssetHandler(root) {
   const assets = resolve(root),

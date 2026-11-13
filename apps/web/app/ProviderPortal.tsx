@@ -1,4 +1,6 @@
 "use client";
+import ProviderReceipt, { type ReceiptInfo } from "./ProviderReceipt";
+import { prepareReceipt } from "./receipt-upload";
 import { PortalBrand } from "./Brand";
 import { useContext, useEffect, useRef, useState } from "react";
 import { WorkspaceContext } from "./workspace-context";
@@ -25,6 +27,7 @@ type Order = {
   payoutAmount: string;
   payoutStatus: string;
   receiptStatus: string;
+  receiptFile?: ReceiptInfo | null;
   depositStatus: string;
   canRecordPayment: boolean;
   recipient: null | { name: string; country: string; accountMasked: string };
@@ -178,6 +181,8 @@ export default function ProviderPortal() {
       setSelected(order);
       setData(await request("dashboard"));
       setAction(null);
+      if (filter === "pending")
+        setFilter(action === "sent" ? "sent" : "unknown");
       setNotice(
         action === "sent"
           ? "付款结果已登记，订单状态已更新。"
@@ -192,14 +197,11 @@ export default function ProviderPortal() {
   }
   async function upload(file: File) {
     if (!selected || inFlight.current) return;
-    if (file.size > 2 * 1024 * 1024) {
-      setError(errors.INVALID_FILE);
-      return;
-    }
     inFlight.current = true;
     setBusy(true);
     setError("");
     try {
+      file = await prepareReceipt(file);
       const dataBase64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result).split(",")[1]);
@@ -212,7 +214,8 @@ export default function ProviderPortal() {
       );
       setSelected(order);
       setData(await request("dashboard"));
-      setNotice("回单已上传，可由管理员核对。");
+      if (filter === "pending") setFilter("sent");
+      setNotice("回单已保存。");
     } catch (e) {
       setError(e instanceof Error ? e.message : "上传失败");
     } finally {
@@ -341,6 +344,7 @@ export default function ProviderPortal() {
                         </td>
                         <td>
                           <Badge status={o.payoutStatus}>{status(o)}</Badge>
+                          {o.receiptFile && <small>回单已上传</small>}
                         </td>
                         <td>
                           <button
@@ -599,38 +603,13 @@ export default function ProviderPortal() {
                   </p>
                 ) : null}
                 {selected.payoutStatus === "sent" && (
-                  <section className="provider-receipt">
-                    <h3>付款回单</h3>
-                    <p className="muted small">
-                      支持 PNG、JPG、PDF，最大 2 MB。
-                    </p>
-                    <label className="button outline">
-                      {busy ? "上传中…" : "上传 / 更新回单"}
-                      <input
-                        aria-label="上传付款回单"
-                        type="file"
-                        accept="image/png,image/jpeg,application/pdf"
-                        disabled={busy}
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) void upload(file);
-                          e.target.value = "";
-                        }}
-                      />
-                    </label>
-                    {selected.receiptStatus !== "none" && (
-                      <a
-                        className="button text"
-                        href={
-                          "/workspace/api/provider/orders/" +
-                          selected.id +
-                          "/receipt"
-                        }
-                      >
-                        下载回单
-                      </a>
-                    )}
-                  </section>
+                  <ProviderReceipt
+                    orderId={selected.id}
+                    receipt={selected.receiptFile}
+                    busy={busy}
+                    onUpload={upload}
+                    onExpired={workspace.expired}
+                  />
                 )}
               </>
             )}

@@ -1411,7 +1411,11 @@ test("scoped provider payment and receipt flow records once, holds unknown outco
         .walletFundingStatus,
       "reserved",
     );
-    const bytes = Buffer.from("%PDF-1.4\nprovider receipt\n%%EOF");
+    const bytes = Buffer.from(
+      "%PDF-1.4\nprovider receipt\n" +
+        "% receipt compression test\n".repeat(3000) +
+        "%%EOF",
+    );
     const receipt = {
       fileName: "payment.pdf",
       contentType: "application/pdf",
@@ -1439,6 +1443,16 @@ test("scoped provider payment and receipt flow records once, holds unknown outco
       (await f.call(path(paid.id, "receipt"), receipt, cookie)).status,
       200,
     );
+    const reopened = await (
+      await f.call(path(paid.id), undefined, cookie)
+    ).json();
+    assert.equal(reopened.receiptFile.fileName, receipt.fileName);
+    assert.equal(reopened.receiptFile.size, bytes.length);
+    const storedReceipt = (await f.store.read()).orders.find(
+      (o) => o.id === paid.id,
+    )!.receiptFile!;
+    assert.equal(storedReceipt.storageEncoding, "gzip");
+    assert.ok(storedReceipt.storedSize! < bytes.length);
     const download = await f.call(path(paid.id, "receipt"), undefined, cookie);
     assert.equal(download.status, 200);
     assert.equal(download.headers.get("content-type"), "application/pdf");

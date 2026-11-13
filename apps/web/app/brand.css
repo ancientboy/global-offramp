@@ -1613,3 +1613,72 @@ tbody tr:hover {
     font-size: 16px;
   }
 }
+
+.receipt-image-preview {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: #f5f7f4;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: zoom-in;
+}
+
+.receipt-file-info {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.provider-receipt .receipt-preview-actions {
+  margin: 12px 0;
+  padding: 0;
+  border: 0;
+}
+
+.pdf-receipt-preview {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+  min-height: 120px;
+}
+.pdf-receipt-preview canvas {
+  width: 100%;
+  height: auto;
+  background: #fff;
+}
+.pdf-receipt-preview > p {
+  padding: 20px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.receipt-page-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.pdf-page-scroll {
+  overflow: auto;
+  max-height: 560px;
+  background: #eef1ef;
+}
+.receipt-zoom-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 6px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .pdf-page-scroll {
+    max-height: 420px;
+  }
+}

@@ -61,3 +61,24 @@ test("only versioned public assets are cached; gzip, conditional requests and tr
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("self-hosted PDF workers are served as cacheable JavaScript modules", async () => {
+  const root = await mkdtemp(join(tmpdir(), "huitu-pdf-assets-"));
+  try {
+    await mkdir(join(root, "vendor/pdfjs/v6.5.438"), { recursive: true });
+    await writeFile(
+      join(root, "vendor/pdfjs/v6.5.438/pdf.worker.min.mjs"),
+      "export const worker=true;",
+    );
+    const r = await createAssetHandler(root)(
+      new Request(
+        "https://bhcbtc.club/vendor/pdfjs/v6.5.438/pdf.worker.min.mjs",
+      ),
+    );
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get("content-type"), /javascript/);
+    assert.match(r.headers.get("cache-control"), /public.*immutable/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

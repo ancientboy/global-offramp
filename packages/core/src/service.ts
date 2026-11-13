@@ -1,3 +1,4 @@
+import { encodeReceipt, decodeReceipt } from "./receipt-storage";
 import { validateMerchantRow } from "./merchant-import";
 import { ReceiptService } from "./receipts";
 import { createHash, randomUUID } from "node:crypto";
@@ -1773,6 +1774,7 @@ export class OfframpService {
       "File signature, extension and type must match",
     );
     const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const encoded = await encodeReceipt(new Uint8Array(bytes));
     return this.store.transaction((s) => {
       const o = this.order(s, orderId);
       this.requireProviderScope(s, actor, o);
@@ -1784,6 +1786,11 @@ export class OfframpService {
       o.receiptFile = {
         privateOriginal: true,
         ...v,
+        dataBase64: Buffer.from(encoded.data).toString("base64"),
+        ...(encoded.storageEncoding
+          ? { storageEncoding: encoded.storageEncoding }
+          : {}),
+        storedSize: encoded.data.length,
         size: bytes.length,
         sha256,
         mode: "mock",
@@ -1822,7 +1829,17 @@ export class OfframpService {
       "FORBIDDEN",
       "New receipt originals are administrator private; publish a redacted single-customer copy instead",
     );
-    return structuredClone(o.receiptFile);
+    const file = structuredClone(o.receiptFile);
+    const bytes = await decodeReceipt(
+      new Uint8Array(Buffer.from(file.dataBase64, "base64")),
+      file.storageEncoding,
+      file.size,
+    );
+    return {
+      ...file,
+      dataBase64: Buffer.from(bytes).toString("base64"),
+      storageEncoding: undefined,
+    };
   }
   async uploadReceipt(actor: Actor, orderId: string, objectKey: string) {
     authorize(actor, "receipt.upload");
