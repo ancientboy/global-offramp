@@ -4,7 +4,6 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   ArrowLeft,
-  ArrowUpRight,
   ArrowsClockwise,
   Bank,
   CheckCircle,
@@ -80,7 +79,7 @@ import {
   type Audit,
 } from "./models";
 
-import { WorkspaceContext } from "./workspace-context";
+import { WorkspaceContext, resolvePortalActor } from "./workspace-context";
 import RouteSettings from "./RouteSettings";
 
 type Page =
@@ -212,13 +211,14 @@ const uid = () => crypto.randomUUID();
 
 export default function Home() {
   const workspace = useContext(WorkspaceContext);
-  const [actor, setActor] = useState<ActorKey>(() =>
+  const [demoActor, setActor] = useState<ActorKey>(() =>
     workspace?.account.role === "merchant_admin"
       ? "admin-demo"
       : workspace?.account.kind === "company"
         ? "company-demo"
         : "customer-demo",
   );
+  const actor = resolvePortalActor(workspace?.account, demoActor);
   const actorRef = useRef(actor);
   actorRef.current = actor;
   const role: ViewRole =
@@ -649,7 +649,7 @@ export default function Home() {
     window.scrollTo(0, 0);
   }
   function changeActor(next: ActorKey) {
-    if (busyRef.current) return;
+    if (workspace || busyRef.current) return;
     const nextRole =
       next === "partner-demo"
         ? "partner"
@@ -1162,7 +1162,7 @@ export default function Home() {
             <Lock size={13} /> 报价快照已锁定
           </Badge>
         </div>
-        <p className="record-id">系统 ID：{o.id}</p>
+        {admin && <p className="record-id">系统 ID：{o.id}</p>}
         {!admin && (
           <div
             className={"customer-detail-state " + customerOrderState(o).tone}
@@ -1220,38 +1220,42 @@ export default function Home() {
             <span>{o.quote.payoutCurrency}</span>
           </div>
         </div>
-        <div className="status-grid">
-          <div>
-            <small>稳定币入金</small>
-            <Badge status={o.depositStatus} />
-          </div>
-          <div>
-            <small>外部换汇</small>
-            <Badge status={o.conversionStatus} />
-          </div>
-          <div>
-            <small>法币出款</small>
-            <Badge status={o.payoutStatus} />
-          </div>
-          <div>
-            <small>订单结果</small>
-            <Badge
-              status={
-                o.completionStatus === "completed" ? "verified" : "pending"
-              }
-            >
-              {o.completionStatus === "completed"
-                ? "已完成"
-                : o.completionStatus === "pending_review"
-                  ? "历史记录待复核"
-                  : "处理中"}
-            </Badge>
-          </div>
-        </div>
-        {o.depositStatus === "exception" && (
-          <Note danger>
-            入金进入异常队列。服务端阻止自动兑换与出款，须独立调查。
-          </Note>
+        {admin && (
+          <>
+            <div className="status-grid">
+              <div>
+                <small>稳定币入金</small>
+                <Badge status={o.depositStatus} />
+              </div>
+              <div>
+                <small>外部换汇</small>
+                <Badge status={o.conversionStatus} />
+              </div>
+              <div>
+                <small>法币出款</small>
+                <Badge status={o.payoutStatus} />
+              </div>
+              <div>
+                <small>订单结果</small>
+                <Badge
+                  status={
+                    o.completionStatus === "completed" ? "verified" : "pending"
+                  }
+                >
+                  {o.completionStatus === "completed"
+                    ? "已完成"
+                    : o.completionStatus === "pending_review"
+                      ? "历史记录待复核"
+                      : "处理中"}
+                </Badge>
+              </div>
+            </div>
+            {o.depositStatus === "exception" && (
+              <Note danger>
+                入金进入异常队列。服务端阻止自动兑换与出款，须独立调查。
+              </Note>
+            )}
+          </>
         )}
         <FeeRows quote={o.quote} />
         {!admin &&
@@ -1269,7 +1273,7 @@ export default function Home() {
                 openCommand({
                   title: "取消这笔结汇？",
                   description:
-                    "仅未处理的订单可取消。服务端确认安全后会解除冻结并退回可用余额，结果未知的订单不能取消。",
+                    "仅未处理的订单可取消。取消成功后，冻结金额将退回可用余额；处理结果待确认的订单暂不可取消。",
                   path: `orders/${o.id}/cancel`,
                   base: {
                     reason: "客户取消未处理订单",
@@ -1293,10 +1297,12 @@ export default function Home() {
                   : "兑换本金（费用另加）"}
             </dd>
           </div>
-          <div>
-            <dt>报价配置版本</dt>
-            <dd>{o.quote.configVersion.replace(/^mock-pricing-/i, "")}</dd>
-          </div>
+          {admin && (
+            <div>
+              <dt>报价配置版本</dt>
+              <dd>{o.quote.configVersion.replace(/^mock-pricing-/i, "")}</dd>
+            </div>
+          )}
           <div>
             <dt>入金网络</dt>
             <dd>模拟充值</dd>
@@ -1593,23 +1599,13 @@ export default function Home() {
               onClick={() => void reload()}
             >
               <ArrowsClockwise size={17} />
-              刷新服务端状态
-            </button>
-            <button
-              className="button text"
-              disabled={busy}
-              onClick={() => {
-                changeActor("admin-demo");
-                setSelected(o.id);
-              }}
-            >
-              查看管理演示 <ArrowUpRight size={16} />
+              刷新订单状态
             </button>
           </div>
         )}
         {o.payoutStatus === "unknown" && (
           <Note danger>
-            出款结果未知。禁止重复出款与退款，须先核实渠道查询结果。
+            付款结果正在核实，请勿重复提交。平台确认后会更新订单状态。
           </Note>
         )}
         <div className="receipt-row">
@@ -1618,10 +1614,10 @@ export default function Home() {
             <strong>付款截图 / 银行水单</strong>
             <p>
               {o.receiptStatus === "none"
-                ? "回单可选，是否上传不影响订单完成"
+                ? "暂无付款回单，平台提供后可在此下载"
                 : o.receiptFileAvailable
                   ? "回单文件已上传，可下载查看"
-                  : "已记录私有附件；公开给客户的副本另行人工确认"}
+                  : "付款回单准备中，发布后可在此下载"}
             </p>
           </div>
           {admin && (
@@ -1704,7 +1700,7 @@ export default function Home() {
         </div>
         {o.fundingSource === "wallet" && (
           <Note>
-            钱包结汇仅支持未处理订单取消并释放冻结；已处理订单的退款流程尚未接入。结果未知或已换汇时不会自动释放余额。
+            未处理的订单取消后，冻结金额会退回钱包。已处理或结果待确认的订单，如需退款请联系平台客服。
           </Note>
         )}
         {!refunds.length ? (
@@ -2110,7 +2106,7 @@ export default function Home() {
             )}
             <button
               className="avatar"
-              aria-label="刷新服务器数据"
+              aria-label="刷新"
               disabled={busy}
               onClick={() => void reload()}
             >
@@ -2134,7 +2130,7 @@ export default function Home() {
             <section className="card support">
               <h2>帮助与支持</h2>
               <p>
-                客户可模拟充值、管理收款账户并提交结汇订单。管理员可审核客户、处理订单、管理回单和费率。
+                您可以管理收款账户、提交结汇订单，并在订单中查看处理进度和付款回单。
               </p>
               <button className="button text" onClick={() => setSupport(false)}>
                 收起
@@ -2146,7 +2142,7 @@ export default function Home() {
               <WarningCircle size={20} />
               <div>
                 <strong>
-                  {connection === "error" ? "无法读取后端数据" : "请求未完成"}
+                  {connection === "error" ? "暂时无法加载" : "请求未完成"}
                 </strong>
                 <p>{error}</p>
               </div>
@@ -2164,13 +2160,13 @@ export default function Home() {
               <Empty
                 title={
                   connection === "loading"
-                    ? "正在读取服务端数据"
-                    : "没有可用的服务器数据"
+                    ? "正在加载账户信息"
+                    : "暂时无法加载账户信息"
                 }
               >
                 {connection === "loading"
-                  ? "正在检查后端连接与当前身份的数据范围。"
-                  : "请检查演示后端连接是否可用。这里不会用静态样例替代失败的请求。"}
+                  ? "正在加载，请稍候。"
+                  : "请稍后刷新重试，如仍无法加载，请联系平台客服。"}
               </Empty>
             </div>
           ) : (
@@ -3369,7 +3365,7 @@ export default function Home() {
                           （含本金与费用）。未知付款结果保持冻结，避免重复支出。
                         </p>
                         <details className="exchange-details">
-                          <summary>报价与演示详情</summary>
+                          <summary>报价详情</summary>
                           <dl className="details">
                             <div>
                               <dt>金额输入方式</dt>

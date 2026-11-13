@@ -73,8 +73,8 @@ export function customerOrderState(order: Order): CustomerOrderState {
     return {
       kind: "review",
       group: "attention",
-      label: "付款记录待复核",
-      detail: "已登记付款，尚未确认完成，请勿重复付款。",
+      label: "付款确认中",
+      detail: "平台正在确认付款结果，尚未确认完成，请勿重复提交。",
       tone: "warn",
     };
   if (order.depositStatus === "awaiting")

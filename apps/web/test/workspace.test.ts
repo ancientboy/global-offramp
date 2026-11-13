@@ -10,6 +10,7 @@ Object.assign(globalThis, { React });
 const Home = localRequire("../app/page").default;
 import {
   WorkspaceContext,
+  resolvePortalActor,
   type WorkspaceAccount,
 } from "../app/workspace-context";
 const account: WorkspaceAccount = {
@@ -45,4 +46,24 @@ test("workspace administrator starts in its own overview while public demo retai
   const demo = renderToStaticMarkup(createElement(Home));
   assert.match(demo, /切换工作台/);
   assert.match(demo, /登录账户/);
+});
+
+test("authenticated customers cannot switch into admin or partner views using demo actor state", () => {
+  for (const demo of [
+    "admin-demo",
+    "partner-demo",
+    "customer-demo",
+    "company-demo",
+  ] as const) {
+    assert.equal(resolvePortalActor(account, demo), "company-demo");
+    assert.equal(
+      resolvePortalActor({ ...account, kind: "personal" }, demo),
+      "customer-demo",
+    );
+    assert.equal(
+      resolvePortalActor({ ...account, role: "merchant_admin" }, demo),
+      "admin-demo",
+    );
+  }
+  assert.equal(resolvePortalActor(undefined, "admin-demo"), "admin-demo");
 });

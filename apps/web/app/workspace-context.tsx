@@ -1,5 +1,6 @@
 "use client";
 import { createContext } from "react";
+import type { ActorKey } from "./models";
 export interface WorkspaceAccount {
   id: string;
   email: string | null;
@@ -16,3 +17,14 @@ export const WorkspaceContext = createContext<{
   logout: () => Promise<void>;
   expired: () => void;
 } | null>(null);
+
+/** Authenticated accounts never inherit a role from the demo view switcher. */
+export function resolvePortalActor(
+  account: WorkspaceAccount | undefined,
+  demo: ActorKey,
+): ActorKey {
+  if (!account) return demo;
+  if (account.role === "merchant_admin") return "admin-demo";
+  if (account.role === "partner") return "partner-demo";
+  return account.kind === "company" ? "company-demo" : "customer-demo";
+}
