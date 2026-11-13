@@ -692,7 +692,7 @@ export default function Home() {
       }
       if (!/^\*{4} \d{4}$/.test(payload.accountMasked ?? "")) {
         setCommandError(
-          "演示账户请按 **** 8888 格式填写，仅保留四位尾号，不填写完整账号。",
+          "请按 **** 8888 的格式填写账户尾号，仅保留最后四位数字。",
         );
         return;
       }
