@@ -85,6 +85,9 @@ async function main() {
         fundsMode,
         (process.env.NOWPAYMENTS_NETWORKS ?? "").split(",").filter(Boolean),
         process.env.WORKSPACE_ENABLE_REAL_DEPOSITS === "true",
+        null,
+        null,
+        JSON.parse(process.env.NOWPAYMENTS_SETTLEMENT_NETWORKS ?? "{}"),
       )
     : undefined;
   if (process.env.WORKSPACE_ENABLE_REAL_DEPOSITS === "true" && !funding)

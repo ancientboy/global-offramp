@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import { validFundingQuote, fundingQuoteKey } from "./funding-costs";
+import { money } from "./models";
 import SelectField from "./SelectField";
 const names: Record<string, string> = {
   creating: "正在创建",
@@ -64,6 +66,10 @@ export default function FundingDialog({
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
+  const [acceptedQuote, setAcceptedQuote] = useState("");
+  const quote = validFundingQuote(payment, currency);
+  const quoteKey = fundingQuoteKey(payment, currency);
+  const feeAccepted = !!quoteKey && acceptedQuote === quoteKey;
   const key = useRef(crypto.randomUUID()),
     submitted = useRef(false);
   useEffect(() => {
@@ -138,7 +144,8 @@ export default function FundingDialog({
     payment.status === "waiting" &&
     !!config?.enabled &&
     selected?.asset === currency &&
-    !payment.credited_amount;
+    !payment.credited_amount &&
+    !!quote;
   async function copyAddress() {
     try {
       await navigator.clipboard.writeText(payment.pay_address);
@@ -183,18 +190,18 @@ export default function FundingDialog({
               </SelectField>
             </label>
             <label>
-              充值金额
+              支付总额
               <input
                 required
                 name="amount"
                 inputMode="decimal"
                 pattern="[0-9]+(\.[0-9]{1,6})?"
-                placeholder="输入充值金额"
+                placeholder="输入支付总额"
                 disabled={busy || submitted.current}
               />
             </label>
             <p>
-              按实际结算净额入账，手续费可能从充值中扣除。
+              充值费用从支付金额中扣除。获取地址前会显示预估费用和预计到账。
               {config.maxDeposit && (
                 <>
                   单笔最高 {config.maxDeposit} {currency}。
@@ -205,7 +212,7 @@ export default function FundingDialog({
               className="button"
               disabled={busy || !network || submitted.current}
             >
-              {busy ? "正在获取充值地址…" : "获取充值地址"}
+              {busy ? "正在计算到账金额…" : "查看费用与充值地址"}
             </button>
             {submitted.current && !busy && (
               <p>请关闭后在充值记录中核对本次结果，勿重复提交。</p>
@@ -229,7 +236,56 @@ export default function FundingDialog({
                     {payment.pay_amount} {currency}
                   </strong>
                 </p>
-                {canPay && (
+                {quote ? (
+                  <section
+                    className="deposit-cost-summary"
+                    aria-label="充值费用与到账金额"
+                  >
+                    <dl className="details">
+                      <div>
+                        <dt>支付总额</dt>
+                        <dd>
+                          {money(quote.payAmount)} {currency}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>预估充值费用</dt>
+                        <dd>
+                          −{money(quote.estimatedCost)} {currency}
+                        </dd>
+                      </div>
+                      <div className="divided">
+                        <dt>预计到账</dt>
+                        <dd>
+                          <strong>
+                            {money(quote.estimatedNet)} {currency}
+                          </strong>
+                        </dd>
+                      </div>
+                    </dl>
+                    <p>
+                      费用从充值金额中扣除，包含支付处理及网络成本；不含转出钱包另收的手续费。最终按实际结算净额入账。
+                    </p>
+                    {canPay && !feeAccepted && (
+                      <button
+                        className="button full"
+                        onClick={() => setAcceptedQuote(quoteKey)}
+                      >
+                        确认费用，显示充值地址
+                      </button>
+                    )}
+                    {canPay && feeAccepted && (
+                      <small role="status">
+                        已确认费用，请核对网络后付款。
+                      </small>
+                    )}
+                  </section>
+                ) : (
+                  <p className="note" role="status">
+                    正在核对到账报价，请稍候，费用会自动更新。费用确认前不展示付款地址；若长时间未更新，请联系平台核对。
+                  </p>
+                )}
+                {canPay && feeAccepted && (
                   <div className="funding-qr">
                     <QRCodeSVG
                       value={payment.pay_address}
@@ -243,19 +299,23 @@ export default function FundingDialog({
                     <span>使用钱包扫码，核对币种与网络</span>
                   </div>
                 )}
-                <label>
-                  充值地址
-                  <code className="security-secret funding-address">
-                    {payment.pay_address}
-                  </code>
-                </label>
-                <button
-                  className="button outline"
-                  onClick={() => void copyAddress()}
-                  disabled={!canPay}
-                >
-                  复制地址
-                </button>
+                {canPay && feeAccepted && (
+                  <>
+                    <label>
+                      充值地址
+                      <code className="security-secret funding-address">
+                        {payment.pay_address}
+                      </code>
+                    </label>
+                    <button
+                      className="button outline"
+                      onClick={() => void copyAddress()}
+                      disabled={!canPay || !feeAccepted}
+                    >
+                      复制地址
+                    </button>
+                  </>
+                )}
                 {!canPay && (
                   <p className="muted small">
                     {payment.credited_amount
@@ -267,7 +327,7 @@ export default function FundingDialog({
                         : "当前记录不可继续付款，请查看充值状态。"}
                   </p>
                 )}
-                {payment.extra_id && (
+                {canPay && feeAccepted && payment.extra_id && (
                   <p>
                     Memo / Tag：<code>{payment.extra_id}</code>
                   </p>

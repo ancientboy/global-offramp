@@ -345,13 +345,21 @@ export default function CustomerWallet({
                         {p.currency}
                       </strong>
                       <small>{p.credited_amount ? "已入账" : "充值申请"}</small>
-                      {p.pay_address && (
-                        <small
-                          style={{ maxWidth: 160, overflowWrap: "anywhere" }}
-                        >
-                          {p.pay_address}
+                      {!p.credited_amount && p.cost_quote && (
+                        <small>
+                          预计到账 {money(p.cost_quote.estimatedNet)}{" "}
+                          {p.currency}
                         </small>
                       )}
+                      <small>
+                        {p.pay_currency === "usdtbsc"
+                          ? "BSC · BEP20"
+                          : p.pay_currency === "usdttrc20"
+                            ? "TRON · TRC20"
+                            : p.pay_currency === "usdcbase"
+                              ? "Base"
+                              : "查看充值网络"}
+                      </small>
                     </div>
                   </button>
                 ))

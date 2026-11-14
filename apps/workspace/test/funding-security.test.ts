@@ -15,7 +15,7 @@ import { workspaceApp } from "../src/app";
 const password = "test-long-password-6942",
   key = Buffer.alloc(32, 4),
   secret = "test-ipn-secret-only";
-async function fixture() {
+async function fixture(settlementNetworks: Record<string, string> = {}) {
   const db = new PGlite();
   for (const name of [
     "db-runtime.sql",
@@ -28,6 +28,7 @@ async function fixture() {
     "db/migrations/008_funding_security.sql",
     "db/migrations/009_funding_observation_sequence.sql",
     "db/migrations/010_money_movements.sql",
+    "db/migrations/011_deposit_cost_quotes.sql",
   ])
     await db.exec(readFileSync(name, "utf8"));
   const pool: SqlPool = {
@@ -88,10 +89,11 @@ async function fixture() {
       provider,
       "https://workspace.example",
       "live",
-      ["usdttrc20", "usdcbase"],
+      ["usdtbsc", "usdttrc20", "usdcbase"],
       true,
       "1000",
       "1500",
+      settlementNetworks,
     ),
     security = new AccountSecurity(auth, key);
   const app = workspaceApp(auth, {} as any, "https://workspace.example", {
@@ -641,6 +643,134 @@ test("a new customer's self-chosen strong password does not require a redundant 
     assert.equal((await response.json()).enabled, true);
     const account = await f.auth.current(login.token);
     assert.equal((await f.security.status(account)).passwordChanged, true);
+  } finally {
+    await f.db.close();
+  }
+});
+
+test("BSC deposits and explicitly reviewed TRC-to-BSC routes credit only final net without a second fee", async () => {
+  const f = await fixture({ usdttrc20: "usdtbsc", usdtbsc: "usdtbsc" });
+  try {
+    assert.equal(f.funding.publicConfig().networks[0].id, "usdtbsc");
+    const p = await f.funding.create(f.account, {
+      ...request,
+      network: "usdtbsc",
+      idempotencyKey: "bsc-cost-test",
+    });
+    const provider = f.providerPayments.get("101");
+    Object.assign(provider, {
+      outcome_currency: "usdtbsc",
+      outcome_amount: "98.98097371",
+    });
+    await f.funding.refresh({ id: p.id, provider_id: "101" });
+    let listed = (await f.funding.list(f.account)).find((r) => r.id === p.id)!;
+    assert.equal(listed.cost_quote.estimatedNet, "98.980973");
+    assert.equal(listed.cost_quote.estimatedCost, "1.019027");
+    assert.equal(
+      (await f.store.read()).journals.length,
+      0,
+      "a quote must not credit a wallet",
+    );
+    Object.assign(provider, {
+      payment_status: "finished",
+      outcome_amount: "98.970000",
+    });
+    await f.funding.refresh({ id: p.id, provider_id: "101" });
+    await f.funding.refresh({ id: p.id, provider_id: "101" });
+    assert.equal((await f.store.read()).journals.length, 1);
+    assert.equal(
+      (await f.funding.list(f.account)).find((r) => r.id === p.id)!
+        .credited_amount,
+      "98.970000",
+    );
+    const trc = await f.funding.create(f.account, {
+      ...request,
+      idempotencyKey: "trc-bsc-cost-test",
+    });
+    const t = f.providerPayments.get("102");
+    Object.assign(t, {
+      outcome_currency: "usdtbsc",
+      outcome_amount: "95.2923176",
+      payment_status: "finished",
+    });
+    await f.funding.refresh({ id: trc.id, provider_id: "102" });
+    assert.equal(
+      (await f.funding.list(f.account)).find((r) => r.id === trc.id)!
+        .credited_amount,
+      "95.292317",
+    );
+    const d = await new OfframpService(f.store).dashboard({
+      id: f.account.id,
+      role: "customer",
+      customerId: f.account.customer_id!,
+    });
+    assert.equal(
+      d.walletBalances!.find((b) => b.currency === "USDT")!.available,
+      "194.262317",
+    );
+  } finally {
+    await f.db.close();
+  }
+});
+test("settlement route stays bound to each payment and mismatched assets or unreviewed networks cannot credit", async () => {
+  const f = await fixture({ usdttrc20: "usdtbsc" });
+  try {
+    const p = await f.funding.create(f.account, request),
+      provider = f.providerPayments.get("101");
+    Object.assign(provider, {
+      payment_status: "finished",
+      outcome_currency: "usdterc20",
+      outcome_amount: "99",
+    });
+    await f.funding.refresh({ id: p.id, provider_id: "101" });
+    assert.equal((await f.funding.list(f.account))[0].status, "review");
+    assert.equal((await f.store.read()).journals.length, 0);
+    // Legacy rows have no bound route and retain their original same-network check.
+    await f.pool.query(
+      "UPDATE workspace.funding_payments SET settlement_network=NULL WHERE id=$1",
+      [p.id],
+    );
+    Object.assign(provider, { outcome_currency: "usdtbsc" });
+    await f.funding.refresh({ id: p.id, provider_id: "101" });
+    assert.equal((await f.funding.list(f.account))[0].status, "review");
+    assert.equal((await f.store.read()).journals.length, 0);
+  } finally {
+    await f.db.close();
+  }
+});
+
+test("a delayed provider net quote is retried promptly without creating or crediting a second payment", async () => {
+  const f = await fixture();
+  try {
+    const p = await f.funding.create(f.account, {
+      ...request,
+      network: "usdtbsc",
+    });
+    assert.equal(p.cost_quote, null);
+    const row = (
+      await f.pool.query(
+        "SELECT next_check_at,created_at FROM workspace.funding_payments WHERE id=$1",
+        [p.id],
+      )
+    ).rows[0];
+    assert(
+      new Date(row.next_check_at).getTime() -
+        new Date(row.created_at).getTime() <
+        40000,
+    );
+    Object.assign(f.providerPayments.get("101"), {
+      outcome_amount: "99.4293463",
+    });
+    await f.pool.query(
+      "UPDATE workspace.funding_payments SET next_check_at=now()-interval '1 second' WHERE id=$1",
+      [p.id],
+    );
+    await f.funding.tick();
+    assert.equal(f.creates(), 1);
+    const q = (await f.funding.list(f.account))[0].cost_quote;
+    assert.equal(q.estimatedNet, "99.429346");
+    assert.equal(q.estimatedCost, "0.570654");
+    assert.equal((await f.store.read()).journals.length, 0);
   } finally {
     await f.db.close();
   }

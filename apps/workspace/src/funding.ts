@@ -1,3 +1,4 @@
+import { depositCostQuote } from "./deposit-quote";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Auth, HttpError, type Account } from "./auth";
@@ -50,10 +51,24 @@ export class Funding {
     readonly enabled = false,
     readonly maxDeposit: string | null = null,
     readonly dailyLimit: string | null = null,
+    readonly settlementNetworks: Record<string, string> = {},
   ) {
     this.networks = DEPOSIT_NETWORKS.filter((n) =>
       enabledNetworks.includes(n.id),
+    ).sort(
+      (a, b) => enabledNetworks.indexOf(a.id) - enabledNetworks.indexOf(b.id),
     );
+    for (const [source, target] of Object.entries(settlementNetworks)) {
+      const input = DEPOSIT_NETWORKS.find((n) => n.id === source),
+        output = DEPOSIT_NETWORKS.find((n) => n.id === target);
+      if (
+        !enabledNetworks.includes(source) ||
+        !input ||
+        !output ||
+        input.asset !== output.asset
+      )
+        throw Error("Invalid same-asset deposit settlement route");
+    }
     if (enabledNetworks.some((n) => !DEPOSIT_NETWORKS.some((x) => x.id === n)))
       throw Error("Unknown deposit network");
     if (
@@ -69,6 +84,7 @@ export class Funding {
       enabled: this.enabled,
       networks: this.enabled ? this.networks : [],
       creditPolicy: "settled_net",
+      feeBearer: "customer",
       maxDeposit: this.maxDeposit,
     };
   }
@@ -79,7 +95,7 @@ export class Funding {
     if (!["customer", "merchant_admin"].includes(account.role))
       throw new HttpError(403, "FORBIDDEN");
     const r = await reader.query(
-      "SELECT id,currency,pay_currency,requested_amount::text,pay_address,pay_amount,extra_id,status,credited_amount::text,created_at,updated_at FROM workspace.funding_payments WHERE ($1::text IS NULL OR customer_id=$1) ORDER BY created_at DESC LIMIT 100",
+      "SELECT id,currency,pay_currency,requested_amount::text,pay_address,pay_amount,extra_id,status,credited_amount::text,settlement_network,cost_quote,created_at,updated_at FROM workspace.funding_payments WHERE ($1::text IS NULL OR customer_id=$1) ORDER BY created_at DESC LIMIT 100",
       [account.role === "customer" ? account.customer_id : null],
     );
     return r.rows;
@@ -144,7 +160,7 @@ export class Funding {
             throw new HttpError(429, "DAILY_DEPOSIT_LIMIT");
         }
         await c.query(
-          "INSERT INTO workspace.funding_payments(id,account_id,customer_id,idempotency_key,currency,pay_currency,requested_amount) VALUES($1,$2,$3,$4,$5,$6,$7)",
+          "INSERT INTO workspace.funding_payments(id,account_id,customer_id,idempotency_key,currency,pay_currency,requested_amount,settlement_network) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
           [
             id,
             account.id,
@@ -153,6 +169,7 @@ export class Funding {
             v.currency,
             n.id,
             amount,
+            this.settlementNetworks[n.id] ?? n.id,
           ],
         );
         await this.auth.audit(c, "deposit.created", account.id, id);
@@ -181,8 +198,13 @@ export class Funding {
       const payAmount = decimal6(response.pay_amount);
       if (units(payAmount, 6) <= 0n)
         throw new HttpError(502, "INVALID_PROVIDER_AMOUNT");
+      const quote = depositCostQuote(
+        response,
+        this.settlementNetworks[n.id] ?? n.id,
+        new Date(this.auth.now()).toISOString(),
+      );
       const r = await this.auth.pool.query(
-        "UPDATE workspace.funding_payments SET provider_id=$2,pay_address=$3,pay_amount=$4,extra_id=$5,status='waiting',updated_at=now() WHERE id=$1 AND provider_id IS NULL AND journal_id IS NULL AND status IN ('creating','creation_unknown') RETURNING *",
+        "UPDATE workspace.funding_payments SET cost_quote=$6::jsonb,provider_id=$2,pay_address=$3,pay_amount=$4,extra_id=$5,status='waiting',updated_at=now() WHERE id=$1 AND provider_id IS NULL AND journal_id IS NULL AND status IN ('creating','creation_unknown') RETURNING *",
         [
           id,
           pid,
@@ -191,6 +213,7 @@ export class Funding {
           response.payin_extra_id == null
             ? null
             : String(response.payin_extra_id),
+          quote ? JSON.stringify(quote) : null,
         ],
       );
       if (!r.rows[0]) {
@@ -207,7 +230,21 @@ export class Funding {
           return this.view(existing);
         throw new HttpError(409, "PAYMENT_ALREADY_LINKED");
       }
-      return this.view(r.rows[0]);
+      // Create responses may omit settlement estimates. Fetch the linked invoice once;
+      // a quote lookup failure never causes a second invoice creation.
+      try {
+        await this.refresh({ id, provider_id: pid });
+        const latest = (
+          await this.auth.pool.query(
+            "SELECT * FROM workspace.funding_payments WHERE id=$1",
+            [id],
+          )
+        ).rows[0];
+        return this.view(latest);
+      } catch {
+        await this.alert("deposit.quote_unavailable", id);
+        return this.view(r.rows[0]);
+      }
     } catch (e) {
       // Never repeat an ambiguous create request: a timeout may already have created an address.
       const unknown = await this.auth.pool.query(
@@ -234,6 +271,8 @@ export class Funding {
       extra_id: r.extra_id,
       status: r.status,
       credited_amount: r.credited_amount ? String(r.credited_amount) : null,
+      settlement_network: r.settlement_network ?? r.pay_currency,
+      cost_quote: r.cost_quote ?? null,
       created_at: r.created_at,
     };
   }
@@ -301,7 +340,7 @@ export class Funding {
         p.payment_status === "finished" ||
         (p.payment_status === "partially_paid" && r.allow_partial_credit)
       ) {
-        if (p.outcome_currency !== r.pay_currency)
+        if (p.outcome_currency !== (r.settlement_network ?? r.pay_currency))
           review = "SETTLEMENT_ASSET_MISMATCH";
         else {
           try {
@@ -367,6 +406,13 @@ export class Funding {
           at: new Date(this.auth.now()).toISOString(),
         });
       }
+      const quote = !review
+        ? depositCostQuote(
+            p,
+            r.settlement_network ?? r.pay_currency,
+            new Date(this.auth.now()).toISOString(),
+          )
+        : null;
       const status = review
         ? "review"
         : r.journal_id
@@ -375,8 +421,18 @@ export class Funding {
             ? "credited"
             : p.payment_status;
       await c.query(
-        "UPDATE workspace.funding_payments SET status=$2,review_reason=$3,checked_at=now(),last_observation=$4,next_check_at=now()+interval '15 minutes',updated_at=now() WHERE id=$1",
-        [r.id, status, review, observation],
+        "UPDATE workspace.funding_payments SET status=$2,review_reason=$3,cost_quote=$5::jsonb,checked_at=now(),last_observation=$4,next_check_at=now()+CASE WHEN $6::boolean THEN interval '15 seconds' ELSE interval '15 minutes' END,updated_at=now() WHERE id=$1",
+        [
+          r.id,
+          status,
+          review,
+          observation,
+          quote ? JSON.stringify(quote) : null,
+          !review &&
+            !quote &&
+            p.payment_status === "waiting" &&
+            this.auth.now() - new Date(r.created_at).getTime() < 600000,
+        ],
       );
       if (review === "CREDITED_PAYMENT_CHANGED") {
         const customer = s.customers.find((x) => x.id === r.customer_id);
@@ -482,7 +538,7 @@ export class Funding {
         p.order_id !== id ||
         p.pay_currency !== row.pay_currency ||
         p.pay_address !== row.pay_address ||
-        p.outcome_currency !== row.pay_currency
+        p.outcome_currency !== (row.settlement_network ?? row.pay_currency)
       )
         throw new HttpError(409, "PAYMENT_IDENTITY_MISMATCH");
     }
@@ -582,7 +638,7 @@ export class Funding {
       reconciliation,
       records: (
         await this.auth.pool.query(
-          "SELECT id,currency,pay_currency,requested_amount::text,credited_amount::text,status,provider_id,review_reason,allow_partial_credit,created_at,updated_at FROM workspace.funding_payments ORDER BY created_at DESC LIMIT 100",
+          "SELECT id,currency,pay_currency,requested_amount::text,credited_amount::text,status,provider_id,review_reason,allow_partial_credit,settlement_network,cost_quote,created_at,updated_at FROM workspace.funding_payments ORDER BY created_at DESC LIMIT 100",
         )
       ).rows,
       enabled: this.enabled,

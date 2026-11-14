@@ -125,6 +125,12 @@ export default function FundingAdmin({
               </div>
               <div>
                 {p.credited_amount ?? p.requested_amount} {p.currency}
+                {p.cost_quote && (
+                  <small>
+                    预估费用 {p.cost_quote.estimatedCost} · 预计到账{" "}
+                    {p.cost_quote.estimatedNet} {p.currency}
+                  </small>
+                )}
                 {data.enabled &&
                   ["creation_unknown", "review"].includes(p.status) &&
                   !p.credited_amount && (
