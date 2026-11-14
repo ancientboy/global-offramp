@@ -34,6 +34,8 @@
 
 服务端 `WORKSPACE_TREASURY_USDTTRC20` / `WORKSPACE_TREASURY_USDCBASE` 仅接受经核实的运营方**公开钱包地址**，不能猜测、不能填写充值中转地址或私钥。当前沿用旧商户钱包的控制权已获用户确认，但具体链上来源地址还未从真实到账/付款中核实，因此这些配置保持空白，最终转账核验关闭。
 
+Base支持受信HTTPS节点列表与故障探测，单次核验绑定同一节点并检查主网身份，避免不同节点数据混用。默认提供PublicNode/LlamaRPC及官方节点；可用私有配置接入已审查的付费节点，不接受浏览器提交节点URL。
+
 公共RPC仅适合当前验证及低频试运行；正式容量和可用性需配置/验收可靠节点服务。当前不把内部账务一致当作外部钱包足额，也不声称已经完成独立渗透测试。
 
 ## 充值异常
@@ -52,6 +54,8 @@
 
 自动测试覆盖真实格式校验、两条链的严格RPC响应校验、重复/失败/歧义交易、预留/释放/关闭账务、先冻结再批准、跨客户隔离、MFA门槛、少付及超时关联。链上成功路径使用隔离测试响应，不能冒充已发生真实退款或结算。部署后再检查正式PG权限、独立多连接事务和实际浏览器；结果写入release metadata。
 
+- 2026-11-14 服务器实测：官方Base公共节点返回403，已增加备用节点，不把隔离RPC响应当作公网可用性证明。
+
 ## 官方依据
 
 - Tether USDT合约：https://tether.to/en/supported-protocols/
@@ -59,3 +63,6 @@
 - TRON固化/成功语义：https://developers.tron.network/docs/confirmation-semantics
 - TRON固化回执：https://developers.tron.network/reference/gettransactioninfobyid-1
 - Base最终确认语义：https://docs.base.org/base-chain/specs/protocol/consensus/derivation
+
+- PublicNode Base：https://base.publicnode.com/
+- LlamaNodes Base：https://llamarpc.com/base

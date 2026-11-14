@@ -115,14 +115,20 @@ async function main() {
       funding,
       money: new MoneyMovements(
         auth,
-        new ChainTransfers({
-          usdttrc20: (process.env.WORKSPACE_TREASURY_USDTTRC20 ?? "")
+        new ChainTransfers(
+          {
+            usdttrc20: (process.env.WORKSPACE_TREASURY_USDTTRC20 ?? "")
+              .split(",")
+              .filter(Boolean),
+            usdcbase: (process.env.WORKSPACE_TREASURY_USDCBASE ?? "")
+              .split(",")
+              .filter(Boolean),
+          },
+          fetch,
+          (process.env.WORKSPACE_BASE_RPC_URLS ?? "")
             .split(",")
             .filter(Boolean),
-          usdcbase: (process.env.WORKSPACE_TREASURY_USDCBASE ?? "")
-            .split(",")
-            .filter(Boolean),
-        }),
+        ),
         fundsMode,
       ),
       fundsMode,

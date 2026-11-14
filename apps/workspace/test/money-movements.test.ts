@@ -533,3 +533,39 @@ test("abandoned creates enter review, and delayed create responses cannot overwr
     await f.db.close();
   }
 });
+
+test("Base RPC fails over transport outages but keeps each verification on one reviewed mainnet node", async () => {
+  const h = chainHarness(),
+    calls: string[] = [],
+    fetcher: typeof fetch = async (url, options) => {
+      calls.push(String(url));
+      if (String(url).includes("unavailable.example"))
+        throw Error("blocked node");
+      return h.chain.fetcher("https://mainnet.base.org", options);
+    };
+  const chain = new ChainTransfers({ usdcbase: [SOURCE] }, fetcher, [
+    "https://unavailable.example",
+    "https://reviewed.example",
+  ]);
+  const proof = await chain.verify(
+    {
+      network: "usdcbase",
+      destination: DEST,
+      amount: "5",
+      approvedAt: new Date(),
+    },
+    { txid: TX },
+  );
+  assert.equal(proof.logIndex, 7);
+  assert.equal(
+    calls.filter((u) => u.includes("unavailable.example")).length,
+    1,
+  );
+  assert.ok(calls.slice(1).every((u) => u === "https://reviewed.example"));
+  assert.throws(
+    () => new ChainTransfers({}, fetcher, ["http://unreviewed.example"]),
+  );
+  assert.throws(
+    () => new ChainTransfers({}, fetcher, ["https://user:secret@example.com"]),
+  );
+});

@@ -69,11 +69,33 @@ export interface TransferProof {
   sourceAddress: string;
 }
 export class ChainTransfers {
+  private selectedBase?: { url: string; at: number };
+  readonly baseUrls: string[];
   readonly treasury: Record<TransferNetwork, string[]>;
   constructor(
     treasury: Partial<Record<TransferNetwork, string[]>> = {},
     readonly fetcher: typeof fetch = fetch,
+    baseUrls?: string[],
   ) {
+    this.baseUrls = baseUrls?.length
+      ? baseUrls
+      : [
+          "https://base-rpc.publicnode.com",
+          "https://base.llamarpc.com",
+          "https://mainnet.base.org",
+        ];
+    if (
+      this.baseUrls.length > 5 ||
+      this.baseUrls.some((v) => {
+        try {
+          const u = new URL(v);
+          return u.protocol !== "https:" || !!u.username || !!u.password;
+        } catch {
+          return true;
+        }
+      })
+    )
+      throw Error("Invalid trusted Base RPC configuration");
     this.treasury = {
       usdttrc20: (treasury.usdttrc20 ?? []).map((a) => address("usdttrc20", a)),
       usdcbase: (treasury.usdcbase ?? []).map((a) => address("usdcbase", a)),
@@ -102,15 +124,42 @@ export class ChainTransfers {
       throw new HttpError(503, "CHAIN_LOOKUP_UNAVAILABLE");
     }
   }
-  async rpc(method: string, params: unknown[]) {
-    const r = await this.post("https://mainnet.base.org", {
-      jsonrpc: "2.0",
-      id: 1,
-      method,
-      params,
-    });
+  async rpc(
+    method: string,
+    params: unknown[],
+    url = this.selectedBase?.url ?? this.baseUrls[0],
+  ) {
+    let r: any;
+    try {
+      r = await this.post(url, {
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params,
+      });
+    } catch (e) {
+      if (this.selectedBase?.url === url) this.selectedBase = undefined;
+      throw e;
+    }
     if (r.error) throw new HttpError(503, "CHAIN_LOOKUP_UNAVAILABLE");
     return r.result;
+  }
+  async selectBaseRpc() {
+    if (this.selectedBase && Date.now() - this.selectedBase.at < 60000)
+      return this.selectedBase.url;
+    for (const url of this.baseUrls) {
+      try {
+        const chainId = await this.rpc("eth_chainId", [], url);
+        if (chainId !== "0x2105")
+          throw new HttpError(503, "CHAIN_NETWORK_MISMATCH");
+        this.selectedBase = { url, at: Date.now() };
+        return url;
+      } catch (e) {
+        if (e instanceof HttpError && e.code === "CHAIN_NETWORK_MISMATCH")
+          throw e;
+      }
+    }
+    throw new HttpError(503, "CHAIN_LOOKUP_UNAVAILABLE");
   }
   async verify(
     e: TransferExpectation,
@@ -145,10 +194,13 @@ export class ChainTransfers {
       BigInt("0x" + strip(l.data)) === units(e.amount, 6);
     let log: any, blockNumber: string, blockHash: string, time: number;
     if (e.network === "usdcbase") {
+      const node = await this.selectBaseRpc(),
+        rpc = (method: string, params: unknown[]) =>
+          this.rpc(method, params, node);
       const [chainId, receipt, finalized] = await Promise.all([
-        this.rpc("eth_chainId", []),
-        this.rpc("eth_getTransactionReceipt", [txid]),
-        this.rpc("eth_getBlockByNumber", ["finalized", false]),
+        rpc("eth_chainId", []),
+        rpc("eth_getTransactionReceipt", [txid]),
+        rpc("eth_getBlockByNumber", ["finalized", false]),
       ]);
       if (chainId !== "0x2105")
         throw new HttpError(503, "CHAIN_NETWORK_MISMATCH");
@@ -164,7 +216,7 @@ export class ChainTransfers {
         BigInt(finalized.number) < BigInt(receipt.blockNumber)
       )
         throw new HttpError(409, "TRANSACTION_NOT_FINAL");
-      const block = await this.rpc("eth_getBlockByNumber", [
+      const block = await rpc("eth_getBlockByNumber", [
         receipt.blockNumber,
         false,
       ]);
