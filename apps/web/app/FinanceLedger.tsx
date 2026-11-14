@@ -237,7 +237,7 @@ export default function FinanceLedger({
             }
           >
             <option value="">全部币种</option>
-            {["USDT", "USDC", "CNY", "USD", "EUR", "GBP", "MXN", "BRL"].map(
+            {["USDT", "CNY", "USD", "EUR", "GBP", "MXN", "BRL"].map(
               (c) => (
                 <option key={c}>{c}</option>
               ),

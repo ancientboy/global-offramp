@@ -29,6 +29,7 @@ const migrations = [
   "db/migrations/009_funding_observation_sequence.sql",
   "db/migrations/010_money_movements.sql",
   "db/migrations/011_deposit_cost_quotes.sql",
+    "db/migrations/012_direct_tron_deposits.sql",
 ].map((p) => readFileSync(p, "utf8"));
 function poolFor(db: PGlite): SqlPool {
   return {

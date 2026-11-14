@@ -21,9 +21,7 @@ export async function financialReport(auth: Auth, a: Account) {
         "SELECT currency,COALESCE(sum(amount),0)::text AS held FROM workspace.money_movements WHERE status IN ('requested','approved') GROUP BY currency",
       )
     ).rows;
-    const currencies = [
-      ...new Set([...ledger.map((l) => l.currency), "USDT", "USDC"]),
-    ];
+    const currencies = [...new Set([...ledger.map((l) => l.currency), "USDT"])];
     const rows = currencies.map((currency) => {
       const lines = ledger.filter((l) => l.currency === currency),
         sum = (prefix: string, side: "debit" | "credit"): bigint =>
@@ -32,8 +30,8 @@ export async function financialReport(auth: Auth, a: Account) {
             .reduce((n, l) => n + units(l[side], 6), 0n);
       const dr = lines.reduce((n, l) => n + units(l.debit, 6), 0n),
         cr = lines.reduce((n, l) => n + units(l.credit, 6), 0n);
-      const deposited = sum("asset:treasury:nowpayments", "debit"),
-        outgoing = sum("asset:treasury:nowpayments", "credit"),
+      const deposited = sum("asset:treasury:", "debit"),
+        outgoing = sum("asset:treasury:", "credit"),
         frozen =
           sum("liability:movement:", "credit") -
           sum("liability:movement:", "debit");

@@ -87,7 +87,7 @@ export default function CustomerWallet({
   }, [withdrawalRequest, moneyEnabled, onWithdrawalOpened]);
   const [fundingOpen, setFundingOpen] = useState(false);
   const [activeFunding, setActiveFunding] = useState<any>(null);
-  const [currency, setCurrency] = useState(initialCurrency);
+  const [currency, setCurrency] = useState("USDT");
   const [history, setHistory] = useState(false);
   const [historyType, setHistoryType] = useState("deposits");
   useEffect(() => {
@@ -159,7 +159,7 @@ export default function CustomerWallet({
         )}
       </div>
       <div className="asset-tabs" role="group" aria-label="钱包资产币种">
-        {["USDT", "USDC"].map((c) => (
+        {["USDT"].map((c) => (
           <button
             key={c}
             className={currency === c ? "active" : ""}
@@ -341,7 +341,11 @@ export default function CustomerWallet({
                     </div>
                     <div>
                       <strong>
-                        {money(p.credited_amount ?? p.requested_amount)}{" "}
+                        {money(
+                          p.credited_amount ??
+                            p.pay_amount ??
+                            p.requested_amount,
+                        )}{" "}
                         {p.currency}
                       </strong>
                       <small>{p.credited_amount ? "已入账" : "充值申请"}</small>

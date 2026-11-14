@@ -29,6 +29,7 @@ async function fixture(settlementNetworks: Record<string, string> = {}) {
     "db/migrations/009_funding_observation_sequence.sql",
     "db/migrations/010_money_movements.sql",
     "db/migrations/011_deposit_cost_quotes.sql",
+    "db/migrations/012_direct_tron_deposits.sql",
   ])
     await db.exec(readFileSync(name, "utf8"));
   const pool: SqlPool = {

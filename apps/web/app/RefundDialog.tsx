@@ -18,7 +18,7 @@ export default function RefundDialog({
   movements?: any[];
   onClose: () => void;
 }) {
-  const [currency, setCurrency] = useState(initialCurrency);
+  const [currency, setCurrency] = useState("USDT");
   const available =
     balances?.find((b) => b.currency === currency)?.available ??
     initialAvailable;
@@ -31,8 +31,8 @@ export default function RefundDialog({
     inFlight = useRef(false);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  const network = currency === "USDT" ? "usdttrc20" : "usdcbase";
-  const networkLabel = currency === "USDT" ? "TRON · TRC20" : "Base · USDC";
+  const network = "usdttrc20";
+  const networkLabel = "TRON · TRC20";
   const recent = recentWithdrawalAddresses(movements, currency);
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -90,7 +90,6 @@ export default function RefundDialog({
                   disabled={busy}
                 >
                   <option value="USDT">USDT</option>
-                  <option value="USDC">USDC</option>
                 </SelectField>
               </label>
             )}

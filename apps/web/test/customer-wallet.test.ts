@@ -49,11 +49,11 @@ test("wallet overview shows exact scoped balance/frozen amount and direct action
   assert.match(html, /资金记录/);
   assert.doesNotMatch(html, /模拟客户报价|01.*钱包模拟充值/);
 });
-test("wallet reopens on draft asset and clearly offers draft resumption", () => {
+test("wallet normalizes retired assets to USDT and preserves the draft return action", () => {
   const html = render("USDC", true);
-  assert.match(html, /98\.765432/);
-  assert.match(html, /2\.000001/);
-  assert.doesNotMatch(html, /123\.456789/);
+  assert.doesNotMatch(html, /USDC|98\.765432/);
+  assert.match(html, /7\.000001/);
+  assert.match(html, /123\.456789/);
   assert.match(html, /返回结汇草稿/);
   assert.match(html, /重新获取报价/);
 });

@@ -40,3 +40,7 @@ GRANT UPDATE(status,approved_by,approved_at,closing_journal,updated_at) ON works
 GRANT UPDATE(allow_partial_credit) ON workspace.funding_payments TO :"app_role";
 
 GRANT UPDATE(cost_quote) ON workspace.funding_payments TO :"app_role";
+
+-- Receiving identity and transfer evidence are insert-only; app cannot change the pinned address.
+GRANT SELECT,INSERT ON workspace.direct_deposit_events,workspace.direct_deposit_claims,workspace.direct_deposit_scan TO :"app_role";
+GRANT UPDATE(scanned_through,rescan_through,checked_at) ON workspace.direct_deposit_scan TO :"app_role";

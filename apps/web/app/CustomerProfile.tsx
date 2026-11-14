@@ -65,7 +65,7 @@ export default function CustomerProfile({
       </dl>
       <h3>资金概览</h3>
       <div className="customer-profile-balances">
-        {["USDT", "USDC"].map((currency) => {
+        {["USDT"].map((currency) => {
           const b = balances.find(
             (b) => b.customerId === a.customerId && b.currency === currency,
           );

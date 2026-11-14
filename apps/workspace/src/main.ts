@@ -3,7 +3,9 @@ import { ChainTransfers } from "./chain-transfers";
 import { workspaceHeaders } from "./security-headers";
 import { ReceiptScanner } from "./receipt-scanner";
 import { AccountSecurity } from "./account-security";
-import { Funding, bindFundsMode } from "./funding";
+import { DirectFunding } from "./direct-funding";
+import { TronDeposits } from "./tron-deposits";
+import { bindFundsMode } from "./funding";
 import { NowPayments } from "./nowpayments";
 import { RecipientVault } from "./recipient-vault";
 import { createServer } from "node:http";
@@ -71,32 +73,24 @@ async function main() {
     fundsMode,
     process.env.WORKSPACE_ENABLE_SIMULATED_TOPUPS === "true",
   );
-  const paymentsConfigured =
-    !!process.env.NOWPAYMENTS_API_KEY && !!process.env.NOWPAYMENTS_IPN_SECRET;
-  const funding = paymentsConfigured
-    ? new Funding(
-        auth,
-        new NowPayments(
-          process.env.NOWPAYMENTS_API_KEY!,
-          process.env.NOWPAYMENTS_IPN_SECRET!,
-          process.env.NOWPAYMENTS_SANDBOX === "true",
-        ),
-        WORKSPACE_ORIGIN,
-        fundsMode,
-        (process.env.NOWPAYMENTS_NETWORKS ?? "").split(",").filter(Boolean),
-        process.env.WORKSPACE_ENABLE_REAL_DEPOSITS === "true",
-        null,
-        null,
-        JSON.parse(process.env.NOWPAYMENTS_SETTLEMENT_NETWORKS ?? "{}"),
-      )
-    : undefined;
-  if (process.env.WORKSPACE_ENABLE_REAL_DEPOSITS === "true" && !funding)
-    throw Error("NOWPayments configuration required");
+  // Direct receiving is pinned in the release, never editable via environment or admin UI.
+  const funding = new DirectFunding(
+    auth,
+    new NowPayments(
+      process.env.NOWPAYMENTS_API_KEY ?? "legacy-disabled",
+      process.env.NOWPAYMENTS_IPN_SECRET ?? "legacy-disabled",
+    ),
+    WORKSPACE_ORIGIN,
+    fundsMode,
+    process.env.WORKSPACE_ENABLE_REAL_DEPOSITS === "true",
+    new TronDeposits(process.env.TRON_GRID_API_KEY ?? ""),
+  );
   if (
     fundsMode === "live" &&
     (!security || !process.env.WORKSPACE_RECIPIENT_KEY_FILE)
   )
     throw Error("Live account security configuration required");
+  await funding.tick().catch(() => console.error("Deposit monitor warming up"));
   const fundingTimer = setInterval(() => {
     void funding
       ?.tick()
@@ -131,8 +125,12 @@ async function main() {
             .filter(Boolean),
         ),
         fundsMode,
+        null,
+        null,
+        true,
       ),
       fundsMode,
+      usdtOnly: true,
       payoutsPaused:
         process.env.WORKSPACE_PAYOUTS_PAUSED !== "false" &&
         fundsMode === "live",

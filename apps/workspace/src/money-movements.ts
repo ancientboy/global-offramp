@@ -35,6 +35,7 @@ export class MoneyMovements {
     readonly mode: "sandbox" | "live",
     readonly maxAmount: string | null = null,
     readonly dailyLimit: string | null = null,
+    readonly usdtOnly = false,
   ) {}
   private admin(a: Account) {
     if (a.role !== "merchant_admin") throw new HttpError(403, "FORBIDDEN");
@@ -108,6 +109,8 @@ export class MoneyMovements {
         throw new HttpError(403, "FORBIDDEN");
     } else this.admin(a);
     const v = inputSchema.parse(input);
+    if (this.usdtOnly && v.currency !== "USDT")
+      throw new HttpError(400, "UNSUPPORTED_CURRENCY");
     if (kind === "provider_settlement" && v.reason.length < 3)
       throw new HttpError(400, "REASON_REQUIRED");
     if ((v.network === "usdttrc20" ? "USDT" : "USDC") !== v.currency)
@@ -355,7 +358,9 @@ export class MoneyMovements {
           r.currency,
           String(r.amount),
           this.held(id),
-          "asset:treasury:nowpayments",
+          this.usdtOnly && r.network === "usdttrc20"
+            ? "asset:treasury:direct_tron"
+            : "asset:treasury:nowpayments",
           new Date(this.auth.now()),
         );
         await c.query(

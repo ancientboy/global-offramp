@@ -94,7 +94,10 @@ export default function RouteSettings({ admin }: { admin: boolean }) {
     });
     if (!r.ok) throw new Error("路线目录读取失败，请重新登录或稍后重试。");
     const c = (await r.json()) as Catalog;
-    setCatalog(c);
+    setCatalog({
+      ...c,
+      routes: c.routes.filter((r: Row) => r.sourceAsset === "USDT"),
+    });
     return c;
   }
   useEffect(() => {
@@ -137,7 +140,7 @@ export default function RouteSettings({ admin }: { admin: boolean }) {
       </div>
       <MarketRatesPanel authenticated admin={admin} onSnapshot={setMarket} />
       <p>
-        支持方向：USDT / USDC → CNY、USD、EUR、MXN、BRL、GBP。
+        支持方向：USDT → CNY、USD、EUR、MXN、BRL、GBP。
         {admin
           ? "首版由运营线下付款，系统管理记录与对账。"
           : "由平台提供结汇与付款服务，可查看汇率、费用及订单进度。"}

@@ -225,7 +225,7 @@ export default function PartnerPortal() {
                       </tr>
                     </thead>
                     <tbody>
-                      {["USDT", "USDC"].map((currency) => (
+                      {["USDT"].map((currency) => (
                         <tr key={currency}>
                           <td>{currency}</td>
                           <td>{money(total(data.commissions, currency))}</td>

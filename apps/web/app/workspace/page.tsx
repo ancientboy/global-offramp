@@ -232,7 +232,7 @@ export default function Workspace() {
               <span key={c}>{c}</span>
             ))}
           </div>
-          <span>USDT / USDC · 多币种结算</span>
+          <span>USDT · 多币种结算</span>
         </div>
       </aside>
       <section className="auth-form-panel">

@@ -1,9 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { validFundingQuote, fundingQuoteKey } from "./funding-costs";
-import { money } from "./models";
-import SelectField from "./SelectField";
+import { USDT_TRC20_RECEIVER } from "../../../packages/core/src/deposit-policy";
 const names: Record<string, string> = {
   creating: "正在创建",
   waiting: "等待付款",
@@ -11,16 +9,16 @@ const names: Record<string, string> = {
   confirmed: "正在处理",
   sending: "正在结算",
   credited: "已入账",
-  finished: "结算完成",
+  finished: "已完成",
   partially_paid: "金额待核对",
   review: "待核对",
-  creation_unknown: "正在核对充值信息",
+  creation_unknown: "正在核对",
   failed: "未完成",
   expired: "已过期",
   refunded: "已退款",
 };
-export function fundingStatus(status: string) {
-  return names[status] ?? "处理中";
+export function fundingStatus(s: string) {
+  return names[s] ?? "处理中";
 }
 async function request(path: string, body?: unknown) {
   const r = await fetch("/workspace/api/wallet/funding" + path, {
@@ -32,19 +30,19 @@ async function request(path: string, body?: unknown) {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const v = await r.json();
-  if (!r.ok) {
-    const errors: Record<string, string> = {
-      INVALID_AMOUNT: "请输入大于零的充值金额。",
-      BELOW_DEPOSIT_MINIMUM: "金额低于该网络的最低充值额，请增加金额。",
-      DEPOSIT_LIMIT_EXCEEDED: "金额超过当前单笔充值限额。",
-      DAILY_DEPOSIT_LIMIT: "已达到今日充值限额。",
-      CUSTOMER_NOT_APPROVED: "请先完成账户审核。",
-      DEPOSITS_UNAVAILABLE: "充值尚未开放。",
-      PAYMENT_PROVIDER_UNAVAILABLE: "充值服务暂不可用，请稍后查看充值记录。",
-      IDEMPOTENCY_CONFLICT: "本次充值信息已更改，请关闭窗口后重新操作。",
-    };
-    throw Error(errors[v.error] ?? "请求未完成，请稍后查看充值记录。");
-  }
+  if (!r.ok)
+    throw Error(
+      (
+        {
+          INVALID_AMOUNT: "请输入大于零的金额，最多两位小数。",
+          CHAIN_MONITOR_UNAVAILABLE: "链上确认服务正在恢复，请稍后创建充值。",
+          DEPOSIT_AMOUNT_BUSY: "该金额暂不可用，请调整金额后重试。",
+          CUSTOMER_NOT_APPROVED: "请先完成账户审核。",
+          DEPOSITS_UNAVAILABLE: "充值暂不可用。",
+          IDEMPOTENCY_CONFLICT: "本次充值信息已更改，请重新创建。",
+        } as Record<string, string>
+      )[v.error] ?? "请求未完成，请先查看充值记录，勿重复提交。",
+    );
   return v;
 }
 export default function FundingDialog({
@@ -61,98 +59,88 @@ export default function FundingDialog({
   onExchange?: () => void;
 }) {
   const [config, setConfig] = useState<any>(null),
-    [network, setNetwork] = useState(""),
     [payment, setPayment] = useState<any>(initialPayment ?? null),
+    [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
-    [busy, setBusy] = useState(false);
-  const [acceptedQuote, setAcceptedQuote] = useState("");
-  const quote = validFundingQuote(payment, currency);
-  const quoteKey = fundingQuoteKey(payment, currency);
-  const feeAccepted = !!quoteKey && acceptedQuote === quoteKey;
+    [now, setNow] = useState(Date.now()),
+    [ack, setAck] = useState(false);
   const key = useRef(crypto.randomUUID()),
-    submitted = useRef(false);
+    submitted = useRef(false),
+    notified = useRef("");
+  const callback = useRef(onCredited);
+  callback.current = onCredited;
   useEffect(() => {
     void request("")
-      .then((c) => {
-        setConfig(c);
-        setNetwork(c.networks.find((n: any) => n.asset === currency)?.id ?? "");
-      })
+      .then(setConfig)
       .catch((e) => setError(e.message));
-  }, [currency]);
+  }, []);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
   useEffect(() => {
     if (!payment?.id) return;
-    const timer = setInterval(() => {
+    const t = setInterval(() => {
       void request("/payments")
         .then((v) => {
           const p = v.payments.find((p: any) => p.id === payment.id);
           if (p) setPayment(p);
         })
-        .then(() => setError(""))
-        .catch(() => setError("状态更新暂时中断，请稍后重试或查看资金记录。"));
+        .catch(() => setError("状态更新暂时中断，请稍后查看资金记录。"));
     }, 10000);
-    return () => clearInterval(timer);
+    return () => clearInterval(t);
   }, [payment?.id]);
-  const creditedNotified = useRef("");
-  const creditedCallback = useRef(onCredited);
-  creditedCallback.current = onCredited;
   useEffect(() => {
-    if (!payment?.credited_amount || creditedNotified.current === payment.id)
-      return;
-    creditedNotified.current = payment.id;
-    void Promise.resolve(creditedCallback.current?.()).catch(() =>
-      setError("已入账，余额暂未更新，请稍后刷新钱包。"),
+    if (!payment?.credited_amount || notified.current === payment.id) return;
+    notified.current = payment.id;
+    void Promise.resolve(callback.current?.()).catch(() =>
+      setError("充值已入账，请稍后刷新余额。"),
     );
   }, [payment?.id, payment?.credited_amount]);
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitted.current) return;
+    submitted.current = true;
     setBusy(true);
     setError("");
-    submitted.current = true;
     try {
-      const v = await request("/payments", {
-        currency,
-        network,
-        amount: String(new FormData(e.currentTarget).get("amount")),
-        idempotencyKey: key.current,
-      });
-      setPayment(v);
+      setPayment(
+        await request("/payments", {
+          currency: "USDT",
+          network: "usdttrc20",
+          amount: String(new FormData(e.currentTarget).get("amount")),
+          idempotencyKey: key.current,
+        }),
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
-  const selected = config?.networks.find(
-    (n: any) => n.id === (payment?.pay_currency ?? network),
-  );
-  const networkLabel =
-    selected?.label ??
-    (
-      {
-        usdttrc20: "TRON · TRC20",
-        usdtbsc: "BNB Smart Chain · BEP20",
-        usdterc20: "Ethereum · ERC20",
-        usdc: "Ethereum · ERC20",
-        usdcbase: "Base",
-      } as Record<string, string>
-    )[payment?.pay_currency ?? network] ??
-    "网络信息待核对";
+  const trusted =
+    config?.receiver === USDT_TRC20_RECEIVER &&
+    (!payment ||
+      (payment.source === "direct_tron" &&
+        payment.pay_address === USDT_TRC20_RECEIVER &&
+        payment.pay_currency === "usdttrc20" &&
+        payment.currency === "USDT"));
+  const expires = Date.parse(payment?.expires_at ?? ""),
+    left = Math.min(1800, Math.max(0, Math.ceil((expires - now) / 1000)));
   const canPay =
-    !!payment?.pay_address &&
-    payment.status === "waiting" &&
-    !!config?.enabled &&
-    selected?.asset === currency &&
+    trusted &&
+    config?.enabled &&
+    payment?.status === "waiting" &&
     !payment.credited_amount &&
-    !!quote;
-  async function copyAddress() {
+    left > 0 &&
+    /^\d+\.\d{6}$/.test(payment.pay_amount);
+  async function copy(value: string, label: string) {
     try {
-      await navigator.clipboard.writeText(payment.pay_address);
-      setNotice("地址已复制。");
-      setError("");
+      await navigator.clipboard.writeText(value);
+      setNotice(label + "已复制");
     } catch {
-      setError("复制失败，请长按充值地址复制。");
+      setError("复制失败，请长按复制。");
     }
   }
   return (
@@ -164,179 +152,131 @@ export default function FundingDialog({
         className="security-panel"
       >
         <header>
-          <h2>充值 {currency}</h2>
+          <h2>充值 USDT</h2>
           <button className="button text" onClick={onClose}>
             关闭
           </button>
         </header>
         {error && <p role="alert">{error}</p>}
         {notice && <p role="status">{notice}</p>}
-        {!payment && config?.enabled && (
+        {config && !trusted && (
+          <p className="note danger" role="alert">
+            充值地址校验未通过，已停止展示付款信息。请联系平台核对，勿转账。
+          </p>
+        )}
+        {!payment && config?.enabled && trusted && (
           <form onSubmit={submit}>
+            <p className="funding-chain">TRON · TRC20</p>
             <label>
-              充值网络
-              <SelectField
-                value={network}
-                onChange={(e) => setNetwork(e.target.value)}
-                disabled={busy || submitted.current}
-              >
-                {config.networks
-                  .filter((n: any) => n.asset === currency)
-                  .map((n: any) => (
-                    <option value={n.id} key={n.id}>
-                      {n.label}
-                    </option>
-                  ))}
-              </SelectField>
-            </label>
-            <label>
-              支付总额
+              充值金额
               <input
                 required
                 name="amount"
                 inputMode="decimal"
-                pattern="[0-9]+(\.[0-9]{1,6})?"
-                placeholder="输入支付总额"
+                pattern="(0|[1-9][0-9]*)(\.[0-9]{1,2})?"
+                placeholder="输入金额"
                 disabled={busy || submitted.current}
               />
             </label>
             <p>
-              充值费用从支付金额中扣除。获取地址前会显示预估费用和预计到账。
-              {config.maxDeposit && (
-                <>
-                  单笔最高 {config.maxDeposit} {currency}。
-                </>
-              )}
+              系统将生成带小数尾数的付款金额，请按完整金额转账。实际收到多少，入账多少；转出钱包的手续费另付。
             </p>
             <button
-              className="button"
-              disabled={busy || !network || submitted.current}
+              className="button full"
+              disabled={busy || submitted.current}
             >
-              {busy ? "正在计算到账金额…" : "查看费用与充值地址"}
+              {busy ? "正在生成…" : "获取充值金额与地址"}
             </button>
             {submitted.current && !busy && (
-              <p>请关闭后在充值记录中核对本次结果，勿重复提交。</p>
+              <p>请先查看充值记录，勿重复提交。</p>
             )}
           </form>
         )}
         {payment && (
           <>
             <p>
-              <strong>{fundingStatus(payment.status)}</strong>
+              <strong>
+                {fundingStatus(
+                  payment.status === "waiting" &&
+                    left === 0 &&
+                    payment.source === "direct_tron"
+                    ? "expired"
+                    : payment.status,
+                )}
+              </strong>
             </p>
-            {!payment.credited_amount && payment.pay_address && (
+            {canPay && (
               <>
                 <div className="funding-payment-heading">
-                  <strong>{currency}</strong>
-                  <span className="funding-chain">{networkLabel}</span>
+                  <strong>USDT</strong>
+                  <span className="funding-chain">TRON · TRC20</span>
                 </div>
-                <p className="funding-pay-amount">
-                  转入金额{" "}
-                  <strong>
-                    {payment.pay_amount} {currency}
-                  </strong>
-                </p>
-                {quote ? (
-                  <section
-                    className="deposit-cost-summary"
-                    aria-label="充值费用与到账金额"
-                  >
-                    <dl className="details">
-                      <div>
-                        <dt>支付总额</dt>
-                        <dd>
-                          {money(quote.payAmount)} {currency}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>预估充值费用</dt>
-                        <dd>
-                          −{money(quote.estimatedCost)} {currency}
-                        </dd>
-                      </div>
-                      <div className="divided">
-                        <dt>预计到账</dt>
-                        <dd>
-                          <strong>
-                            {money(quote.estimatedNet)} {currency}
-                          </strong>
-                        </dd>
-                      </div>
-                    </dl>
-                    <p>
-                      费用从充值金额中扣除，包含支付处理及网络成本；不含转出钱包另收的手续费。最终按实际结算净额入账。
-                    </p>
-                    {canPay && !feeAccepted && (
-                      <button
-                        className="button full"
-                        onClick={() => setAcceptedQuote(quoteKey)}
-                      >
-                        确认费用，显示充值地址
-                      </button>
-                    )}
-                    {canPay && feeAccepted && (
-                      <small role="status">
-                        已确认费用，请核对网络后付款。
-                      </small>
-                    )}
-                  </section>
-                ) : (
-                  <p className="note" role="status">
-                    正在核对到账报价，请稍候，费用会自动更新。费用确认前不展示付款地址；若长时间未更新，请联系平台核对。
+                <div className="deposit-cost-summary">
+                  <p>请准确转入</p>
+                  <p className="funding-pay-amount">
+                    <strong>{payment.pay_amount} USDT</strong>
                   </p>
-                )}
-                {canPay && feeAccepted && (
-                  <div className="funding-qr">
-                    <QRCodeSVG
-                      value={payment.pay_address}
-                      size={216}
-                      marginSize={4}
-                      level="M"
-                      title={`${currency} · ${networkLabel} 充值地址二维码`}
-                      role="img"
-                      aria-label="充值地址二维码"
-                    />
-                    <span>使用钱包扫码，核对币种与网络</span>
-                  </div>
-                )}
-                {canPay && feeAccepted && (
+                  <button
+                    className="button outline"
+                    onClick={() => void copy(payment.pay_amount, "完整金额")}
+                  >
+                    复制完整金额
+                  </button>
+                  <p>
+                    请保留全部 6
+                    位小数，尾数也计入余额。少付、多付或分笔支付需要人工核对。
+                  </p>
+                  <small>
+                    剩余 {Math.floor(left / 60)} 分 {left % 60} 秒
+                  </small>
+                </div>
+                {!ack ? (
+                  <button className="button full" onClick={() => setAck(true)}>
+                    我会按完整金额转账，显示地址
+                  </button>
+                ) : (
                   <>
+                    <div className="funding-qr">
+                      <QRCodeSVG
+                        value={USDT_TRC20_RECEIVER}
+                        size={216}
+                        marginSize={4}
+                        level="M"
+                        title="USDT · TRON TRC20 充值地址"
+                        role="img"
+                        aria-label="充值地址二维码"
+                      />
+                      <span>扫码后请填写上方完整金额</span>
+                    </div>
                     <label>
-                      充值地址
+                      固定充值地址
                       <code className="security-secret funding-address">
-                        {payment.pay_address}
+                        {USDT_TRC20_RECEIVER}
                       </code>
                     </label>
+                    <p className="muted small">地址校验：TKcBJk ··· D6tnA</p>
                     <button
                       className="button outline"
-                      onClick={() => void copyAddress()}
-                      disabled={!canPay || !feeAccepted}
+                      onClick={() => void copy(USDT_TRC20_RECEIVER, "地址")}
                     >
                       复制地址
                     </button>
                   </>
                 )}
-                {!canPay && (
-                  <p className="muted small">
-                    {payment.credited_amount
-                      ? "本笔充值已入账，请勿再次转入。"
-                      : ["confirming", "confirmed", "sending"].includes(
-                            payment.status,
-                          )
-                        ? "已检测到付款，请等待入账，勿重复转账。"
-                        : "当前记录不可继续付款，请查看充值状态。"}
-                  </p>
-                )}
-                {canPay && feeAccepted && payment.extra_id && (
-                  <p>
-                    Memo / Tag：<code>{payment.extra_id}</code>
-                  </p>
-                )}
                 <p>
-                  仅转入 {currency} · {networkLabel}
-                  ，请勿使用其他网络。本地址仅用于本次充值，到账状态会自动更新。
+                  仅支持
+                  USDT-TRC20。每次充值请创建新订单，勿重复使用旧金额。链上确认后自动到账。
                 </p>
               </>
+            )}
+            {!canPay && !payment.credited_amount && (
+              <p>
+                {payment.source !== "direct_tron"
+                  ? "该记录已停止收款，请创建新的充值订单。"
+                  : left === 0
+                    ? "本次付款金额已过期，请勿继续转入。已付款请等待链上核对，切勿重复支付。"
+                    : "正在核对付款，请勿重复转账。"}
+              </p>
             )}
             {payment.credited_amount && (
               <div className="funding-success" role="status">
@@ -344,7 +284,7 @@ export default function FundingDialog({
                 <p>
                   实际入账{" "}
                   <strong>
-                    {payment.credited_amount} {currency}
+                    {payment.credited_amount} {payment.currency ?? currency}
                   </strong>
                 </p>
                 <div className="actions">
@@ -361,7 +301,7 @@ export default function FundingDialog({
             )}
           </>
         )}
-        {config && !config.enabled && <p>充值尚未开放，请稍后再试。</p>}
+        {config && !config.enabled && <p>充值暂不可用，请稍后再试。</p>}
       </section>
     </div>
   );

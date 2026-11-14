@@ -2686,7 +2686,6 @@ export default function Home() {
                                 ) : (
                                   <>
                                     <option>USDT</option>
-                                    <option>USDC</option>
                                   </>
                                 )}
                               </SelectField>
@@ -2705,7 +2704,6 @@ export default function Home() {
                                   }
                                 >
                                   <option>USDT</option>
-                                  <option>USDC</option>
                                 </SelectField>
                               </label>
                             ) : (
@@ -4732,10 +4730,7 @@ export default function Home() {
                                     label: "结算币种",
                                     value: "USDT",
                                     type: "select",
-                                    options: [
-                                      ["USDT", "USDT"],
-                                      ["USDC", "USDC"],
-                                    ],
+                                    options: [["USDT", "USDT"]],
                                   },
                                 ],
                                 button: "生成服务端草稿",

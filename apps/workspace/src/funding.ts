@@ -95,7 +95,7 @@ export class Funding {
     if (!["customer", "merchant_admin"].includes(account.role))
       throw new HttpError(403, "FORBIDDEN");
     const r = await reader.query(
-      "SELECT id,currency,pay_currency,requested_amount::text,pay_address,pay_amount,extra_id,status,credited_amount::text,settlement_network,cost_quote,created_at,updated_at FROM workspace.funding_payments WHERE ($1::text IS NULL OR customer_id=$1) ORDER BY created_at DESC LIMIT 100",
+      "SELECT id,currency,pay_currency,requested_amount::text,pay_address,pay_amount,extra_id,status,credited_amount::text,settlement_network,cost_quote,source,expires_at,created_at,updated_at FROM workspace.funding_payments WHERE ($1::text IS NULL OR customer_id=$1) ORDER BY created_at DESC LIMIT 100",
       [account.role === "customer" ? account.customer_id : null],
     );
     return r.rows;
@@ -274,6 +274,8 @@ export class Funding {
       settlement_network: r.settlement_network ?? r.pay_currency,
       cost_quote: r.cost_quote ?? null,
       created_at: r.created_at,
+      source: r.source ?? "nowpayments",
+      expires_at: r.expires_at ?? null,
     };
   }
   async ipn(raw: string, signature: string | null) {
@@ -459,7 +461,7 @@ export class Funding {
     try {
       const abandoned = (
         await this.auth.pool.query(
-          "UPDATE workspace.funding_payments SET status='creation_unknown',review_reason='CREATE_REQUIRES_RECONCILIATION',updated_at=now() WHERE status='creating' AND provider_id IS NULL AND created_at<now()-interval '2 minutes' RETURNING id",
+          "UPDATE workspace.funding_payments SET status='creation_unknown',review_reason='CREATE_REQUIRES_RECONCILIATION',updated_at=now() WHERE source='nowpayments' AND status='creating' AND provider_id IS NULL AND created_at<now()-interval '2 minutes' RETURNING id",
         )
       ).rows;
       for (const row of abandoned)
@@ -615,7 +617,7 @@ export class Funding {
     ).rows;
     const ledger = (
       await this.auth.pool.query(
-        "SELECT currency,sum(debit)::numeric(30,6)::text AS deposited FROM runtime.ledger_lines WHERE account='asset:treasury:nowpayments' GROUP BY currency",
+        "SELECT currency,sum(debit)::numeric(30,6)::text AS deposited FROM runtime.ledger_lines WHERE account IN ('asset:treasury:nowpayments','asset:treasury:direct_tron') GROUP BY currency",
       )
     ).rows;
     const reconciliation = (["USDT", "USDC"] as const).map((currency) => {
@@ -638,7 +640,7 @@ export class Funding {
       reconciliation,
       records: (
         await this.auth.pool.query(
-          "SELECT id,currency,pay_currency,requested_amount::text,credited_amount::text,status,provider_id,review_reason,allow_partial_credit,settlement_network,cost_quote,created_at,updated_at FROM workspace.funding_payments ORDER BY created_at DESC LIMIT 100",
+          "SELECT id,currency,pay_currency,pay_amount,requested_amount::text,credited_amount::text,status,provider_id,review_reason,allow_partial_credit,settlement_network,cost_quote,source,expires_at,created_at,updated_at FROM workspace.funding_payments ORDER BY created_at DESC LIMIT 100",
         )
       ).rows,
       enabled: this.enabled,

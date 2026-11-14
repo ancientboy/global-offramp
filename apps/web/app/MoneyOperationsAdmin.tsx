@@ -63,7 +63,7 @@ export default function MoneyOperationsAdmin({
       return act("admin/provider-settlements", {
         ...f,
         currency,
-        network: currency === "USDT" ? "usdttrc20" : "usdcbase",
+        network: "usdttrc20",
         idempotencyKey: createKey.current,
       });
     if (kind === "verify")
@@ -117,7 +117,7 @@ export default function MoneyOperationsAdmin({
           <summary>账务核对与汇总</summary>
           <div className="money-report-grid">
             {report.rows
-              .filter((r: any) => ["USDT", "USDC"].includes(r.currency))
+              .filter((r: any) => ["USDT"].includes(r.currency))
               .map((r: any) => (
                 <div key={r.currency}>
                   <strong>{r.currency}</strong>
@@ -140,13 +140,11 @@ export default function MoneyOperationsAdmin({
           </p>
         </details>
       )}
-      {data &&
-        !data.verification.usdttrc20.configured &&
-        !data.verification.usdcbase.configured && (
-          <p className="muted small">
-            结算钱包地址待核实配置，链上付款核验暂不可用。
-          </p>
-        )}
+      {data && !data.verification.usdttrc20.configured && (
+        <p className="muted small">
+          结算钱包地址待核实配置，链上付款核验暂不可用。
+        </p>
+      )}
       {create && (
         <form className="money-form" onSubmit={(e) => void submit(e, "create")}>
           <h3>新建服务商结算</h3>
@@ -176,7 +174,6 @@ export default function MoneyOperationsAdmin({
               onChange={(e) => setCurrency(e.target.value)}
             >
               <option>USDT</option>
-              <option>USDC</option>
             </SelectField>
           </label>
           <p>

@@ -91,6 +91,7 @@ export function workspaceApp(
     funding?: Funding;
     money?: MoneyMovements;
     fundsMode?: FundsMode;
+    usdtOnly?: boolean;
     payoutsPaused?: boolean;
   } = {},
 ) {
@@ -622,6 +623,45 @@ export function workspaceApp(
           throw new HttpError(400, "INVALID_INPUT");
         return json(await options.marketRates.refresh());
       }
+      if (
+        options.usdtOnly &&
+        request.method === "POST" &&
+        (/^\/(quotes|orders|batches|wallet\/deposits|partner)/.test(path) ||
+          path.startsWith("/routes/USDC-"))
+      ) {
+        const input = await request.clone().json();
+        const containsUsdc = (v: unknown): boolean =>
+          (typeof v === "string" && /\bUSDC\b/.test(v)) ||
+          (Array.isArray(v)
+            ? v.some(containsUsdc)
+            : !!v &&
+              typeof v === "object" &&
+              Object.values(v).some(containsUsdc));
+        if (containsUsdc(input) || path.startsWith("/routes/USDC-"))
+          throw new HttpError(400, "UNSUPPORTED_CURRENCY");
+        if (path === "/orders" && typeof input.quoteId === "string") {
+          const state = await auth.store.read();
+          if (
+            state.quotes.find((q) => q.id === input.quoteId)?.sourceCurrency ===
+            "USDC"
+          )
+            throw new HttpError(400, "UNSUPPORTED_CURRENCY");
+        }
+      }
+      if (
+        options.usdtOnly &&
+        request.method === "POST" &&
+        /^\/batches\/[\w-]+\/(quote|submit)$/.test(path)
+      ) {
+        const batchId = path.split("/")[2],
+          state = await auth.store.read();
+        if (
+          state.batchItems.some(
+            (i) => i.batchId === batchId && i.sourceCurrency === "USDC",
+          )
+        )
+          throw new HttpError(400, "UNSUPPORTED_CURRENCY");
+      }
       let forwarded = request;
       if (
         options.fundsMode === "live" &&
@@ -665,8 +705,17 @@ export function workspaceApp(
           });
         }
       }
-      if (request.method === "GET" && path === "/routes")
-        return json(await routeCatalog(auth, account));
+      if (request.method === "GET" && path === "/routes") {
+        const catalog = await routeCatalog(auth, account);
+        return json(
+          options.usdtOnly
+            ? {
+                ...catalog,
+                routes: catalog.routes.filter((r) => r.sourceAsset === "USDT"),
+              }
+            : catalog,
+        );
+      }
       const routeMatch =
         /^\/routes\/(USDT|USDC)-(CNY|USD|EUR|MXN|BRL|GBP)\/(draft|validate-recipient)$/.exec(
           path,

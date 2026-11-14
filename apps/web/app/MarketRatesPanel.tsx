@@ -88,7 +88,6 @@ export default function MarketRatesPanel({
             onChange={(e) => setAsset(e.target.value)}
           >
             <option value="USDT">USDT</option>
-            <option value="USDC">USDC</option>
           </SelectField>
           {admin && (
             <button

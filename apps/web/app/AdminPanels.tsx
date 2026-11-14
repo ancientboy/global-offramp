@@ -300,7 +300,7 @@ export function PricingSettingsPanel({
             {(
               [
                 "USDT_USD",
-                "USDC_USD",
+
                 "USD_CNY",
                 "USD_EUR",
                 "USD_GBP",
@@ -479,7 +479,7 @@ export function PricingSettingsPanel({
         <div className="admin-card">
           <h3>3. 每笔订单费用</h3>
           <p>
-            固定金额，以该笔订单来源币种 USDT 或 USDC
+            固定金额，以该笔订单来源币种 USDT
             收取。客户专属服务费优先于平台默认；实际收费以客户报价为准。
           </p>
           <div className="admin-form-grid">
@@ -586,28 +586,30 @@ function RateTable({ version }: { version: PricingVersion }) {
           </tr>
         </thead>
         <tbody>
-          {version.rates.map((r) => (
-            <tr key={r.sourceCurrency + r.payoutCurrency}>
-              <td>
-                {r.sourceCurrency} → {r.payoutCurrency}
-              </td>
-              <td>{r.referenceRate}</td>
-              <td>
-                <strong>{r.customerRate}</strong>
-              </td>
-              <td>
-                {pricingAdjustmentLabel(
-                  version.routes[r.payoutCurrency as FiatCurrency],
-                  r.payoutCurrency as FiatCurrency,
-                )}
-              </td>
-              <td>
-                {version.routes[r.payoutCurrency as FiatCurrency]?.enabled
-                  ? "已启用"
-                  : "已停用"}
-              </td>
-            </tr>
-          ))}
+          {version.rates
+            .filter((r) => r.sourceCurrency === "USDT")
+            .map((r) => (
+              <tr key={r.sourceCurrency + r.payoutCurrency}>
+                <td>
+                  {r.sourceCurrency} → {r.payoutCurrency}
+                </td>
+                <td>{r.referenceRate}</td>
+                <td>
+                  <strong>{r.customerRate}</strong>
+                </td>
+                <td>
+                  {pricingAdjustmentLabel(
+                    version.routes[r.payoutCurrency as FiatCurrency],
+                    r.payoutCurrency as FiatCurrency,
+                  )}
+                </td>
+                <td>
+                  {version.routes[r.payoutCurrency as FiatCurrency]?.enabled
+                    ? "已启用"
+                    : "已停用"}
+                </td>
+              </tr>
+            ))}
         </tbody>
       </table>
     </div>
@@ -877,8 +879,8 @@ export function CustomerDirectoryPanel({
                     <>
                       客户专属服务费：
                       <strong>{money(customer.serviceFeeOverride)}</strong>
-                      （每笔，订单来源币种 USDT /
-                      USDC）。优先于平台默认服务费，通道费仍按平台配置。
+                      （每笔，订单来源币种
+                      USDT）。优先于平台默认服务费，通道费仍按平台配置。
                     </>
                   ) : (
                     "平台默认服务费：未设置客户专属费用，实际收费以客户报价为准。"

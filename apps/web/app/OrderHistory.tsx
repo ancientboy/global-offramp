@@ -135,7 +135,7 @@ export default function OrderHistory({
             onChange={(e) => set("currency", e.target.value)}
           >
             <option value="all">全部币种</option>
-            {["USDT", "USDC", "CNY", "USD", "EUR", "MXN", "BRL", "GBP"].map(
+            {["USDT", "CNY", "USD", "EUR", "MXN", "BRL", "GBP"].map(
               (c) => (
                 <option key={c}>{c}</option>
               ),

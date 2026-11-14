@@ -53,14 +53,26 @@ export default function FundingAdmin({
     setError("");
     const f = new FormData(e.currentTarget);
     try {
-      await moneyRequest("admin/funding/" + review.id + "/resolve", {
-        decision:
-          review.status === "creation_unknown" ? "link" : "accept_partial",
-        note: String(f.get("note")),
-        ...(review.status === "creation_unknown"
-          ? { providerId: String(f.get("providerId")).trim() }
-          : {}),
-      });
+      await moneyRequest(
+        "admin/funding/" + review.id + "/resolve",
+        review.source === "direct_tron"
+          ? {
+              decision: "assign_transfer",
+              txid: String(f.get("txid")).trim(),
+              logIndex: Number(f.get("logIndex")),
+              note: String(f.get("note")),
+            }
+          : {
+              decision:
+                review.status === "creation_unknown"
+                  ? "link"
+                  : "accept_partial",
+              note: String(f.get("note")),
+              ...(review.status === "creation_unknown"
+                ? { providerId: String(f.get("providerId")).trim() }
+                : {}),
+            },
+      );
       setReview(null);
       await load();
     } catch (e) {
@@ -107,12 +119,41 @@ export default function FundingAdmin({
             </button>
           </div>
           {error && <p role="alert">{error}</p>}
-          {data?.reconciliation?.map((r: any) => (
-            <p key={r.currency}>
-              {r.currency} 充值账务核对：
-              {r.matches ? "一致" : "存在差异，请暂停资金操作并核查"}
+          {data?.receiver && (
+            <p>
+              固定收款地址：<code>{data.receiver}</code>
             </p>
-          ))}
+          )}
+          {data?.scan && (
+            <p>
+              链上扫描：{new Date(data.scan.checked_at).toLocaleString("zh-CN")}{" "}
+              ·{" "}
+              {Date.now() - new Date(data.scan.checked_at).getTime() < 120000
+                ? "正常"
+                : "连接待恢复"}
+            </p>
+          )}
+          {!!data?.unmatched?.length && (
+            <details>
+              <summary>待归属链上收款（{data.unmatched.length}）</summary>
+              {data.unmatched.map((e: any) => (
+                <p key={e.txid + e.log_index}>
+                  {e.amount} USDT · {e.txid} · 日志序号 {e.log_index}
+                </p>
+              ))}
+              <p>
+                请先核实付款人和订单，再在对应订单中关联交易。同笔收款只能入账一次。
+              </p>
+            </details>
+          )}
+          {data?.reconciliation
+            ?.filter((r: any) => r.currency === "USDT")
+            .map((r: any) => (
+              <p key={r.currency}>
+                {r.currency} 充值账务核对：
+                {r.matches ? "一致" : "存在差异，请暂停资金操作并核查"}
+              </p>
+            ))}
           {!data && !error && <p role="status">正在加载充值记录…</p>}
           {data && !data.records?.length && <p>暂无真实充值记录。</p>}
           {data?.records?.map((p: any) => (
@@ -124,7 +165,8 @@ export default function FundingAdmin({
                 </small>
               </div>
               <div>
-                {p.credited_amount ?? p.requested_amount} {p.currency}
+                {p.credited_amount ?? p.pay_amount ?? p.requested_amount}{" "}
+                {p.currency}
                 {p.cost_quote && (
                   <small>
                     预估费用 {p.cost_quote.estimatedCost} · 预计到账{" "}
@@ -132,15 +174,18 @@ export default function FundingAdmin({
                   </small>
                 )}
                 {data.enabled &&
-                  ["creation_unknown", "review"].includes(p.status) &&
+                  (p.source === "direct_tron" ||
+                    ["creation_unknown", "review"].includes(p.status)) &&
                   !p.credited_amount && (
                     <button
                       className="button text"
                       onClick={() => setReview(p)}
                     >
-                      {p.status === "creation_unknown"
-                        ? "关联支付记录"
-                        : "核对少付净额"}
+                      {p.source === "direct_tron"
+                        ? "关联链上收款"
+                        : p.status === "creation_unknown"
+                          ? "关联支付记录"
+                          : "核对少付净额"}
                     </button>
                   )}
                 <button
@@ -155,11 +200,38 @@ export default function FundingAdmin({
           {review && (
             <form className="money-form" onSubmit={(e) => void resolve(e)}>
               <h3>
-                {review.status === "creation_unknown"
-                  ? "关联 NOWPayments 支付记录"
-                  : "核对少付净额"}
+                {review.source === "direct_tron"
+                  ? "关联链上收款"
+                  : review.status === "creation_unknown"
+                    ? "关联 NOWPayments 支付记录"
+                    : "核对少付净额"}
               </h3>
-              {review.status === "creation_unknown" ? (
+              {review.source === "direct_tron" ? (
+                <>
+                  <label>
+                    交易哈希
+                    <input
+                      name="txid"
+                      required
+                      pattern="[a-f0-9]{64}"
+                      maxLength={64}
+                    />
+                  </label>
+                  <label>
+                    日志序号
+                    <input
+                      name="logIndex"
+                      type="number"
+                      min="0"
+                      step="1"
+                      required
+                    />
+                  </label>
+                  <p>
+                    核实付款人归属后按实际收款金额入账，不补齐差额。此操作无法撤销。
+                  </p>
+                </>
+              ) : review.status === "creation_unknown" ? (
                 <label>
                   NOWPayments 支付编号
                   <input
@@ -174,7 +246,7 @@ export default function FundingAdmin({
               )}
               <label>
                 核对说明
-                <input name="note" required minLength={3} maxLength={300} />
+                <input name="note" required minLength={10} maxLength={300} />
               </label>
               <button className="button" disabled={reviewBusy}>
                 确认核对
