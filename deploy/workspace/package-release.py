@@ -15,6 +15,8 @@ def select(info):
  if name.endswith(('.dump','.log','.key','.pem','.pfx','.p12','.pyc','.tgz','.tar','.zip')):return None
  if path.parts[0]=='deploy' and path.suffix=='.json' and name not in {'package.json','package-lock.json'}:return None
  if name=='hosting.json':return None
+ if info.name.startswith('sites-dist/client'):
+  info.mode=0o755 if info.isdir() else 0o644
  if info.isfile():manifest[info.name]=hashlib.sha256((root/info.name).read_bytes()).hexdigest()
  return info
 with tarfile.open(a.output,'w:gz') as out:
