@@ -41,10 +41,10 @@ export default function RefundDialog({
         className="security-panel"
         role="dialog"
         aria-modal="true"
-        aria-label="申请退款"
+        aria-label="申请提现"
       >
         <header>
-          <h2>申请退款</h2>
+          <h2>申请提现</h2>
           <button className="button text" onClick={onClose} disabled={busy}>
             关闭
           </button>
@@ -55,7 +55,7 @@ export default function RefundDialog({
             可用余额：{money(available)} {currency}
           </p>
           <label>
-            退款金额
+            提现金额
             <input
               name="amount"
               required
@@ -88,7 +88,7 @@ export default function RefundDialog({
             />
           </label>
           <label>
-            退款原因
+            提现说明
             <input
               name="reason"
               required
@@ -98,7 +98,7 @@ export default function RefundDialog({
             />
           </label>
           <p>
-            请填写你控制的同网络钱包地址。提交后金额将暂时冻结，审核通过后退至所填地址；审核前可取消。
+            请填写你控制的同网络钱包地址。提交后金额将暂时冻结，审核通过后转入所填地址；审核前可取消。
           </p>
           <button className="button" disabled={busy}>
             {busy ? "正在提交…" : "提交申请"}

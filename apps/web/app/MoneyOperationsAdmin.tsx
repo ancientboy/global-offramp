@@ -68,7 +68,7 @@ export default function MoneyOperationsAdmin() {
   return (
     <section className="card money-admin">
       <div className="card-heading">
-        <h2>退款与服务商结算</h2>
+        <h2>提现与服务商结算</h2>
         <div>
           <button
             className="button outline"
@@ -204,7 +204,7 @@ export default function MoneyOperationsAdmin() {
           </button>
         </form>
       )}
-      {!data?.records?.length && <p>暂无退款或结算申请。</p>}
+      {!data?.records?.length && <p>暂无提现或结算申请。</p>}
       {data?.records?.map((r: any) => (
         <button
           className="fund-record movement-row"
@@ -212,7 +212,7 @@ export default function MoneyOperationsAdmin() {
           onClick={() => void open(r)}
         >
           <span>
-            <strong>{r.kind === "refund" ? "客户退款" : "服务商结算"}</strong>
+            <strong>{r.kind === "refund" ? "客户提现" : "服务商结算"}</strong>
             <small>{r.id}</small>
           </span>
           <span>
@@ -221,7 +221,7 @@ export default function MoneyOperationsAdmin() {
             </strong>
             <small>
               {r.status === "approved"
-                ? "待链上付款核验"
+                ? "待转账确认"
                 : movementLabels[r.status]}
             </small>
           </span>
@@ -229,7 +229,7 @@ export default function MoneyOperationsAdmin() {
       ))}
       {selected && (
         <div className="money-detail">
-          <h3>{selected.kind === "refund" ? "退款详情" : "结算详情"}</h3>
+          <h3>{selected.kind === "refund" ? "提现详情" : "结算详情"}</h3>
           <dl>
             <dt>金额</dt>
             <dd>
@@ -252,7 +252,7 @@ export default function MoneyOperationsAdmin() {
               <label>
                 处理结果
                 <SelectField name="action">
-                  <option value="approve">批准处理</option>
+                  <option value="approve">审核通过，待手动转账</option>
                   <option value="reject">拒绝并释放冻结</option>
                 </SelectField>
               </label>
@@ -271,7 +271,7 @@ export default function MoneyOperationsAdmin() {
               onSubmit={(e) => void submit(e, "verify")}
             >
               <p>
-                请先从已核实的结算钱包完成转账，再提交交易哈希核验。通过最终确认后才会记为完成。
+                请在外部钱包手动转账至本申请的收款地址，再填写交易哈希并确认。系统只核对付款结果，不会发起转账。
               </p>
               <label>
                 交易哈希
@@ -290,8 +290,12 @@ export default function MoneyOperationsAdmin() {
                   />
                 </label>
               </details>
+              <label className="money-confirm">
+                <input type="checkbox" required disabled={busy} />
+                我已在外部钱包完成转账，确认收款地址、网络及金额正确
+              </label>
               <button className="button" disabled={busy}>
-                核验链上付款
+                {busy ? "正在核对付款…" : "确认已转账"}
               </button>
             </form>
           )}

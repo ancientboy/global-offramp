@@ -1,6 +1,6 @@
 export const movementLabels: Record<string, string> = {
   requested: "待审核",
-  approved: "退款处理中",
+  approved: "提现处理中",
   completed: "已完成",
   cancelled: "已取消",
   rejected: "未通过",

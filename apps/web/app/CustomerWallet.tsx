@@ -63,7 +63,7 @@ export default function CustomerWallet({
     try {
       await moneyRequest("money-movements/" + id + "/decision", {
         action: "cancel",
-        note: "客户取消退款申请",
+        note: "客户取消提现申请",
       });
       await onRefresh?.();
     } catch (e) {
@@ -205,7 +205,7 @@ export default function CustomerWallet({
               disabled={locked}
               onClick={() => setRefundOpen(true)}
             >
-              申请退款
+              申请提现
             </button>
           )}
           {resumeDraft && (
@@ -248,7 +248,7 @@ export default function CustomerWallet({
                 className={historyType === "refunds" ? "active" : ""}
                 onClick={() => setHistoryType("refunds")}
               >
-                退款
+                提现
               </button>
             )}
           </div>
@@ -286,7 +286,7 @@ export default function CustomerWallet({
                   </div>
                 ))
             ) : (
-              <Empty title="暂无退款记录">退款申请将在这里显示进度。</Empty>
+              <Empty title="暂无提现记录">提现申请将在这里显示进度。</Empty>
             )
           ) : historyType === "deposits" && realFunds ? (
             fundingPayments.filter((p) => p.currency === currency).length ? (

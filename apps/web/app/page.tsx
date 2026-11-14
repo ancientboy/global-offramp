@@ -188,7 +188,7 @@ const titles: Record<Page, string> = {
   settlements: "结算记录",
 };
 const subtitles: Record<Page, string> = {
-  funds: "管理充值、退款、服务商结算与账务核对",
+  funds: "管理充值、提现、服务商结算与账务核对",
   routes: "支持六种法币结汇付款，查看可用地区、汇率与费用",
   receipts: "私有存储、本地识别、人工关联，原件不会自动分享给客户",
   overview: "按订单创建、登记付款分别统计，不同币种独立核算",
