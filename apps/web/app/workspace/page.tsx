@@ -1,4 +1,8 @@
 "use client";
+import AccountSecurity, {
+  securityMessages,
+  securityRequest,
+} from "../AccountSecurity";
 import SelectField from "../SelectField";
 import dynamic from "next/dynamic";
 import { FormEvent, useEffect, useState } from "react";
@@ -21,6 +25,7 @@ import {
 import { WorkspaceContext, type WorkspaceAccount } from "../workspace-context";
 
 const errors: Record<string, string> = {
+  ...securityMessages,
   INVITE_UNAVAILABLE: "邀请链接不可用，请联系邀请人获取新链接。",
   PARTNER_UNAVAILABLE: "伙伴账号已停用，请联系管理员。",
   EMAIL_IN_USE: "该邮箱已注册，请登录。",
@@ -46,6 +51,9 @@ async function authRequest(path: string, body?: unknown) {
   return result;
 }
 export default function Workspace() {
+  const [securityOpen, setSecurityOpen] = useState(false);
+  const [securityStatus, setSecurityStatus] = useState<any>(null);
+  const [otpRequired, setOtpRequired] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [account, setAccount] = useState<WorkspaceAccount | null>(null);
   const [loading, setLoading] = useState(true),
@@ -82,6 +90,23 @@ export default function Workspace() {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+  async function refreshSecurity() {
+    try {
+      const next = await securityRequest("");
+      setSecurityStatus(next);
+      if (
+        next.enforced &&
+        (!next.passwordChanged || (next.privileged && !next.mfaEnabled))
+      )
+        setSecurityOpen(true);
+      return next;
+    } catch {
+      setSecurityStatus(null);
+    }
+  }
+  useEffect(() => {
+    if (account) void refreshSecurity();
+  }, [account?.id]);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -109,10 +134,17 @@ export default function Workspace() {
         setNotice("账号已创建，请登录。客户审核待管理员处理。");
         formElement.reset();
       } else {
-        const result = await authRequest("login", { identifier, password });
+        const code = String(form.get("code") ?? "").trim();
+        const result = await authRequest("login", {
+          identifier,
+          password,
+          ...(code ? { code } : {}),
+        });
         setAccount(result.account);
       }
     } catch (e) {
+      if (e instanceof Error && e.message === securityMessages.MFA_REQUIRED)
+        setOtpRequired(true);
       setError(e instanceof Error ? e.message : "请求失败");
     } finally {
       setBusy(false);
@@ -137,6 +169,29 @@ export default function Workspace() {
           },
         }}
       >
+        <button
+          className="security-launch"
+          onClick={() => setSecurityOpen(true)}
+        >
+          账户安全
+        </button>
+        {(securityOpen ||
+          (securityStatus?.enforced &&
+            (!securityStatus.passwordChanged ||
+              (securityStatus.privileged && !securityStatus.mfaEnabled)))) && (
+          <AccountSecurity
+            mandatory={
+              !!securityStatus?.enforced &&
+              (!securityStatus.passwordChanged ||
+                (securityStatus.privileged && !securityStatus.mfaEnabled))
+            }
+            onClose={() => {
+              setSecurityOpen(false);
+              if (securityStatus?.enforced) window.location.reload();
+            }}
+            onReady={() => void refreshSecurity()}
+          />
+        )}
         {account.role === "partner" ? (
           <PartnerPortal />
         ) : account.role === "payout_provider" ? (
@@ -269,6 +324,18 @@ export default function Workspace() {
             </label>
             {error && <p role="alert">{error}</p>}
             {notice && <p role="status">{notice}</p>}
+            {!register && otpRequired && (
+              <label>
+                验证器动态码 / 恢复码
+                <input
+                  name="code"
+                  required
+                  autoComplete="one-time-code"
+                  maxLength={40}
+                  minLength={6}
+                />
+              </label>
+            )}
             <button
               className="button"
               disabled={

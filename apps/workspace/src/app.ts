@@ -1,3 +1,6 @@
+import { ReceiptScanner } from "./receipt-scanner";
+import { AccountSecurity } from "./account-security";
+import { Funding, type FundsMode } from "./funding";
 import { randomUUID } from "node:crypto";
 import {
   validateFullRecipient,
@@ -74,11 +77,21 @@ export function workspaceApp(
     enableSimulatedTopups?: boolean;
     marketRates?: MarketRatesService;
     recipientVault?: RecipientVault;
+    security?: AccountSecurity;
+    scanner?: ReceiptScanner;
+    funding?: Funding;
+    fundsMode?: FundsMode;
+    payoutsPaused?: boolean;
   } = {},
 ) {
   if (new URL(origin).origin !== origin || !origin.startsWith("https://"))
     throw new Error("WORKSPACE_ORIGIN must be an HTTPS origin");
-  const core = new OfframpService(auth.store, () => new Date(auth.now()));
+  const core = new OfframpService(
+    auth.store,
+    () => new Date(auth.now()),
+    undefined,
+    options.fundsMode === "live" ? "live" : "mock",
+  );
   return async (request: Request, ip: string): Promise<Response> => {
     try {
       const url = new URL(request.url);
@@ -86,6 +99,20 @@ export function workspaceApp(
         throw new HttpError(404, "NOT_FOUND");
       if (!["GET", "POST"].includes(request.method))
         throw new HttpError(405, "METHOD_NOT_ALLOWED");
+      if (
+        url.pathname === "/workspace/api/payments/nowpayments/ipn" &&
+        request.method === "POST"
+      ) {
+        if (!options.funding?.enabled)
+          throw new HttpError(503, "DEPOSITS_UNAVAILABLE");
+        await auth.rate("nowpayments-ipn:" + ip, 120, 60000);
+        return json(
+          await options.funding.ipn(
+            await request.text(),
+            request.headers.get("x-nowpayments-sig"),
+          ),
+        );
+      }
       const site = request.headers.get("sec-fetch-site");
       if (
         (site && site !== "same-origin") ||
@@ -117,7 +144,11 @@ export function workspaceApp(
             realExecutionEnabled: false,
             accountMode: "beta",
             emailVerified: false,
-            mfaEnabled: false,
+            mfaEnabled: !!options.security,
+            receiptScanningEnabled: !!options.scanner,
+            fundsMode: options.fundsMode ?? "sandbox",
+            depositsEnabled: !!options.funding?.enabled,
+            payoutsPaused: options.payoutsPaused ?? false,
             simulatedTopupsEnabled: options.enableSimulatedTopups === true,
             recipientAccountsEnabled: !!options.recipientVault,
           },
@@ -150,6 +181,76 @@ export function workspaceApp(
       }
       const token = tokenOf(request);
       const account = await auth.current(token);
+      if (path === "/auth/security" && request.method === "GET") {
+        if (!options.security) throw new HttpError(503, "SECURITY_UNAVAILABLE");
+        return json({
+          ...(await options.security.status(account)),
+          enforced: options.fundsMode === "live",
+        });
+      }
+      if (path.startsWith("/auth/security/") && request.method === "POST") {
+        if (!options.security) throw new HttpError(503, "SECURITY_UNAVAILABLE");
+        await auth.rate("security:" + account.id, 10, 15 * 60000);
+        const input = await body();
+        if (path.endsWith("/password"))
+          return json(await options.security.password(account, input, token!));
+        if (path.endsWith("/setup"))
+          return json(await options.security.setup(account, input));
+        if (path.endsWith("/confirm"))
+          return json(await options.security.confirm(account, input, token!));
+        if (path.endsWith("/verify"))
+          return json(await options.security.stepUp(account, input, token!));
+        throw new HttpError(404, "NOT_FOUND");
+      }
+      if (
+        options.fundsMode === "live" &&
+        !["/auth/me", "/auth/logout"].includes(path)
+      ) {
+        if (!options.security) throw new HttpError(503, "SECURITY_UNAVAILABLE");
+        await options.security.requireReady(
+          account,
+          token!,
+          request.method === "POST",
+        );
+        if (
+          options.payoutsPaused &&
+          request.method === "POST" &&
+          (path === "/orders" ||
+            /^\/provider\/orders\/[\w-]+\/payment$/.test(path) ||
+            /^\/batches\/[\w-]+\/submit$/.test(path) ||
+            path === "/settlements" ||
+            /^\/settlements\/[\w-]+\/approve$/.test(path))
+        )
+          throw new HttpError(503, "PAYOUTS_PAUSED");
+      }
+      if (
+        options.fundsMode === "live" &&
+        request.method === "POST" &&
+        path.startsWith("/settlements")
+      )
+        throw new HttpError(403, "REAL_SETTLEMENT_NOT_CONFIGURED");
+      if (path === "/wallet/funding" && request.method === "GET")
+        return json(
+          options.funding?.publicConfig() ?? { enabled: false, networks: [] },
+        );
+      if (path === "/wallet/funding/payments") {
+        if (!options.funding) throw new HttpError(503, "DEPOSITS_UNAVAILABLE");
+        if (request.method === "GET")
+          return json({ payments: await options.funding.list(account) });
+        await auth.rate("deposit-create:" + account.id, 3, 60000);
+        return json(await options.funding.create(account, await body()), 201);
+      }
+      const fundingRecheck =
+        /^\/admin\/funding\/(HTDEP-[a-zA-Z0-9-]+)\/recheck$/.exec(path);
+      if (fundingRecheck && request.method === "POST") {
+        if (!options.funding) throw new HttpError(503, "DEPOSITS_UNAVAILABLE");
+        await auth.rate("funding-recheck:" + account.id, 5, 60000);
+        return json(await options.funding.recheck(account, fundingRecheck[1]));
+      }
+      if (path === "/admin/funding" && request.method === "GET") {
+        if (!options.funding) throw new HttpError(503, "DEPOSITS_UNAVAILABLE");
+        return json(await options.funding.summary(account));
+      }
       if (
         path === "/beneficiaries" &&
         request.method === "POST" &&
@@ -336,12 +437,13 @@ export function workspaceApp(
                 id,
                 await body(),
               );
-            else
-              await core.uploadReceiptFile(
-                actorFor(account),
-                id,
-                await body(3 * 1024 * 1024),
-              );
+            else {
+              const file = await body(3 * 1024 * 1024);
+              if (options.scanner) await options.scanner.scan(file);
+              else if (options.fundsMode === "live")
+                throw new HttpError(503, "SCAN_UNAVAILABLE");
+              await core.uploadReceiptFile(actorFor(account), id, file);
+            }
             return json(
               await providerOrder(auth, account, id, options.recipientVault),
             );
@@ -365,6 +467,33 @@ export function workspaceApp(
         return json(await options.marketRates.refresh());
       }
       let forwarded = request;
+      if (
+        options.fundsMode === "live" &&
+        request.method === "POST" &&
+        path === "/orders"
+      ) {
+        const orderInput = await body();
+        if (orderInput.fundingSource !== "wallet")
+          throw new HttpError(400, "WALLET_FUNDING_REQUIRED");
+        forwarded = new Request(request.url, {
+          method: "POST",
+          headers: request.headers,
+          body: JSON.stringify(orderInput),
+        });
+      }
+
+      if (path === "/receipts/upload" && request.method === "POST") {
+        await auth.rate("receipt-scan:" + account.id, 10, 60000);
+        const file = await body(3 * 1024 * 1024);
+        if (options.scanner) await options.scanner.scan(file);
+        else if (options.fundsMode === "live")
+          throw new HttpError(503, "SCAN_UNAVAILABLE");
+        forwarded = new Request(request.url, {
+          method: "POST",
+          headers: request.headers,
+          body: JSON.stringify(file),
+        });
+      }
       if (options.marketRates && request.method === "POST") {
         if (path === "/quotes" || /^\/batches\/[\w-]+\/quote$/.test(path))
           await options.marketRates.baseline();
@@ -437,6 +566,19 @@ export function workspaceApp(
             name: p.name,
             status: p.status,
           })),
+        });
+      }
+      if (
+        path === "/dashboard" &&
+        request.method === "GET" &&
+        account.role === "customer" &&
+        options.funding &&
+        result.ok
+      ) {
+        const data = await result.json();
+        return json({
+          ...data,
+          fundingPayments: await options.funding.list(account),
         });
       }
       // The shared adapter has its own safe domain errors; no auth internals are returned.

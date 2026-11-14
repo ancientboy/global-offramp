@@ -6,6 +6,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { z } from "zod";
+import { openSecret, totpCounter } from "./totp";
 import {
   PostgresStore,
   SqlClient,
@@ -53,15 +54,37 @@ const identifier = z.union([credentials.shape.email, username]);
 // Login verifies existing credentials; creation/reset policies are separate.
 const loginPassword = z.string().min(1).max(128);
 export const loginCredentials = z.union([
-  z.object({ identifier, password: loginPassword }).strict(),
   z
-    .object({ email: credentials.shape.email, password: loginPassword })
-    .strict()
-    .transform((v) => ({ identifier: v.email, password: v.password })),
+    .object({
+      identifier,
+      password: loginPassword,
+      code: z.string().min(6).max(40).optional(),
+    })
+    .strict(),
   z
-    .object({ username, password: loginPassword })
+    .object({
+      email: credentials.shape.email,
+      password: loginPassword,
+      code: z.string().min(6).max(40).optional(),
+    })
     .strict()
-    .transform((v) => ({ identifier: v.username, password: v.password })),
+    .transform((v) => ({
+      identifier: v.email,
+      password: v.password,
+      code: v.code,
+    })),
+  z
+    .object({
+      username,
+      password: loginPassword,
+      code: z.string().min(6).max(40).optional(),
+    })
+    .strict()
+    .transform((v) => ({
+      identifier: v.username,
+      password: v.password,
+      code: v.code,
+    })),
 ]);
 const adminCredentials = z
   .object({ username, password: credentials.shape.password })
@@ -90,7 +113,7 @@ export async function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex");
   return `scrypt-v1$${salt}$${(await derive(password, salt)).toString("hex")}`;
 }
-async function verify(password: string, encoded?: string) {
+export async function verifyPassword(password: string, encoded?: string) {
   const parts = encoded?.split("$");
   const valid =
     parts?.length === 3 &&
@@ -142,6 +165,7 @@ export class Auth {
     readonly pool: SqlPool,
     readonly store: PostgresStore,
     readonly now = () => Date.now(),
+    readonly securityKey?: Buffer,
   ) {}
   async audit(
     client: SqlClient | SqlPool,
@@ -238,7 +262,7 @@ export class Auth {
       [v.identifier],
     );
     const a = found.rows[0];
-    const correct = await verify(v.password, a?.password_hash);
+    const correct = await verifyPassword(v.password, a?.password_hash);
     if (!correct || !a?.enabled) {
       await this.audit(this.pool, "login.failed", undefined, v.identifier);
       throw new HttpError(401, "INVALID_CREDENTIALS");
@@ -256,6 +280,11 @@ export class Auth {
     const c = await this.pool.connect();
     try {
       await c.query("BEGIN");
+      const stillValid = await c.query(
+        "SELECT id FROM workspace.accounts WHERE id=$1 AND enabled AND password_hash=$2 FOR SHARE",
+        [a.id, a.password_hash],
+      );
+      if (!stillValid.rows[0]) throw new HttpError(401, "INVALID_CREDENTIALS");
       if (a.role === "partner") {
         const active = await c.query(
           "SELECT id FROM workspace.partners WHERE id=$1 AND status='active' FOR SHARE",
@@ -263,19 +292,57 @@ export class Auth {
         );
         if (!active.rows[0]) throw new HttpError(403, "PARTNER_UNAVAILABLE");
       }
+      const mfa = await this.consumeMfa(c, a.id, v.code);
       await c.query(
-        "INSERT INTO workspace.sessions(token_hash,account_id,created_at,expires_at) VALUES($1,$2,$3,$4)",
-        [digest(token), a.id, at, expires],
+        "INSERT INTO workspace.sessions(token_hash,account_id,created_at,expires_at,mfa_verified_at) VALUES($1,$2,$3,$4,$5)",
+        [digest(token), a.id, at, expires, mfa ? at : null],
       );
       await this.audit(c, "login.succeeded", a.id);
       await c.query("COMMIT");
     } catch (e) {
       await c.query("ROLLBACK");
+      if (
+        e instanceof HttpError &&
+        ["MFA_REQUIRED", "INVALID_OTP"].includes(e.code)
+      )
+        await this.audit(this.pool, "login.mfa_failed", a.id);
       throw e;
     } finally {
       c.release?.();
     }
     return { token, account: publicAccount(a) };
+  }
+  async consumeMfa(c: SqlClient, accountId: string, code?: string) {
+    const row = (
+      await c.query(
+        "SELECT * FROM workspace.account_security WHERE account_id=$1 FOR UPDATE",
+        [accountId],
+      )
+    ).rows[0];
+    if (!row?.totp_secret) return false;
+    if (!code) throw new HttpError(401, "MFA_REQUIRED");
+    if (!this.securityKey) throw new HttpError(503, "SECURITY_UNAVAILABLE");
+    const counter = totpCounter(
+      openSecret(this.securityKey, accountId, row.totp_secret),
+      code,
+      this.now(),
+      Number(row.last_totp_counter),
+    );
+    const recovery = digest(accountId + ":" + code),
+      hashes = row.recovery_hashes as string[];
+    if (counter < 0 && !hashes.includes(recovery))
+      throw new HttpError(401, "INVALID_OTP");
+    if (counter >= 0)
+      await c.query(
+        "UPDATE workspace.account_security SET last_totp_counter=$2,updated_at=now() WHERE account_id=$1",
+        [accountId, counter],
+      );
+    else
+      await c.query(
+        "UPDATE workspace.account_security SET recovery_hashes=$2::jsonb,updated_at=now() WHERE account_id=$1",
+        [accountId, JSON.stringify(hashes.filter((h) => h !== recovery))],
+      );
+    return true;
   }
   async current(token: string | undefined): Promise<Account> {
     if (!token) throw new HttpError(401, "UNAUTHENTICATED");

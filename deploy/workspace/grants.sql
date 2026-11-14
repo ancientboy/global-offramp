@@ -24,3 +24,10 @@ GRANT UPDATE(version,document,updated_by,updated_at) ON workspace.route_drafts T
 -- Partner attribution is insert-only; invitation codes and existing bindings cannot be rewritten.
 GRANT SELECT,INSERT ON workspace.partners,workspace.customer_attributions TO :"app_role";
 GRANT UPDATE(status,updated_at) ON workspace.partners TO :"app_role";
+
+GRANT SELECT,INSERT ON workspace.funds_environment,workspace.account_security,workspace.funding_payments,workspace.funding_inbox,workspace.operational_alerts TO :"app_role";
+GRANT UPDATE(password_changed_at,totp_secret,pending_secret,last_totp_counter,recovery_hashes,updated_at) ON workspace.account_security TO :"app_role";
+GRANT UPDATE(mfa_verified_at) ON workspace.sessions TO :"app_role";
+GRANT UPDATE(provider_id,pay_address,pay_amount,extra_id,status,review_reason,credited_amount,journal_id,next_check_at,checked_at,last_observation_at,updated_at) ON workspace.funding_payments TO :"app_role";
+
+GRANT UPDATE(password_hash) ON workspace.accounts TO :"app_role";

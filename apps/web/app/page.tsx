@@ -39,6 +39,8 @@ import MerchantOverview, {
   type MerchantQueue,
 } from "./MerchantOverview";
 import OrderHistory from "./OrderHistory";
+import { securityMessages } from "./AccountSecurity";
+import FundingAdmin from "./FundingAdmin";
 import CustomerWallet from "./CustomerWallet";
 import PartnerAdminPanel from "./PartnerAdminPanel";
 import Brand from "./Brand";
@@ -2211,11 +2213,20 @@ export default function Home() {
           ) : (
             <>
               {page === "routes" && workspace && (
-                <RouteSettings admin={role === "admin"} />
+                <>
+                  <RouteSettings admin={role === "admin"} />
+                  {role === "admin" && <FundingAdmin />}
+                </>
               )}
               {page === "wallet" && role === "customer" && (
                 <CustomerWallet
-                  fundsDisabled={!!workspace && !health?.simulatedTopupsEnabled}
+                  fundsDisabled={
+                    !!workspace &&
+                    !health?.simulatedTopupsEnabled &&
+                    !health?.depositsEnabled
+                  }
+                  realFunds={health?.fundsMode === "live"}
+                  fundingPayments={data.fundingPayments ?? []}
                   key={actor}
                   balances={walletBalances}
                   deposits={data.walletDeposits ?? []}

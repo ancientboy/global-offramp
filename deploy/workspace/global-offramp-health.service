@@ -1,0 +1,12 @@
+[Unit]
+Description=Huitu application, backup and deposit ledger monitoring
+After=global-offramp-workspace.service
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/global-offramp/business/runtime.env
+ExecStart=/opt/global-offramp/node/bin/node /opt/global-offramp/business/current/deploy/workspace/health-monitor.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict

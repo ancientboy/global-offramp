@@ -44,6 +44,14 @@ type Data = {
   orders: Order[];
 };
 const errors: Record<string, string> = {
+  MFA_SETUP_REQUIRED: "请先在账户安全中开启二次验证。",
+  MFA_STEP_UP_REQUIRED: "请在账户安全中验证动态码后重试。",
+  PASSWORD_CHANGE_REQUIRED: "请先在账户安全中更换初始密码。",
+  PAYOUTS_PAUSED: "付款处理暂时暂停，请联系管理员。",
+  CUSTOMER_BLOCKED: "该客户资金正在核对，暂不能处理。",
+  UNSAFE_FILE: "回单未通过安全扫描，请更换文件。",
+  SCAN_BUSY: "文件扫描繁忙，请稍后重试。",
+  SCAN_UNAVAILABLE: "文件安全检查暂不可用，请稍后重试。",
   FUNDS_NOT_READY: "订单尚未入金，暂不能登记付款。",
   PAYOUT_LOCKED: "订单状态已变化，或结果仍待核实，请刷新后处理。",
   FORBIDDEN: "当前账号无权处理该订单。",

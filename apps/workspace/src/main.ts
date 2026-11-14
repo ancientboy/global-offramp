@@ -1,3 +1,8 @@
+import { workspaceHeaders } from "./security-headers";
+import { ReceiptScanner } from "./receipt-scanner";
+import { AccountSecurity } from "./account-security";
+import { Funding, bindFundsMode } from "./funding";
+import { NowPayments } from "./nowpayments";
 import { RecipientVault } from "./recipient-vault";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -42,14 +47,74 @@ async function main() {
       );
   }, 15 * 60_000);
   rateTimer.unref();
+  const fundsMode = process.env.WORKSPACE_FUNDS_MODE ?? "sandbox";
+  if (fundsMode !== "sandbox" && fundsMode !== "live")
+    throw Error("Invalid funds mode");
+  const securityKey = process.env.WORKSPACE_SECURITY_KEY_FILE
+    ? await readFile(process.env.WORKSPACE_SECURITY_KEY_FILE)
+    : undefined;
+  const auth = new Auth(pool, store, () => Date.now(), securityKey);
+  const scanner =
+    process.env.WORKSPACE_RECEIPT_SCANNING === "true"
+      ? new ReceiptScanner()
+      : undefined;
+  if (scanner) await scanner.health();
+  if (fundsMode === "live" && !scanner)
+    throw Error("Live uploads require malware scanning");
+  const security = securityKey
+    ? new AccountSecurity(auth, securityKey)
+    : undefined;
+  await bindFundsMode(
+    auth,
+    fundsMode,
+    process.env.WORKSPACE_ENABLE_SIMULATED_TOPUPS === "true",
+  );
+  const paymentsConfigured =
+    !!process.env.NOWPAYMENTS_API_KEY && !!process.env.NOWPAYMENTS_IPN_SECRET;
+  const funding = paymentsConfigured
+    ? new Funding(
+        auth,
+        new NowPayments(
+          process.env.NOWPAYMENTS_API_KEY!,
+          process.env.NOWPAYMENTS_IPN_SECRET!,
+          process.env.NOWPAYMENTS_SANDBOX === "true",
+        ),
+        WORKSPACE_ORIGIN,
+        fundsMode,
+        (process.env.NOWPAYMENTS_NETWORKS ?? "").split(",").filter(Boolean),
+        process.env.WORKSPACE_ENABLE_REAL_DEPOSITS === "true",
+        process.env.WORKSPACE_MAX_DEPOSIT ?? "1000",
+        process.env.WORKSPACE_DAILY_DEPOSIT_LIMIT ?? "5000",
+      )
+    : undefined;
+  if (process.env.WORKSPACE_ENABLE_REAL_DEPOSITS === "true" && !funding)
+    throw Error("NOWPayments configuration required");
+  if (
+    fundsMode === "live" &&
+    (!security || !process.env.WORKSPACE_RECIPIENT_KEY_FILE)
+  )
+    throw Error("Live account security configuration required");
+  const fundingTimer = setInterval(() => {
+    void funding
+      ?.tick()
+      .catch(() => console.error("Deposit reconciliation unavailable"));
+  }, 15000);
+  fundingTimer.unref();
   const app = workspaceApp(
-    new Auth(pool, store),
+    auth,
     new PrivateFiles(WORKSPACE_RECEIPT_DIR),
     WORKSPACE_ORIGIN,
     {
       enableSimulatedTopups:
         process.env.WORKSPACE_ENABLE_SIMULATED_TOPUPS === "true",
       marketRates,
+      security,
+      scanner,
+      funding,
+      fundsMode,
+      payoutsPaused:
+        process.env.WORKSPACE_PAYOUTS_PAUSED !== "false" &&
+        fundsMode === "live",
       recipientVault: process.env.WORKSPACE_RECIPIENT_KEY_FILE
         ? new RecipientVault(
             await readFile(process.env.WORKSPACE_RECIPIENT_KEY_FILE),
@@ -78,9 +143,7 @@ async function main() {
         res.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
-          "x-frame-options": "DENY",
-          "x-content-type-options": "nosniff",
-          "referrer-policy": "same-origin",
+          ...workspaceHeaders(html),
         });
         res.end(req.method === "HEAD" ? undefined : html);
         return;
@@ -139,7 +202,7 @@ async function main() {
       >;
       if (response.headers.getSetCookie().length)
         output["set-cookie"] = response.headers.getSetCookie();
-      output["x-frame-options"] = "DENY";
+      Object.assign(output, workspaceHeaders());
       res.writeHead(response.status, output);
       res.end(Buffer.from(await response.arrayBuffer()));
     } catch {
@@ -168,6 +231,7 @@ async function main() {
     process.on(signal, () =>
       server.close(() => {
         clearInterval(rateTimer);
+        clearInterval(fundingTimer);
         void pool.end();
       }),
     );

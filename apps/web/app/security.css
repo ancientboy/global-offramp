@@ -1,0 +1,94 @@
+/* Account security and private payment information share a compact accessible dialog. */
+.security-launch {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 45;
+  background: #fff;
+  border: 1px solid #cad8d3;
+  border-radius: 24px;
+  padding: 10px 18px;
+  color: #173c38;
+  box-shadow: 0 4px 18px #183a3520;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.security-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: #102e2b66;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  backdrop-filter: blur(4px);
+}
+.security-panel {
+  background: #fffef9;
+  color: #18352f;
+  width: min(100%, 520px);
+  max-height: 90dvh;
+  overflow: auto;
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 18px 80px #102e2b44;
+}
+.security-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.security-panel h2 {
+  margin: 0;
+  font-size: 22px;
+}
+.security-panel h3 {
+  font-size: 17px;
+  margin: 12px 0;
+}
+.security-panel form {
+  display: grid;
+  gap: 12px;
+  padding: 18px 0;
+  border-bottom: 1px solid #e2e8e2;
+}
+.security-panel label {
+  display: grid;
+  gap: 7px;
+  font-size: 14px;
+}
+.security-panel input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #c9d8d0;
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+}
+.security-panel p {
+  font-size: 14px;
+  line-height: 1.65;
+  color: #567069;
+}
+.security-panel button {
+  min-height: 40px;
+}
+.security-secret {
+  display: block;
+  padding: 14px;
+  border: 1px solid #dbe4d9;
+  border-radius: 10px;
+  background: #f2f5ed;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 13px;
+  user-select: all;
+}
+.security-panel .button {
+  justify-self: start;
+}

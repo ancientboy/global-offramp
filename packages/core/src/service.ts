@@ -80,6 +80,7 @@ export class OfframpService {
     public readonly store: Store,
     private readonly clock: () => Date = () => new Date(),
     private readonly config: typeof CONFIG = CONFIG,
+    private readonly fundsMode: "mock" | "live" = "mock",
   ) {
     this.bootstrapPricing = initialPricing(config, clock());
   }
@@ -541,6 +542,11 @@ export class OfframpService {
   }
   /** Synthetic credit only. There is no address, external transfer, or custody integration. */
   async depositWallet(actor: Actor, input: unknown) {
+    demand(
+      this.fundsMode !== "live",
+      "SIMULATED_TOPUPS_DISABLED",
+      "Synthetic credits cannot enter a live ledger",
+    );
     const v = z
       .object({
         customerId: id,
@@ -1042,7 +1048,10 @@ export class OfframpService {
         o.quote.payoutCurrency,
         o.quote.payoutAmount,
         "liability:payout:" + o.id,
-        "asset:provider:mock",
+        this.fundsMode === "live"
+          ? "asset:provider:attested:" +
+              (o.payoutProviderSnapshot?.id ?? "unassigned")
+          : "asset:provider:mock",
         this.clock(),
       );
       for (const [name, value] of [
@@ -1610,7 +1619,10 @@ export class OfframpService {
           o.quote.sourceCurrency,
           o.quote.sourceAmount,
           "liability:order:" + o.id,
-          "asset:custody:mock",
+          this.fundsMode === "live"
+            ? "liability:provider-settlement:" +
+                (o.payoutProviderSnapshot?.id ?? "unassigned")
+            : "asset:custody:mock",
           this.clock(),
         );
         transfer(
@@ -1618,13 +1630,18 @@ export class OfframpService {
           "conversion-target:" + o.id,
           o.quote.payoutCurrency,
           o.quote.payoutAmount,
-          "asset:provider:mock",
+          this.fundsMode === "live"
+            ? "asset:provider:attested:" +
+                (o.payoutProviderSnapshot?.id ?? "unassigned")
+            : "asset:provider:mock",
           "liability:payout:" + o.id,
           this.clock(),
         );
         o.conversionStatus = "recorded";
         o.conversion = {
-          providerReference: "MOCK-ALLOCATION-" + o.id,
+          providerReference:
+            (this.fundsMode === "live" ? "ALLOCATION-" : "MOCK-ALLOCATION-") +
+            o.id,
           actualRate: o.quote.customerRate,
           evidence:
             "Operator recorded manual external allocation; not bank verified",

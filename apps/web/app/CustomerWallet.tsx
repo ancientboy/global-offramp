@@ -1,4 +1,5 @@
 "use client";
+import FundingDialog, { fundingStatus } from "./FundingDialog";
 import { useState } from "react";
 import {
   ArrowLeft,
@@ -25,6 +26,8 @@ export default function CustomerWallet({
   resumeDraft,
   initialCurrency,
   fundsDisabled = false,
+  realFunds = false,
+  fundingPayments = [],
   onTopup,
   onExchange,
   onOrder,
@@ -37,10 +40,14 @@ export default function CustomerWallet({
   resumeDraft: boolean;
   initialCurrency: string;
   fundsDisabled?: boolean;
+  realFunds?: boolean;
+  fundingPayments?: any[];
   onTopup: (currency: string) => void;
   onExchange: (currency: string) => void;
   onOrder: (id: string) => void;
 }) {
+  const [fundingOpen, setFundingOpen] = useState(false);
+  const [activeFunding, setActiveFunding] = useState<any>(null);
   const [currency, setCurrency] = useState(initialCurrency);
   const [history, setHistory] = useState(false);
   const [historyType, setHistoryType] = useState("deposits");
@@ -62,6 +69,16 @@ export default function CustomerWallet({
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return (
     <section className="customer-wallet">
+      {fundingOpen && (
+        <FundingDialog
+          currency={currency}
+          initialPayment={activeFunding}
+          onClose={() => {
+            setFundingOpen(false);
+            window.location.reload();
+          }}
+        />
+      )}
       {history && (
         <button
           className="button text back-link"
@@ -121,9 +138,18 @@ export default function CustomerWallet({
               <button
                 className="button outline"
                 disabled={locked || fundsDisabled}
-                onClick={() => onTopup(currency)}
+                onClick={() =>
+                  realFunds
+                    ? (setActiveFunding(null), setFundingOpen(true))
+                    : onTopup(currency)
+                }
               >
-                <Plus size={18} /> {fundsDisabled ? "充值尚未开放" : "模拟充值"}
+                <Plus size={18} />{" "}
+                {fundsDisabled
+                  ? "充值尚未开放"
+                  : realFunds
+                    ? "充值"
+                    : "模拟充值"}
               </button>
               <button
                 className="button"
@@ -161,7 +187,8 @@ export default function CustomerWallet({
               className={historyType === "deposits" ? "active" : ""}
               onClick={() => setHistoryType("deposits")}
             >
-              模拟充值 <em>{credits.length}</em>
+              {realFunds ? "充值记录" : "模拟充值"}{" "}
+              <em>{realFunds ? fundingPayments.length : credits.length}</em>
             </button>
             <button
               className={historyType === "orders" ? "active" : ""}
@@ -170,7 +197,43 @@ export default function CustomerWallet({
               结汇资金 <em>{funded.length}</em>
             </button>
           </div>
-          {historyType === "deposits" ? (
+          {historyType === "deposits" && realFunds ? (
+            fundingPayments.filter((p) => p.currency === currency).length ? (
+              fundingPayments
+                .filter((p) => p.currency === currency)
+                .map((p) => (
+                  <button
+                    className="fund-record"
+                    key={p.id}
+                    onClick={() => {
+                      setActiveFunding(p);
+                      setFundingOpen(true);
+                    }}
+                  >
+                    <div>
+                      <strong>{fundingStatus(p.status)}</strong>
+                      <small>{date(p.created_at)}</small>
+                    </div>
+                    <div>
+                      <strong>
+                        {money(p.credited_amount ?? p.requested_amount)}{" "}
+                        {p.currency}
+                      </strong>
+                      <small>{p.credited_amount ? "已入账" : "充值申请"}</small>
+                      {p.pay_address && (
+                        <small
+                          style={{ maxWidth: 160, overflowWrap: "anywhere" }}
+                        >
+                          {p.pay_address}
+                        </small>
+                      )}
+                    </div>
+                  </button>
+                ))
+            ) : (
+              <Empty title="暂无充值记录">充值记录将在这里显示。</Empty>
+            )
+          ) : historyType === "deposits" ? (
             credits.length ? (
               credits.map((d) => (
                 <div className="fund-record" key={d.id}>

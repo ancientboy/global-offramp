@@ -1,0 +1,8 @@
+[Unit]
+Description=Huitu encrypted offsite backup
+After=global-offramp-workspace-backup.service
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/global-offramp-offsite-backup
+UMask=0077
