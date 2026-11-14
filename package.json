@@ -13,7 +13,7 @@
     "build:api": "tsc -p tsconfig.build.json",
     "start:api": "node dist/apps/api/src/main.js",
     "start:web": "next start apps/web -p 3000",
-    "test": "node --import tsx --test packages/core/test/*.test.ts apps/api/test/*.test.ts apps/web/test/*.test.ts apps/workspace/test/*.test.ts",
+    "test": "node --import tsx --test --test-concurrency=2 packages/core/test/*.test.ts apps/api/test/*.test.ts apps/web/test/*.test.ts apps/workspace/test/*.test.ts",
     "test:db": "node scripts/db-test.mjs",
     "typecheck": "tsc --noEmit",
     "migrate": "node --import tsx scripts/migrate.ts",
