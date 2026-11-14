@@ -1,4 +1,5 @@
 "use client";
+import AccountMenu from "./AccountMenu";
 import ProviderReceipt, { type ReceiptInfo } from "./ProviderReceipt";
 import { prepareReceipt } from "./receipt-upload";
 import { PortalBrand } from "./Brand";
@@ -256,17 +257,7 @@ export default function ProviderPortal() {
           >
             {busy ? "读取中…" : "刷新订单"}
           </button>
-          <button
-            className="button text"
-            disabled={busy}
-            onClick={() =>
-              void workspace
-                .logout()
-                .catch(() => setError("退出失败，请重试。"))
-            }
-          >
-            退出登录
-          </button>
+          <AccountMenu disabled={busy} onError={setError} />
         </div>
       </header>
       {!selected && error && (

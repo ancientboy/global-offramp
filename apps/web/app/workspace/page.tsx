@@ -162,6 +162,8 @@ export default function Workspace() {
       <WorkspaceContext.Provider
         value={{
           account,
+          openSecurity: () => setSecurityOpen(true),
+          securityStatus,
           expired: () => setAccount(null),
           logout: async () => {
             await authRequest("logout", {});
@@ -169,12 +171,6 @@ export default function Workspace() {
           },
         }}
       >
-        <button
-          className="security-launch"
-          onClick={() => setSecurityOpen(true)}
-        >
-          账户安全
-        </button>
         {(securityOpen ||
           (securityStatus?.enforced &&
             (!securityStatus.passwordChanged ||

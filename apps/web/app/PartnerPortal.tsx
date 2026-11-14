@@ -1,4 +1,5 @@
 "use client";
+import AccountMenu from "./AccountMenu";
 import { PortalBrand } from "./Brand";
 import { useContext, useEffect, useState } from "react";
 import { WorkspaceContext } from "./workspace-context";
@@ -118,17 +119,7 @@ export default function PartnerPortal() {
           >
             {busy ? "读取中…" : "刷新"}
           </button>
-          <button
-            className="button text"
-            disabled={busy}
-            onClick={() =>
-              void workspace
-                .logout()
-                .catch(() => setError("退出失败，请重试。"))
-            }
-          >
-            退出登录
-          </button>
+          <AccountMenu disabled={busy} onError={setError} />
         </div>
       </header>
       {error && (

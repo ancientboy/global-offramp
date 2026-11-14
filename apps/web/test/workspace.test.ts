@@ -30,10 +30,11 @@ function render(a: WorkspaceAccount) {
     ),
   );
 }
-test("workspace customer renders only its own portal and logout, with no demo role picker", () => {
+test("workspace customer renders only its own portal and personal menu, with no demo role picker", () => {
   const html = render(account);
   assert.match(html, /Independent customer/);
-  assert.match(html, /退出/);
+  assert.match(html, /aria-label="个人菜单"/);
+  assert.match(html, /aria-haspopup="menu"/);
   assert.doesNotMatch(html, /MOCK|内测|沙箱|PostgreSQL|MFA|D1/);
   assert.match(html, /商户工作台/);
   assert.doesNotMatch(html, /切换工作台|经营概览|管理后台/);

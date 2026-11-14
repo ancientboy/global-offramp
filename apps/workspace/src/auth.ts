@@ -141,6 +141,7 @@ export interface Account {
   payout_provider_id?: string | null;
   partner_id?: string | null;
   customer_kind?: "personal" | "company";
+  created_at?: Date | string;
 }
 export const publicAccount = (a: Account) => ({
   id: a.id,
@@ -152,6 +153,7 @@ export const publicAccount = (a: Account) => ({
   ...(a.payout_provider_id ? { payoutProviderId: a.payout_provider_id } : {}),
   ...(a.partner_id ? { partnerId: a.partner_id } : {}),
   kind: a.customer_kind,
+  ...(a.created_at ? { createdAt: new Date(a.created_at).toISOString() } : {}),
 });
 export const actorFor = (a: Account): Actor => ({
   id: a.id,
@@ -353,7 +355,7 @@ export class Auth {
   async current(token: string | undefined): Promise<Account> {
     if (!token) throw new HttpError(401, "UNAUTHENTICATED");
     const r = await this.pool.query(
-      `SELECT a.id,a.email,a.username,a.display_name,a.role,a.customer_id,a.payout_provider_id,a.partner_id,c.kind AS customer_kind FROM workspace.sessions s
+      `SELECT a.id,a.email,a.username,a.display_name,a.role,a.customer_id,a.payout_provider_id,a.partner_id,a.created_at,c.kind AS customer_kind FROM workspace.sessions s
       JOIN workspace.accounts a ON a.id=s.account_id LEFT JOIN workspace.customers c ON c.id=a.customer_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>$2 AND a.enabled`,
       [digest(token), new Date(this.now())],
     );

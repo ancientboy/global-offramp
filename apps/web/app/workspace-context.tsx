@@ -11,11 +11,14 @@ export interface WorkspaceAccount {
   payoutProviderId?: string;
   customerId: string | null;
   kind?: "personal" | "company";
+  createdAt?: string;
 }
 export const WorkspaceContext = createContext<{
   account: WorkspaceAccount;
   logout: () => Promise<void>;
   expired: () => void;
+  openSecurity?: () => void;
+  securityStatus?: { mfaEnabled: boolean; passwordChanged: boolean } | null;
 } | null>(null);
 
 /** Authenticated accounts never inherit a role from the demo view switcher. */

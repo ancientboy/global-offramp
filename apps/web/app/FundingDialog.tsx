@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import SelectField from "./SelectField";
 const names: Record<string, string> = {
   creating: "正在创建",
@@ -55,6 +56,7 @@ export default function FundingDialog({
     [network, setNetwork] = useState(""),
     [payment, setPayment] = useState<any>(initialPayment ?? null),
     [error, setError] = useState(""),
+    [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false);
   const key = useRef(crypto.randomUUID()),
     submitted = useRef(false);
@@ -101,6 +103,33 @@ export default function FundingDialog({
   const selected = config?.networks.find(
     (n: any) => n.id === (payment?.pay_currency ?? network),
   );
+  const networkLabel =
+    selected?.label ??
+    (
+      {
+        usdttrc20: "TRON · TRC20",
+        usdtbsc: "BNB Smart Chain · BEP20",
+        usdterc20: "Ethereum · ERC20",
+        usdc: "Ethereum · ERC20",
+        usdcbase: "Base",
+      } as Record<string, string>
+    )[payment?.pay_currency ?? network] ??
+    "网络信息待核对";
+  const canPay =
+    !!payment?.pay_address &&
+    payment.status === "waiting" &&
+    !!config?.enabled &&
+    selected?.asset === currency &&
+    !payment.credited_amount;
+  async function copyAddress() {
+    try {
+      await navigator.clipboard.writeText(payment.pay_address);
+      setNotice("地址已复制。");
+      setError("");
+    } catch {
+      setError("复制失败，请长按充值地址复制。");
+    }
+  }
   return (
     <div className="security-overlay">
       <section
@@ -116,6 +145,7 @@ export default function FundingDialog({
           </button>
         </header>
         {error && <p role="alert">{error}</p>}
+        {notice && <p role="status">{notice}</p>}
         {!payment && config?.enabled && (
           <form onSubmit={submit}>
             <label>
@@ -167,35 +197,62 @@ export default function FundingDialog({
             </p>
             {payment.pay_address && (
               <>
-                <p>网络：{selected?.label ?? payment.pay_currency}</p>
-                <p>
-                  转入金额：
+                <div className="funding-payment-heading">
+                  <strong>{currency}</strong>
+                  <span className="funding-chain">{networkLabel}</span>
+                </div>
+                <p className="funding-pay-amount">
+                  转入金额{" "}
                   <strong>
                     {payment.pay_amount} {currency}
                   </strong>
                 </p>
+                {canPay && (
+                  <div className="funding-qr">
+                    <QRCodeSVG
+                      value={payment.pay_address}
+                      size={216}
+                      marginSize={4}
+                      level="M"
+                      title={`${currency} · ${networkLabel} 充值地址二维码`}
+                      role="img"
+                      aria-label="充值地址二维码"
+                    />
+                    <span>使用钱包扫码，核对币种与网络</span>
+                  </div>
+                )}
                 <label>
                   充值地址
-                  <code className="security-secret">{payment.pay_address}</code>
+                  <code className="security-secret funding-address">
+                    {payment.pay_address}
+                  </code>
                 </label>
                 <button
                   className="button outline"
-                  onClick={() =>
-                    void navigator.clipboard
-                      .writeText(payment.pay_address)
-                      .then(() => setError("地址已复制。"))
-                  }
+                  onClick={() => void copyAddress()}
+                  disabled={!canPay}
                 >
                   复制地址
                 </button>
+                {!canPay && (
+                  <p className="muted small">
+                    {payment.credited_amount
+                      ? "本笔充值已入账，请勿再次转入。"
+                      : ["confirming", "confirmed", "sending"].includes(
+                            payment.status,
+                          )
+                        ? "已检测到付款，请等待入账，勿重复转账。"
+                        : "当前记录不可继续付款，请查看充值状态。"}
+                  </p>
+                )}
                 {payment.extra_id && (
                   <p>
                     Memo / Tag：<code>{payment.extra_id}</code>
                   </p>
                 )}
                 <p>
-                  仅向本地址转入指定网络的 {currency}
-                  ，本地址仅用于本次充值。到账状态将自动更新。
+                  仅转入 {currency} · {networkLabel}
+                  ，请勿使用其他网络。本地址仅用于本次充值，到账状态会自动更新。
                 </p>
               </>
             )}

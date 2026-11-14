@@ -1,0 +1,138 @@
+.account-menu {
+  position: relative;
+  min-width: 0;
+}
+.account-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #d9e4df;
+  border-radius: 12px;
+  background: #fff;
+  color: #163d3c;
+  font: inherit;
+  cursor: pointer;
+  max-width: 230px;
+}
+.account-menu-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+.account-menu-trigger svg {
+  flex-shrink: 0;
+}
+.account-menu-trigger:focus-visible,
+.account-menu-panel button:focus-visible {
+  outline: 2px solid #008d7f;
+  outline-offset: 2px;
+}
+.account-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 110;
+  width: 224px;
+  max-width: calc(100vw - 32px);
+  padding: 8px;
+  border: 1px solid #d9e4df;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 14px 42px #183a3526;
+}
+.account-menu-panel p {
+  font-size: 12px;
+  color: #617775;
+  margin: 6px 10px 10px;
+  overflow-wrap: anywhere;
+}
+.account-menu-panel button {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: none;
+  color: #173d3b;
+  text-align: left;
+  padding: 12px;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.account-menu-panel button:hover {
+  background: #eff5ef;
+}
+.account-menu-panel .account-logout {
+  color: #a04038;
+  border-top: 1px solid #e8eee8;
+  border-radius: 0 0 10px 10px;
+}
+.customer-profile-detail {
+  padding: 26px;
+}
+.customer-profile-detail .details dd {
+  overflow-wrap: anywhere;
+}
+.customer-profile-balances {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 20px 0;
+}
+.customer-profile-balances > div {
+  background: #f2f5ee;
+  border: 1px solid #dce5da;
+  padding: 18px;
+  border-radius: 16px;
+  min-width: 0;
+}
+.customer-profile-balances dl > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 14px;
+}
+.customer-profile-balances dt {
+  color: #617775;
+}
+.customer-profile-balances dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.app.customer-workspace .wallet-primary-actions {
+  flex-wrap: wrap;
+}
+.app.customer-workspace .wallet-primary-actions .button {
+  min-width: 125px;
+}
+@media (max-width: 700px) {
+  .account-menu-trigger {
+    max-width: 180px;
+    font-size: 13px;
+  }
+  .account-menu-trigger span {
+    max-width: 110px;
+  }
+  .customer-profile-detail {
+    padding: 20px;
+  }
+  .customer-profile-balances {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app.customer-workspace .wallet-primary-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .app.customer-workspace .wallet-primary-actions .button {
+    min-width: 0;
+    width: 100%;
+    padding: 10px 6px;
+    gap: 5px;
+    font-size: 13px;
+  }
+}

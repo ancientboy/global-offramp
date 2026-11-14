@@ -1,16 +1,23 @@
 "use client";
 import { useRef, useState } from "react";
+import SelectField from "./SelectField";
 import { money } from "./models";
 import { moneyRequest } from "./money-api";
 export default function RefundDialog({
-  currency,
-  available,
+  currency: initialCurrency,
+  available: initialAvailable,
+  balances,
   onClose,
 }: {
   currency: string;
   available: string;
+  balances?: { currency: string; available: string }[];
   onClose: () => void;
 }) {
+  const [currency, setCurrency] = useState(initialCurrency);
+  const available =
+    balances?.find((b) => b.currency === currency)?.available ??
+    initialAvailable;
   const key = useRef(crypto.randomUUID()),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -51,6 +58,19 @@ export default function RefundDialog({
         </header>
         {error && <p role="alert">{error}</p>}
         <form onSubmit={submit}>
+          {balances && (
+            <label>
+              提现币种
+              <SelectField
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value)}
+                disabled={busy}
+              >
+                <option value="USDT">USDT</option>
+                <option value="USDC">USDC</option>
+              </SelectField>
+            </label>
+          )}
           <p>
             可用余额：{money(available)} {currency}
           </p>

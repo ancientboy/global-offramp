@@ -1,19 +1,4 @@
 /* Account security and private payment information share a compact accessible dialog. */
-.security-launch {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 45;
-  background: #fff;
-  border: 1px solid #cad8d3;
-  border-radius: 24px;
-  padding: 10px 18px;
-  color: #173c38;
-  box-shadow: 0 4px 18px #183a3520;
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-}
 .security-overlay {
   position: fixed;
   inset: 0;
@@ -218,4 +203,52 @@
   margin: 2px 0 0;
   padding: 0;
   accent-color: #007c70;
+}
+
+.funding-payment-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.funding-payment-heading > strong {
+  font-size: 22px;
+}
+.funding-chain {
+  padding: 6px 12px;
+  border: 1px solid #c9ded7;
+  border-radius: 20px;
+  background: #eff6ef;
+  font-size: 13px;
+}
+.funding-pay-amount {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.funding-qr {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin: 20px auto;
+}
+.funding-qr svg {
+  background: white;
+  border: 1px solid #d9e4dc;
+  border-radius: 14px;
+  max-width: 100%;
+  height: auto;
+}
+.funding-qr span {
+  font-size: 12px;
+  color: #607773;
+}
+.security-panel .funding-address {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  user-select: all;
 }

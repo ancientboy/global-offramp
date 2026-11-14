@@ -44,6 +44,8 @@ import AdminCustomers from "./AdminCustomers";
 import FundingAdmin from "./FundingAdmin";
 import CustomerWallet from "./CustomerWallet";
 import PartnerAdminPanel from "./PartnerAdminPanel";
+import AccountMenu from "./AccountMenu";
+import CustomerProfile from "./CustomerProfile";
 import Brand from "./Brand";
 import CustomerOrders from "./CustomerOrders";
 import "./exchange-flow.css";
@@ -262,6 +264,7 @@ export default function Home() {
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState("single");
   const [profileTab, setProfileTab] = useState("home");
+  const [withdrawalRequest, setWithdrawalRequest] = useState(0);
   const [recipientSearch, setRecipientSearch] = useState("");
   const [recipientForm, setRecipientForm] = useState<{
     currency: string;
@@ -2124,17 +2127,25 @@ export default function Home() {
           <div className="top-actions">
             {workspace ? (
               <>
-                <span>{workspace.account.name}</span>
-                <button
-                  className="button text"
-                  onClick={() =>
-                    void workspace
-                      .logout()
-                      .catch(() => setError("退出失败，请重试"))
+                <AccountMenu
+                  onError={setError}
+                  onProfile={
+                    role === "customer"
+                      ? () => {
+                          go("profile");
+                          setProfileTab("details");
+                        }
+                      : undefined
                   }
-                >
-                  退出
-                </button>
+                  onWithdraw={
+                    role === "customer"
+                      ? () => {
+                          go("wallet");
+                          setWithdrawalRequest((v) => v + 1);
+                        }
+                      : undefined
+                  }
+                />
               </>
             ) : (
               <>
@@ -2231,6 +2242,8 @@ export default function Home() {
               )}
               {page === "wallet" && role === "customer" && (
                 <CustomerWallet
+                  withdrawalRequest={withdrawalRequest}
+                  onWithdrawalOpened={() => setWithdrawalRequest(0)}
                   fundsDisabled={
                     !!workspace &&
                     !health?.simulatedTopupsEnabled &&
@@ -2294,12 +2307,16 @@ export default function Home() {
                         </div>
                         <ArrowRight size={19} />
                       </button>
-                      <button onClick={() => setProfileTab("certification")}>
+                      <button
+                        onClick={() =>
+                          setProfileTab(workspace ? "details" : "certification")
+                        }
+                      >
                         <span className="circle-icon">
                           <User size={24} />
                         </span>
                         <div>
-                          <strong>账户资料</strong>
+                          <strong>用户详情</strong>
                           <small>
                             查看{actor === "company-demo" ? "企业" : "个人"}
                             资料与账户状态
@@ -2307,13 +2324,19 @@ export default function Home() {
                         </div>
                         <ArrowRight size={19} />
                       </button>
-                      <button onClick={() => setProfileTab("security")}>
+                      <button
+                        onClick={() =>
+                          workspace
+                            ? workspace.openSecurity?.()
+                            : setProfileTab("security")
+                        }
+                      >
                         <span className="circle-icon">
                           <Lock size={24} />
                         </span>
                         <div>
-                          <strong>安全与隐私</strong>
-                          <small>登录与资料管理</small>
+                          <strong>账户安全</strong>
+                          <small>登录密码与二次验证</small>
                         </div>
                         <ArrowRight size={19} />
                       </button>
@@ -2341,9 +2364,23 @@ export default function Home() {
                           ? "收款人管理"
                           : profileTab === "security"
                             ? "安全与隐私"
-                            : "账户资料"}
+                            : profileTab === "details"
+                              ? "用户详情"
+                              : "账户资料"}
                       </h2>
                     </div>
+                  )}
+                  {profileTab === "details" && workspace && (
+                    <CustomerProfile
+                      customer={currentCustomer}
+                      balances={data?.walletBalances ?? []}
+                      orderCount={
+                        orders.filter(
+                          (o) => o.customerId === workspace.account.customerId,
+                        ).length
+                      }
+                      recipientCount={beneficiaries.length}
+                    />
                   )}
                   {profileTab === "security" && (
                     <section className="card security-summary">

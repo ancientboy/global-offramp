@@ -2,7 +2,7 @@
 import RefundDialog from "./RefundDialog";
 import { moneyRequest, movementLabels } from "./money-api";
 import FundingDialog, { fundingStatus } from "./FundingDialog";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -36,6 +36,8 @@ export default function CustomerWallet({
   onTopup,
   onExchange,
   onOrder,
+  withdrawalRequest = 0,
+  onWithdrawalOpened,
 }: {
   balances: WalletBalance[];
   deposits: WalletDeposit[];
@@ -53,6 +55,8 @@ export default function CustomerWallet({
   onTopup: (currency: string) => void;
   onExchange: (currency: string) => void;
   onOrder: (id: string) => void;
+  withdrawalRequest?: number;
+  onWithdrawalOpened?: () => void;
 }) {
   const [refundOpen, setRefundOpen] = useState(false),
     [refundError, setRefundError] = useState(""),
@@ -72,6 +76,13 @@ export default function CustomerWallet({
       setCancelling("");
     }
   }
+  useEffect(() => {
+    if (withdrawalRequest > 0 && moneyEnabled) {
+      setHistory(false);
+      setRefundOpen(true);
+      onWithdrawalOpened?.();
+    }
+  }, [withdrawalRequest, moneyEnabled, onWithdrawalOpened]);
   const [fundingOpen, setFundingOpen] = useState(false);
   const [activeFunding, setActiveFunding] = useState<any>(null);
   const [currency, setCurrency] = useState(initialCurrency);
@@ -97,6 +108,7 @@ export default function CustomerWallet({
     <section className="customer-wallet">
       {refundOpen && (
         <RefundDialog
+          balances={balances}
           currency={currency}
           available={balance?.available ?? "0"}
           onClose={() => {
@@ -189,6 +201,15 @@ export default function CustomerWallet({
                     ? "充值"
                     : "模拟充值"}
               </button>
+              {moneyEnabled && (
+                <button
+                  className="button outline"
+                  disabled={locked}
+                  onClick={() => setRefundOpen(true)}
+                >
+                  提现
+                </button>
+              )}
               <button
                 className="button"
                 disabled={locked}
@@ -199,15 +220,6 @@ export default function CustomerWallet({
               </button>
             </div>
           </div>
-          {moneyEnabled && (
-            <button
-              className="link wallet-refund-link"
-              disabled={locked}
-              onClick={() => setRefundOpen(true)}
-            >
-              申请提现
-            </button>
-          )}
           {resumeDraft && (
             <p className="draft-hint" role="status">
               草稿已保留，充值后返回将重新获取报价。

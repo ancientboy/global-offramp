@@ -20,6 +20,48 @@ try {
   });
   if (!r.ok || (await r.json()).status !== "ok")
     await alert("health.application_unavailable");
+  try {
+    const liveEnv = await readFile(
+        "/etc/global-offramp/live/runtime.env",
+        "utf8",
+      ),
+      line = liveEnv
+        .split(/\r?\n/)
+        .find((v) => v.startsWith("WORKSPACE_DATABASE_URL="));
+    if (line) {
+      const response = await fetch(
+          "http://172.18.0.1:4183/workspace/api/health",
+          { signal: AbortSignal.timeout(5000) },
+        ),
+        h = await response.json();
+      if (
+        !response.ok ||
+        h.status !== "ok" ||
+        h.fundsMode !== "live" ||
+        h.simulatedTopupsEnabled
+      )
+        await alert("live.application_unavailable");
+      const livePool = new Pool({
+        connectionString: line.slice("WORKSPACE_DATABASE_URL=".length),
+        max: 1,
+        statement_timeout: 10000,
+      });
+      try {
+        const mismatch = await livePool.query(
+          `SELECT COALESCE(p.currency,l.currency) currency FROM (SELECT currency,sum(credited_amount) n FROM workspace.funding_payments GROUP BY currency) p FULL JOIN (SELECT currency,sum(debit) n FROM runtime.ledger_lines WHERE account='asset:treasury:nowpayments' GROUP BY currency) l USING(currency) WHERE COALESCE(p.n,0)<>COALESCE(l.n,0)`,
+        );
+        if (mismatch.rows.length) await alert("live.funding.ledger_mismatch");
+        const held = await livePool.query(
+          `SELECT COALESCE(m.currency,l.currency) currency FROM (SELECT currency,sum(amount) n FROM workspace.money_movements WHERE status IN ('requested','approved') GROUP BY currency) m FULL JOIN (SELECT currency,sum(credit-debit) n FROM runtime.ledger_lines WHERE account LIKE 'liability:movement:%' GROUP BY currency) l USING(currency) WHERE COALESCE(m.n,0)<>COALESCE(l.n,0)`,
+        );
+        if (held.rows.length) await alert("live.money.reservation_mismatch");
+      } finally {
+        await livePool.end();
+      }
+    }
+  } catch (e) {
+    if (e.code !== "ENOENT") await alert("live.monitor_unavailable");
+  }
   const root = "/var/backups/global-offramp/business",
     dirs = await readdir(root);
   const times = [];
