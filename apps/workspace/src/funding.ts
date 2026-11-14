@@ -48,8 +48,8 @@ export class Funding {
     readonly mode: FundsMode,
     readonly enabledNetworks: string[],
     readonly enabled = false,
-    readonly maxDeposit = "1000",
-    readonly dailyLimit = "5000",
+    readonly maxDeposit: string | null = null,
+    readonly dailyLimit: string | null = null,
   ) {
     this.networks = DEPOSIT_NETWORKS.filter((n) =>
       enabledNetworks.includes(n.id),
@@ -92,7 +92,7 @@ export class Funding {
       .object({
         currency: z.enum(["USDT", "USDC"]),
         network: z.string(),
-        amount: z.string().regex(/^\d{1,7}(\.\d{1,6})?$/),
+        amount: z.string().regex(/^\d{1,18}(\.\d{1,6})?$/),
         idempotencyKey: z.string().regex(/^[a-zA-Z0-9_-]{8,100}$/),
       })
       .strict()
@@ -103,7 +103,8 @@ export class Funding {
     if (!n) throw new HttpError(400, "UNSUPPORTED_NETWORK");
     const amount = decimal6(v.amount),
       count = units(amount, 6);
-    if (count <= 0n || count > units(this.maxDeposit, 6))
+    if (count <= 0n) throw new HttpError(400, "INVALID_AMOUNT");
+    if (this.maxDeposit !== null && count > units(this.maxDeposit, 6))
       throw new HttpError(400, "DEPOSIT_LIMIT_EXCEEDED");
     const existing = (
       await this.auth.pool.query(
@@ -131,15 +132,17 @@ export class Funding {
           )
         )
           throw new HttpError(403, "CUSTOMER_NOT_APPROVED");
-        // Global state lock serializes reservations and makes the rolling limit atomic.
-        const totals = (
-          await c.query(
-            "SELECT COALESCE(sum(requested_amount),0)::text AS total FROM workspace.funding_payments WHERE account_id=$1 AND created_at>$2",
-            [account.id, new Date(this.auth.now() - 86400000)],
-          )
-        ).rows[0];
-        if (units(totals.total, 6) + count > units(this.dailyLimit, 6))
-          throw new HttpError(429, "DAILY_DEPOSIT_LIMIT");
+        if (this.dailyLimit !== null) {
+          // Global state lock serializes reservations and makes the rolling limit atomic.
+          const totals = (
+            await c.query(
+              "SELECT COALESCE(sum(requested_amount),0)::text AS total FROM workspace.funding_payments WHERE account_id=$1 AND created_at>$2",
+              [account.id, new Date(this.auth.now() - 86400000)],
+            )
+          ).rows[0];
+          if (units(totals.total, 6) + count > units(this.dailyLimit, 6))
+            throw new HttpError(429, "DAILY_DEPOSIT_LIMIT");
+        }
         await c.query(
           "INSERT INTO workspace.funding_payments(id,account_id,customer_id,idempotency_key,currency,pay_currency,requested_amount) VALUES($1,$2,$3,$4,$5,$6,$7)",
           [
@@ -305,7 +308,8 @@ export class Funding {
             amount = decimal6(p.outcome_amount);
             if (
               units(amount, 6) <= 0n ||
-              units(amount, 6) > units(this.maxDeposit, 6)
+              (this.maxDeposit !== null &&
+                units(amount, 6) > units(this.maxDeposit, 6))
             )
               review = "SETTLEMENT_AMOUNT_REVIEW";
           } catch {

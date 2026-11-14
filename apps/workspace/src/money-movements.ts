@@ -18,7 +18,7 @@ const inputSchema = z
   .object({
     currency: z.enum(["USDT", "USDC"]),
     network: z.enum(["usdttrc20", "usdcbase"]),
-    amount: z.string().regex(/^\d{1,7}(\.\d{1,6})?$/),
+    amount: z.string().regex(/^\d{1,18}(\.\d{1,6})?$/),
     destination: z.string().trim().max(100),
     reason: z.string().trim().min(3).max(300),
     idempotencyKey: z.string().regex(/^[A-Za-z0-9_-]{8,100}$/),
@@ -33,8 +33,8 @@ export class MoneyMovements {
     readonly auth: Auth,
     readonly chain: ChainTransfers,
     readonly mode: "sandbox" | "live",
-    readonly maxAmount = "1000",
-    readonly dailyLimit = "5000",
+    readonly maxAmount: string | null = null,
+    readonly dailyLimit: string | null = null,
   ) {}
   private admin(a: Account) {
     if (a.role !== "merchant_admin") throw new HttpError(403, "FORBIDDEN");
@@ -111,7 +111,8 @@ export class MoneyMovements {
       this.chain.treasury[v.network].includes(destination)
     )
       throw new HttpError(400, "INVALID_WALLET_ADDRESS");
-    if (value <= 0n || value > units(this.maxAmount, 6))
+    if (value <= 0n) throw new HttpError(400, "INVALID_AMOUNT");
+    if (this.maxAmount !== null && value > units(this.maxAmount, 6))
       throw new HttpError(400, "MOVEMENT_LIMIT_EXCEEDED");
     return this.auth.store.transactionWithClient(async (s, c) => {
       const prior = (
@@ -147,14 +148,16 @@ export class MoneyMovements {
         )
       )
         throw new HttpError(400, "PROVIDER_UNAVAILABLE");
-      const total = (
-        await c.query(
-          "SELECT COALESCE(sum(amount),0)::text AS total FROM workspace.money_movements WHERE requested_by=$1 AND created_at>$2 AND status NOT IN ('cancelled','rejected')",
-          [a.id, new Date(this.auth.now() - 86400000)],
-        )
-      ).rows[0].total;
-      if (units(total, 6) + value > units(this.dailyLimit, 6))
-        throw new HttpError(429, "DAILY_MOVEMENT_LIMIT");
+      if (this.dailyLimit !== null) {
+        const total = (
+          await c.query(
+            "SELECT COALESCE(sum(amount),0)::text AS total FROM workspace.money_movements WHERE requested_by=$1 AND created_at>$2 AND status NOT IN ('cancelled','rejected')",
+            [a.id, new Date(this.auth.now() - 86400000)],
+          )
+        ).rows[0].total;
+        if (units(total, 6) + value > units(this.dailyLimit, 6))
+          throw new HttpError(429, "DAILY_MOVEMENT_LIMIT");
+      }
       const id = "HTMOVE-" + randomUUID(),
         row = {
           id,

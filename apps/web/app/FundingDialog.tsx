@@ -31,6 +31,7 @@ async function request(path: string, body?: unknown) {
   const v = await r.json();
   if (!r.ok) {
     const errors: Record<string, string> = {
+      INVALID_AMOUNT: "请输入大于零的充值金额。",
       BELOW_DEPOSIT_MINIMUM: "金额低于该网络的最低充值额，请增加金额。",
       DEPOSIT_LIMIT_EXCEEDED: "金额超过当前单笔充值限额。",
       DAILY_DEPOSIT_LIMIT: "已达到今日充值限额。",
@@ -176,8 +177,12 @@ export default function FundingDialog({
               />
             </label>
             <p>
-              按实际结算净额入账，手续费可能从充值中扣除。单笔最高{" "}
-              {config.maxDeposit} {currency}。
+              按实际结算净额入账，手续费可能从充值中扣除。
+              {config.maxDeposit && (
+                <>
+                  单笔最高 {config.maxDeposit} {currency}。
+                </>
+              )}
             </p>
             <button
               className="button"

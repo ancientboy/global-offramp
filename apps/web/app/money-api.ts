@@ -8,6 +8,7 @@ export const movementLabels: Record<string, string> = {
 const messages: Record<string, string> = {
   MFA_SETUP_REQUIRED: "请先在账户安全中绑定验证器。",
   MFA_STEP_UP_REQUIRED: "请在账户安全中验证动态码后重试。",
+  INVALID_AMOUNT: "请输入大于零的金额。",
   INSUFFICIENT_BALANCE: "可用余额不足。",
   INVALID_WALLET_ADDRESS: "钱包地址或校验码不正确，请核对网络和地址。",
   MOVEMENT_LIMIT_EXCEEDED: "金额超出单笔限额。",

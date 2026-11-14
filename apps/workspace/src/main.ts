@@ -85,8 +85,6 @@ async function main() {
         fundsMode,
         (process.env.NOWPAYMENTS_NETWORKS ?? "").split(",").filter(Boolean),
         process.env.WORKSPACE_ENABLE_REAL_DEPOSITS === "true",
-        process.env.WORKSPACE_MAX_DEPOSIT ?? "1000",
-        process.env.WORKSPACE_DAILY_DEPOSIT_LIMIT ?? "5000",
       )
     : undefined;
   if (process.env.WORKSPACE_ENABLE_REAL_DEPOSITS === "true" && !funding)
