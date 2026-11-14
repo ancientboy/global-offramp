@@ -17,21 +17,53 @@ export class TronDeposits {
     readonly apiKey = "",
     readonly fetcher: typeof fetch = fetch,
   ) {}
-  private async request(path: string, body?: unknown): Promise<any> {
-    const r = await this.fetcher("https://api.trongrid.io" + path, {
-      method: body === undefined ? "GET" : "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(this.apiKey ? { "TRON-PRO-API-KEY": this.apiKey } : {}),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(12000),
-      redirect: "error",
+  private requestGate: Promise<void> = Promise.resolve();
+  private lastRequest = 0;
+  private async pace() {
+    const slot = this.requestGate.then(async () => {
+      const delay = this.lastRequest + (this.apiKey ? 200 : 1100) - Date.now();
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      this.lastRequest = Date.now();
     });
-    if (!r.ok) throw Error("TRON read unavailable");
-    const data = await r.json();
-    if (data.Error || data.success === false) throw Error("TRON read rejected");
-    return data;
+    this.requestGate = slot.catch(() => {});
+    await slot;
+  }
+  private async request(path: string, body?: unknown): Promise<any> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await this.pace();
+      try {
+        const r = await this.fetcher("https://api.trongrid.io" + path, {
+          method: body === undefined ? "GET" : "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(this.apiKey ? { "TRON-PRO-API-KEY": this.apiKey } : {}),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          signal: AbortSignal.timeout(12000),
+          redirect: "error",
+        });
+        if (!r.ok) {
+          // Retries are read-only. Never replay a business write or advance a scan cursor here.
+          if ((r.status === 429 || r.status >= 500) && attempt < 2) {
+            await r.body?.cancel();
+            await new Promise((resolve) =>
+              setTimeout(resolve, (attempt + 1) * 1500),
+            );
+            continue;
+          }
+          throw new TronReadError(r.status);
+        }
+        const data = await r.json();
+        if (data.Error || data.success === false) throw new TronReadError(200);
+        return data;
+      } catch (e) {
+        if (e instanceof TronReadError || attempt === 2) throw e;
+        await new Promise((resolve) =>
+          setTimeout(resolve, (attempt + 1) * 1500),
+        );
+      }
+    }
+    throw new Error("TRON read unavailable");
   }
   async solidTime() {
     const b = await this.request("/walletsolidity/getnowblock", {});
@@ -144,5 +176,11 @@ export class TronDeposits {
       });
     }
     return transfers;
+  }
+}
+
+class TronReadError extends Error {
+  constructor(status: number) {
+    super("TRON read unavailable (" + status + ")");
   }
 }

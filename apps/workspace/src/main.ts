@@ -90,7 +90,7 @@ async function main() {
     (!security || !process.env.WORKSPACE_RECIPIENT_KEY_FILE)
   )
     throw Error("Live account security configuration required");
-  await funding.tick().catch(() => console.error("Deposit monitor warming up"));
+  void funding.tick().catch(() => console.error("Deposit monitor warming up"));
   const fundingTimer = setInterval(() => {
     void funding
       ?.tick()

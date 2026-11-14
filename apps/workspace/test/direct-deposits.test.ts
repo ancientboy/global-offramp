@@ -428,3 +428,32 @@ test("USDT-only runtime rejects stale USDC quotes, CSV imports and withdrawals w
     await f.db.close();
   }
 });
+
+test("read-only TRON requests pace bursts, retry throttling and never treat failed reads as confirmed data", async () => {
+  let attempts = 0;
+  const times: number[] = [];
+  const c = new TronDeposits("", async () => {
+    times.push(Date.now());
+    attempts++;
+    return attempts === 1
+      ? Response.json({ error: "limited" }, { status: 429 })
+      : Response.json({
+          blockID: "ab".repeat(32),
+          block_header: { raw_data: { timestamp: Date.now() } },
+        });
+  });
+  assert(await c.solidTime());
+  assert.equal(attempts, 2);
+  assert(times[1] - times[0] >= 1400);
+  let denied = 0;
+  const d = new TronDeposits("", async () => {
+    denied++;
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  });
+  await assert.rejects(d.solidTime(), /401/);
+  assert.equal(denied, 1);
+  const failures = new TronDeposits("", async () =>
+    Response.json({ error: "unavailable" }, { status: 503 }),
+  );
+  await assert.rejects(failures.solidTime(), /503/);
+});
