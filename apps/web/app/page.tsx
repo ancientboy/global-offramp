@@ -2222,7 +2222,8 @@ export default function Home() {
               )}
               {page === "funds" && workspace && role === "admin" && (
                 <FundingAdmin
-                  onOpenOrder={(id) => {
+                  onOpenOrder={async (id) => {
+                    await reload();
                     setSelected(id);
                     go("detail");
                   }}
@@ -3940,7 +3941,8 @@ export default function Home() {
                         .then(setRecipientDetails)
                         .catch((e) => setError(errorText(e)));
                     }}
-                    onOpenOrder={(id) => {
+                    onOpenOrder={async (id) => {
+                      await reload();
                       setSelected(id);
                       go("detail");
                     }}
