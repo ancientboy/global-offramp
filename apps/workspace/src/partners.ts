@@ -157,7 +157,33 @@ export async function partnerDashboard(
   const core = new OfframpService(auth.store, () => new Date(auth.now())),
     state = await auth.store.read(),
     dashboard = await core.dashboard(actorFor(account));
+  const funded = new Set(
+    (
+      await auth.pool.query(
+        "SELECT DISTINCT f.customer_id FROM workspace.funding_payments f JOIN workspace.customer_attributions a ON a.customer_id=f.customer_id WHERE a.partner_id=$1 AND f.credited_amount>0",
+        [p.id],
+      )
+    ).rows.map((r) => r.customer_id),
+  );
+  for (const a of state.audits)
+    if (
+      a.action === "wallet.deposited" &&
+      typeof a.data.customerId === "string"
+    )
+      funded.add(a.data.customerId);
+  const completed = new Set(
+    state.orders
+      .filter(
+        (o) => o.payoutStatus === "sent" && (!!o.completion || o.reconciled),
+      )
+      .map((o) => o.customerId),
+  );
   return {
+    funnel: {
+      registered: attributed.length,
+      funded: attributed.filter((r) => funded.has(r.customer_id)).length,
+      completed: attributed.filter((r) => completed.has(r.customer_id)).length,
+    },
     partner: {
       id: p.id,
       name: p.name,

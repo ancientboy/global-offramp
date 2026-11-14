@@ -37,6 +37,7 @@ export async function moneyRequest(path: string, body?: unknown) {
     method: body === undefined ? "GET" : "POST",
     credentials: "same-origin",
     cache: "no-store",
+    signal: AbortSignal.timeout(15000),
     headers: { "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });

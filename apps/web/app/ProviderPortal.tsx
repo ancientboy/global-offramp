@@ -1,5 +1,6 @@
 "use client";
 import AccountMenu from "./AccountMenu";
+import { providerQueue } from "./experience-models";
 import ProviderReceipt, { type ReceiptInfo } from "./ProviderReceipt";
 import { prepareReceipt } from "./receipt-upload";
 import { PortalBrand } from "./Brand";
@@ -68,17 +69,14 @@ const errors: Record<string, string> = {
   PROVIDER_UNAVAILABLE: "服务商已停用，请联系管理员。",
 };
 const status = (o: Order) =>
-  o.payoutStatus === "draft"
-    ? o.depositStatus === "confirmed"
-      ? "待处理"
-      : "待入金"
-    : o.payoutStatus === "sent"
-      ? "已登记付款"
-      : o.payoutStatus === "unknown"
-        ? "待核实"
-        : o.payoutStatus === "cancelled"
-          ? "已取消"
-          : undefined;
+  ({
+    ready: "可付款",
+    waiting: "等待平台确认",
+    sent: "已登记付款",
+    unknown: "待核实",
+    cancelled: "已取消",
+    failed: "付款未完成",
+  })[providerQueue(o)] ?? "处理中";
 const pending = (o: Order) =>
   ["draft", "approved", "awaiting_approval"].includes(o.payoutStatus);
 export default function ProviderPortal() {
@@ -87,7 +85,7 @@ export default function ProviderPortal() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
-    [filter, setFilter] = useState("pending"),
+    [filter, setFilter] = useState("ready"),
     [selected, setSelected] = useState<Order | null>(null),
     [action, setAction] = useState<"sent" | "unknown" | null>(null);
   const [reference, setReference] = useState(""),
@@ -105,6 +103,7 @@ export default function ProviderPortal() {
       method: body === undefined ? "GET" : "POST",
       credentials: "same-origin",
       cache: "no-store",
+      signal: AbortSignal.timeout(15000),
       headers: { "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
@@ -117,20 +116,34 @@ export default function ProviderPortal() {
       throw Error(errors[result.error] ?? "操作未完成，请刷新订单后重试。");
     return result;
   }
-  async function load() {
-    setBusy(true);
+  async function load(silent = false) {
+    if (!silent) setBusy(true);
     setError("");
     try {
       setData(await request("dashboard"));
     } catch (e) {
       setError(e instanceof Error ? e.message : "读取失败");
     } finally {
-      setBusy(false);
+      if (!silent) setBusy(false);
     }
   }
   useEffect(() => {
     void load();
   }, []);
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!document.hidden && !selected && !inFlight.current) void load(true);
+    }, 30000);
+    return () => clearInterval(t);
+  }, [!!selected]);
+  async function copy(value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setNotice("已复制");
+    } catch {
+      setError("复制失败，请选中文字复制。");
+    }
+  }
   async function open(order: Order) {
     setError("");
     setNotice("");
@@ -190,8 +203,7 @@ export default function ProviderPortal() {
       setSelected(order);
       setData(await request("dashboard"));
       setAction(null);
-      if (filter === "pending")
-        setFilter(action === "sent" ? "sent" : "unknown");
+      if (filter === "ready") setFilter(action === "sent" ? "sent" : "unknown");
       setNotice(
         action === "sent"
           ? "付款结果已登记，订单状态已更新。"
@@ -223,7 +235,7 @@ export default function ProviderPortal() {
       );
       setSelected(order);
       setData(await request("dashboard"));
-      if (filter === "pending") setFilter("sent");
+      if (filter === "ready") setFilter("sent");
       setNotice("回单已保存。");
     } catch (e) {
       setError(e instanceof Error ? e.message : "上传失败");
@@ -233,11 +245,7 @@ export default function ProviderPortal() {
     }
   }
   const rows = (data?.orders ?? [])
-    .filter(
-      (o) =>
-        filter === "all" ||
-        (filter === "pending" ? pending(o) : o.payoutStatus === filter),
-    )
+    .filter((o) => filter === "all" || providerQueue(o) === filter)
     .slice()
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return (
@@ -274,12 +282,25 @@ export default function ProviderPortal() {
         <>
           <section className="provider-summary">
             <div className="card">
-              <span>待处理订单</span>
-              <strong>{data.orders.filter(pending).length}</strong>
+              <span>可付款订单</span>
+              <strong>
+                {data.orders.filter((o) => providerQueue(o) === "ready").length}
+              </strong>
+              <button className="link" onClick={() => setFilter("ready")}>
+                立即处理
+              </button>
             </div>
             <div className="card">
-              <span>支持币种</span>
-              <strong>{data.provider.routes.join(" · ")}</strong>
+              <span>等待平台确认</span>
+              <strong>
+                {
+                  data.orders.filter((o) => providerQueue(o) === "waiting")
+                    .length
+                }
+              </strong>
+              <button className="link" onClick={() => setFilter("waiting")}>
+                查看等待订单
+              </button>
             </div>
             <div className="card">
               <span>待核实订单</span>
@@ -297,7 +318,8 @@ export default function ProviderPortal() {
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                 >
-                  <option value="pending">待处理</option>
+                  <option value="ready">可付款</option>
+                  <option value="waiting">等待平台确认</option>
                   <option value="unknown">待核实</option>
                   <option value="sent">已登记付款</option>
                   <option value="cancelled">已取消</option>
@@ -351,7 +373,7 @@ export default function ProviderPortal() {
                             disabled={busy}
                             onClick={() => void open(o)}
                           >
-                            {pending(o) ? "查看 / 处理" : "查看详情"}
+                            {o.canRecordPayment ? "查看 / 处理" : "查看详情"}
                           </button>
                         </td>
                       </tr>
@@ -361,7 +383,7 @@ export default function ProviderPortal() {
               </div>
             ) : (
               <div className="provider-empty">
-                <h3>暂无{filter === "pending" ? "待处理" : "该状态"}订单</h3>
+                <h3>暂无{filter === "ready" ? "可付款" : "该状态"}订单</h3>
                 <p>订单状态更新后，可刷新列表查看。</p>
               </div>
             )}
@@ -387,6 +409,12 @@ export default function ProviderPortal() {
                   <strong>
                     {money(selected.payoutAmount)} {selected.payoutCurrency}
                   </strong>
+                  <button
+                    className="button text copy-field"
+                    onClick={() => void copy(selected.payoutAmount)}
+                  >
+                    复制金额
+                  </button>
                 </dd>
               </div>
               <div>
@@ -441,6 +469,15 @@ export default function ProviderPortal() {
                           {OPTION_NAMES[
                             selected.recipientDetails!.fields[f.id]
                           ] ?? selected.recipientDetails!.fields[f.id]}
+                          <button
+                            className="button text copy-field"
+                            aria-label={"复制" + f.label}
+                            onClick={() =>
+                              void copy(selected.recipientDetails!.fields[f.id])
+                            }
+                          >
+                            复制
+                          </button>
                         </dd>
                       </div>
                     ))}
@@ -551,7 +588,7 @@ export default function ProviderPortal() {
                       : "当前付款结果仍需核实，不会重复发起付款。"}
                   </span>
                 </label>
-                <div className="actions">
+                <div className="actions sticky-actions">
                   <button
                     type="button"
                     className="button outline"
@@ -576,7 +613,7 @@ export default function ProviderPortal() {
             ) : (
               <>
                 {selected.canRecordPayment ? (
-                  <div className="actions">
+                  <div className="actions sticky-actions">
                     <button
                       className="button"
                       disabled={busy}
@@ -598,7 +635,13 @@ export default function ProviderPortal() {
                   </p>
                 ) : pending(selected) ? (
                   <p className="note">
-                    入金尚未确认或余额未冻结，暂不能登记付款。请联系管理员核对。
+                    订单尚不满足付款条件，正在等待平台确认。请将订单号提供给管理员核对，勿提前付款。
+                    <button
+                      className="button text"
+                      onClick={() => void copy(selected.orderNumber)}
+                    >
+                      复制订单号
+                    </button>
                   </p>
                 ) : null}
                 {selected.payoutStatus === "sent" && (

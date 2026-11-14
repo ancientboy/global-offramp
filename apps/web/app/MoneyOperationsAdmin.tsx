@@ -3,7 +3,13 @@ import { useEffect, useState, useRef } from "react";
 import { money, date } from "./models";
 import SelectField from "./SelectField";
 import { moneyRequest, movementLabels } from "./money-api";
-export default function MoneyOperationsAdmin() {
+export default function MoneyOperationsAdmin({
+  kind = "refund",
+}: {
+  kind?: "refund" | "provider_settlement";
+}) {
+  const [page, setPage] = useState(1);
+  const [showHistory, setShowHistory] = useState(false);
   const createKey = useRef(crypto.randomUUID());
   const [providerId, setProviderId] = useState("");
   const [data, setData] = useState<any>(null),
@@ -15,7 +21,9 @@ export default function MoneyOperationsAdmin() {
     [currency, setCurrency] = useState("USDT");
   async function load() {
     const [d, r] = await Promise.all([
-      moneyRequest("admin/money"),
+      moneyRequest(
+        `admin/money?kind=${kind}&history=${showHistory}&page=${page}`,
+      ),
       moneyRequest("admin/money/report"),
     ]);
     setData(d);
@@ -23,7 +31,7 @@ export default function MoneyOperationsAdmin() {
   }
   useEffect(() => {
     void load().catch((e) => setError(e.message));
-  }, []);
+  }, [kind, showHistory, page]);
   async function open(r: any) {
     setSelected(r);
     setCreate(false);
@@ -68,19 +76,21 @@ export default function MoneyOperationsAdmin() {
   return (
     <section className="card money-admin">
       <div className="card-heading">
-        <h2>提现与服务商结算</h2>
+        <h2>{kind === "refund" ? "提现审批" : "服务商结算"}</h2>
         <div>
-          <button
-            className="button outline"
-            onClick={() => {
-              createKey.current = crypto.randomUUID();
-              setProviderId(data?.payables?.[0]?.providerId ?? "");
-              setCreate(true);
-              setSelected(null);
-            }}
-          >
-            新建服务商结算
-          </button>
+          {kind === "provider_settlement" && (
+            <button
+              className="button outline"
+              onClick={() => {
+                createKey.current = crypto.randomUUID();
+                setProviderId(data?.payables?.[0]?.providerId ?? "");
+                setCreate(true);
+                setSelected(null);
+              }}
+            >
+              新建服务商结算
+            </button>
+          )}
           <button
             className="button text"
             onClick={() => void load().catch((e) => setError(e.message))}
@@ -90,8 +100,21 @@ export default function MoneyOperationsAdmin() {
         </div>
       </div>
       {error && <p role="alert">{error}</p>}
+      <label className="history-toggle">
+        <input
+          type="checkbox"
+          checked={showHistory}
+          onChange={(e) => {
+            setShowHistory(e.target.checked);
+            setPage(1);
+            setSelected(null);
+          }}
+        />
+        显示历史申请
+      </label>
       {report && (
-        <>
+        <details className="money-reconciliation">
+          <summary>账务核对与汇总</summary>
           <div className="money-report-grid">
             {report.rows
               .filter((r: any) => ["USDT", "USDC"].includes(r.currency))
@@ -115,7 +138,7 @@ export default function MoneyOperationsAdmin() {
               导出核对报表
             </a>
           </p>
-        </>
+        </details>
       )}
       {data &&
         !data.verification.usdttrc20.configured &&
@@ -204,29 +227,74 @@ export default function MoneyOperationsAdmin() {
           </button>
         </form>
       )}
-      {!data?.records?.length && <p>暂无提现或结算申请。</p>}
-      {data?.records?.map((r: any) => (
-        <button
-          className="fund-record movement-row"
-          key={r.id}
-          onClick={() => void open(r)}
-        >
+      {!data && !error && (
+        <div
+          className="loading-skeleton"
+          role="status"
+          aria-label="正在加载申请"
+        />
+      )}
+      {data &&
+        !data.records?.some(
+          (r: any) =>
+            r.kind === kind &&
+            (showHistory || ["requested", "approved"].includes(r.status)),
+        ) && <p>暂无{showHistory ? "相关申请" : "待办申请"}。</p>}
+      {data?.records
+        ?.filter(
+          (r: any) =>
+            r.kind === kind &&
+            (showHistory || ["requested", "approved"].includes(r.status)),
+        )
+        .map((r: any) => (
+          <button
+            className="fund-record movement-row"
+            key={r.id}
+            onClick={() => void open(r)}
+          >
+            <span>
+              <strong>{r.kind === "refund" ? "客户提现" : "服务商结算"}</strong>
+              <small>{r.id}</small>
+            </span>
+            <span>
+              <strong>
+                {money(r.amount)} {r.currency}
+              </strong>
+              <small>
+                {r.status === "approved"
+                  ? "待转账确认"
+                  : movementLabels[r.status]}
+              </small>
+            </span>
+          </button>
+        ))}
+      {data && data.total > 100 && (
+        <div className="actions">
+          <button
+            className="button outline"
+            disabled={page <= 1}
+            onClick={() => {
+              setPage((p) => p - 1);
+              setSelected(null);
+            }}
+          >
+            上一页
+          </button>
           <span>
-            <strong>{r.kind === "refund" ? "客户提现" : "服务商结算"}</strong>
-            <small>{r.id}</small>
+            第{page}页 / 共{Math.ceil(data.total / 100)}页
           </span>
-          <span>
-            <strong>
-              {money(r.amount)} {r.currency}
-            </strong>
-            <small>
-              {r.status === "approved"
-                ? "待转账确认"
-                : movementLabels[r.status]}
-            </small>
-          </span>
-        </button>
-      ))}
+          <button
+            className="button outline"
+            disabled={page * 100 >= data.total}
+            onClick={() => {
+              setPage((p) => p + 1);
+              setSelected(null);
+            }}
+          >
+            下一页
+          </button>
+        </div>
+      )}
       {selected && (
         <div className="money-detail">
           <h3>{selected.kind === "refund" ? "提现详情" : "结算详情"}</h3>
@@ -242,7 +310,7 @@ export default function MoneyOperationsAdmin() {
             <dt>收款地址</dt>
             <dd className="money-address">{selected.destination}</dd>
             <dt>申请说明</dt>
-            <dd>{selected.reason}</dd>
+            <dd>{selected.reason || "—"}</dd>
           </dl>
           {selected.status === "requested" && (
             <form

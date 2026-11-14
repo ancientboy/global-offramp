@@ -569,3 +569,56 @@ test("Base RPC fails over transport outages but keeps each verification on one r
     () => new ChainTransfers({}, fetcher, ["https://user:secret@example.com"]),
   );
 });
+
+test("optional withdrawal notes retain exact-once holds, rejection reasons and paginated admin scope", async () => {
+  const f = await moneyFixture();
+  try {
+    const input = {
+      ...refundInput,
+      reason: "",
+      idempotencyKey: "optional-note-test",
+    };
+    const r = await f.money.create(f.user, "refund", input);
+    assert.equal((await f.money.create(f.user, "refund", input)).id, r.id);
+    await failure(
+      f.money.create(f.admin, "provider_settlement", {
+        ...input,
+        providerId: "provider-official",
+      }),
+      "REASON_REQUIRED",
+    );
+    let queue = await f.money.adminSummary(
+      f.admin,
+      new URLSearchParams("kind=refund&history=false&page=1"),
+    );
+    assert.equal(queue.total, 1);
+    assert.equal(queue.pendingCounts[0].count, 1);
+    await f.money.decide(f.admin, r.id, {
+      action: "reject",
+      note: "收款地址需要重新核对",
+    });
+    assert.equal(
+      (await f.money.list(f.user))[0].rejection_reason,
+      "收款地址需要重新核对",
+    );
+    queue = await f.money.adminSummary(
+      f.admin,
+      new URLSearchParams("kind=refund&history=false&page=1"),
+    );
+    assert.equal(queue.total, 0);
+    assert.equal(queue.records.length, 0);
+    assert.equal(
+      (
+        await f.money.adminSummary(
+          f.admin,
+          new URLSearchParams("kind=refund&history=true&page=1"),
+        )
+      ).total,
+      1,
+    );
+    assert.equal(await f.balance(), "100.000000");
+    await failure(f.money.adminSummary(f.user), "FORBIDDEN");
+  } finally {
+    await f.db.close();
+  }
+});

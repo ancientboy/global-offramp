@@ -20,6 +20,7 @@ type Customer = {
   registeredAt: string;
 };
 type Data = {
+  funnel?: { registered: number; funded: number; completed: number };
   partner: { id: string; name: string; inviteUrl: string };
   customers: Customer[];
   commissions: Commission[];
@@ -55,13 +56,14 @@ export default function PartnerPortal() {
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
     [tab, setTab] = useState("overview");
-  async function load() {
-    setBusy(true);
+  async function load(silent = false) {
+    if (!silent) setBusy(true);
     setError("");
     try {
       const r = await fetch("/workspace/api/dashboard", {
         credentials: "same-origin",
         cache: "no-store",
+        signal: AbortSignal.timeout(15000),
       });
       if (r.status === 401) {
         workspace.expired();
@@ -72,11 +74,15 @@ export default function PartnerPortal() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "读取失败");
     } finally {
-      setBusy(false);
+      if (!silent) setBusy(false);
     }
   }
   useEffect(() => {
     void load();
+    const t = setInterval(() => {
+      if (!document.hidden) void load(true);
+    }, 30000);
+    return () => clearInterval(t);
   }, []);
   async function copy() {
     if (!data) return;
@@ -188,6 +194,23 @@ export default function PartnerPortal() {
                   <strong>{data.commissions.length}</strong>
                 </div>
               </section>
+              {data.funnel && (
+                <section className="card task-center" aria-label="客户转化">
+                  <h2>客户转化</h2>
+                  <div className="task-grid">
+                    {[
+                      ["已注册", data.funnel.registered],
+                      ["已首次充值", data.funnel.funded],
+                      ["已完成首单", data.funnel.completed],
+                    ].map(([label, value]) => (
+                      <div className="task-card" key={label}>
+                        <span>{label}</span>
+                        <strong>{value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
               <section className="card">
                 <h2>佣金概览</h2>
                 <div className="table-scroll">
@@ -223,8 +246,18 @@ export default function PartnerPortal() {
                   </table>
                 </div>
                 <p className="muted small">
-                  订单完成后按锁定的服务费返佣规则计提；退款和异常会调整可结算状态。
+                  订单完成后进入观察期，观察期结束且无异常后可参与结算；退款和异常会调整状态。
                 </p>
+                {data.commissions
+                  .filter((c) => c.eligibility === "hold")
+                  .sort((a, b) => a.eligibleAt.localeCompare(b.eligibleAt))
+                  .slice(0, 1)
+                  .map((c) => (
+                    <p key={c.id} className="muted small">
+                      下一笔观察期结束：{date(c.eligibleAt)}
+                      。最终可结算状态以核对结果为准。
+                    </p>
+                  ))}
               </section>
             </>
           )}

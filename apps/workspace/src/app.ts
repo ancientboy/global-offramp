@@ -321,7 +321,9 @@ export function workspaceApp(
           await options.security!.requireRecentMfa(account, token!);
         if (request.method === "GET") {
           if (path === "/admin/money")
-            return json(await options.money.adminSummary(account));
+            return json(
+              await options.money.adminSummary(account, url.searchParams),
+            );
           if (path === "/wallet/refunds" || path === "/money-movements")
             return json({ records: await options.money.list(account) });
           throw new HttpError(404, "NOT_FOUND");

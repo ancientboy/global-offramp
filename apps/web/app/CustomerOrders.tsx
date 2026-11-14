@@ -1,4 +1,5 @@
 "use client";
+import { useViewState } from "./view-state";
 import { useEffect, useState } from "react";
 import {
   ArrowLeft,
@@ -67,11 +68,17 @@ export default function CustomerOrders({
   onOpen,
   onResumeBatch,
 }: CustomerOrdersProps) {
-  const [mode, setMode] = useState<"orders" | "batches">("orders");
-  const [filter, setFilter] = useState<CustomerOrderFilter>("all");
-  const [search, setSearch] = useState("");
-  const [orderPage, setOrderPage] = useState(1);
-  useEffect(() => setOrderPage(1), [mode, filter, search]);
+  const [mode, setMode] = useViewState<"orders" | "batches">(
+    "orders-mode",
+    "orders",
+  );
+  const [filter, setFilter] = useViewState<CustomerOrderFilter>(
+    "orders-filter",
+    "all",
+  );
+  const [search, setSearch] = useViewState("orders-search", "");
+  const [orderPage, setOrderPage] = useViewState("orders-page", 1);
+
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [receiptOrderId, setReceiptOrderId] = useState<string | null>(null);
   const orders = data.orders ?? [];
@@ -426,6 +433,7 @@ export default function CustomerOrders({
             aria-pressed={mode === "orders"}
             onClick={() => {
               setMode("orders");
+              setOrderPage(1);
               setReceiptOrderId(null);
             }}
           >
@@ -435,6 +443,7 @@ export default function CustomerOrders({
             aria-pressed={mode === "batches"}
             onClick={() => {
               setMode("batches");
+              setOrderPage(1);
               setReceiptOrderId(null);
             }}
           >
@@ -455,7 +464,10 @@ export default function CustomerOrders({
                 : "搜索批次 / 订单 / 收款人"
             }
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setOrderPage(1);
+            }}
           />
         </label>
       </div>
@@ -466,6 +478,7 @@ export default function CustomerOrders({
             aria-pressed={filter === value}
             onClick={() => {
               setFilter(value);
+              setOrderPage(1);
               setReceiptOrderId(null);
             }}
           >

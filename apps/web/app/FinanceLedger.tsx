@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useViewState } from "./view-state";
 import SelectField from "./SelectField";
 export function financeDate(value: string) {
   const d = new Date(value);
@@ -37,7 +38,9 @@ export async function adminRead(path: string, signal?: AbortSignal) {
   const r = await fetch("/workspace/api/" + path, {
     credentials: "same-origin",
     cache: "no-store",
-    signal,
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+      : AbortSignal.timeout(15000),
   });
   if (!r.ok)
     throw Error(
@@ -87,7 +90,7 @@ export default function FinanceLedger({
   customerId?: string;
   onOpenOrder?: (id: string) => void;
 }) {
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useViewState("ledger-filters:" + customerId, {
       q: "",
       kind: "",
       status: "",
@@ -95,14 +98,17 @@ export default function FinanceLedger({
       from: "",
       to: "",
     }),
-    [applied, setApplied] = useState(filters),
-    [page, setPage] = useState(1),
+    [applied, setApplied] = useViewState(
+      "ledger-applied:" + customerId,
+      filters,
+    ),
+    [page, setPage] = useViewState("ledger-page:" + customerId, 1),
     [refresh, setRefresh] = useState(0),
     [data, setData] = useState<any>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
     [exporting, setExporting] = useState(false),
-    [expanded, setExpanded] = useState("");
+    [expanded, setExpanded] = useViewState("ledger-expanded:" + customerId, "");
   const params = new URLSearchParams({
     q: applied.q,
     kind: applied.kind,
@@ -129,7 +135,7 @@ export default function FinanceLedger({
     const c = new AbortController();
     setLoading(true);
     setError("");
-    setExpanded("");
+    // Expanded records remain tied to the retained query.
     void adminRead("admin/finance/transactions?" + query, c.signal)
       .then(setData)
       .catch((e) => {

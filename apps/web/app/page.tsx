@@ -1,5 +1,8 @@
 "use client";
 import SelectField from "./SelectField";
+import AdminTaskCenter from "./AdminTaskCenter";
+import CustomerNotifications from "./CustomerNotifications";
+import { ViewStateContext } from "./view-state";
 import RecipientAccountForm from "./RecipientAccountForm";
 import {
   accountFields,
@@ -247,6 +250,10 @@ export default function Home() {
   const [page, setPage] = useState<Page>(
     workspace?.account.role === "merchant_admin" ? "overview" : "wallet",
   );
+  const viewCache = useRef(new Map<string, unknown>());
+  const scrollPositions = useRef(new Map<Page, number>());
+  const detailOrigin = useRef<Page>("orders");
+  const [fundsTab, setFundsTab] = useState<string | undefined>();
   const [dataState, setDataState] = useState<{
     actor: ActorKey;
     value: Dashboard;
@@ -264,6 +271,10 @@ export default function Home() {
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState("single");
   const [profileTab, setProfileTab] = useState("home");
+  const [historyRequest, setHistoryRequest] = useState({
+    id: 0,
+    type: "deposits",
+  });
   const [withdrawalRequest, setWithdrawalRequest] = useState(0);
   const [recipientSearch, setRecipientSearch] = useState("");
   const [recipientForm, setRecipientForm] = useState<{
@@ -306,10 +317,7 @@ export default function Home() {
   const [audits, setAudits] = useState<Audit[] | null>(null);
   const [auditError, setAuditError] = useState("");
   const [pricingMarket, setPricingMarket] = useState("CNY");
-  const data =
-    dataState?.actor === actor && connection === "connected"
-      ? dataState.value
-      : null;
+  const data = dataState?.actor === actor ? dataState.value : null;
   const orders = data?.orders ?? [],
     beneficiaries = data?.beneficiaries ?? [],
     customers = data?.customers ?? [];
@@ -319,13 +327,21 @@ export default function Home() {
       ? "customer-2"
       : "customer-1";
   const currentCustomer = customers.find((c) => c.id === customerId);
-  const usableBeneficiaries = beneficiaries.filter(
-    (b) =>
-      b.customerId === customerId &&
-      recipientUsable(b.status) &&
-      (!workspace || b.detailsComplete) &&
-      b.currency === market,
-  );
+  const usableBeneficiaries = beneficiaries
+    .filter(
+      (b) =>
+        b.customerId === customerId &&
+        recipientUsable(b.status) &&
+        (!workspace || b.detailsComplete) &&
+        b.currency === market,
+    )
+    .sort((a, b) => {
+      const recent = (id: string) =>
+        orders
+          .filter((o) => o.quote.beneficiaryId === id)
+          .reduce((n, o) => Math.max(n, Date.parse(o.createdAt)), 0);
+      return recent(b.id) - recent(a.id);
+    });
   const recipient =
     usableBeneficiaries.find((b) => b.id === beneficiaryId) ??
     usableBeneficiaries[0];
@@ -457,8 +473,7 @@ export default function Home() {
     } catch (e) {
       if (id !== reloadId.current || actorRef.current !== actor) return;
       setConnection("error");
-      setDataState(null);
-      setHealth(null);
+      // Keep the last scoped snapshot and form inputs available while offline; mutations remain disabled.
       setError(errorText(e));
     }
   }, [actor, request]);
@@ -485,6 +500,28 @@ export default function Home() {
       reloadId.current += 1;
     };
   }, [reload]);
+  useEffect(() => {
+    if (!workspace) return;
+    let active = false;
+    const refresh = async () => {
+      if (document.hidden || busyRef.current || active) return;
+      active = true;
+      try {
+        await reload();
+      } finally {
+        active = false;
+      }
+    };
+    const timer = setInterval(() => void refresh(), 30000);
+    const visible = () => {
+      if (!document.hidden) void refresh();
+    };
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [reload, !!workspace]);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -666,14 +703,48 @@ export default function Home() {
       setStep(1);
       setChecked(false);
     }
+    scrollPositions.current.set(page, window.scrollY);
+    if (next === "detail" && page !== "detail") detailOrigin.current = page;
     setPage(next);
-    setFilter("all");
-    setSearch("");
-    setMerchantQueue("all");
     if (next === "profile") setProfileTab("home");
     setCommand(null);
-    window.scrollTo(0, 0);
+    const position = scrollPositions.current.get(next) ?? 0;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => window.scrollTo(0, position)),
+    );
   }
+  useEffect(() => {
+    const target = scrollPositions.current.get(page) ?? 0;
+    if (!target) return;
+    let done = false;
+    const stop = () => {
+      done = true;
+      observer.disconnect();
+    };
+    const restore = () => {
+      if (
+        !done &&
+        document.documentElement.scrollHeight >= target + window.innerHeight
+      ) {
+        window.scrollTo(0, target);
+        stop();
+      }
+    };
+    const observer = new ResizeObserver(restore);
+    observer.observe(document.body);
+    restore();
+    const timer = setTimeout(stop, 10000);
+    window.addEventListener("wheel", stop, { passive: true });
+    window.addEventListener("touchstart", stop, { passive: true });
+    window.addEventListener("keydown", stop);
+    return () => {
+      stop();
+      clearTimeout(timer);
+      window.removeEventListener("wheel", stop);
+      window.removeEventListener("touchstart", stop);
+      window.removeEventListener("keydown", stop);
+    };
+  }, [page]);
   function changeActor(next: ActorKey) {
     if (workspace || busyRef.current) return;
     const nextRole =
@@ -1210,6 +1281,27 @@ export default function Home() {
           >
             <strong>{customerOrderState(o).label}</strong>
             <p>{customerOrderState(o).detail}</p>
+            {o.updatedAt && <small>最近更新：{date(o.updatedAt)}</small>}
+            <ol className="order-progress" aria-label="订单进度">
+              <li>
+                订单已提交<small>{date(o.createdAt)}</small>
+              </li>
+              <li>
+                {o.completionStatus === "completed"
+                  ? "付款已完成"
+                  : customerOrderState(o).label}
+                {(o.completion?.completedAt ||
+                  o.paymentConfirmation?.confirmedAt) && (
+                  <small>
+                    {date(
+                      o.completion?.completedAt ??
+                        o.paymentConfirmation!.confirmedAt!,
+                    )}
+                  </small>
+                )}
+              </li>
+              {o.receiptFileAvailable && <li>付款回单已提供，可在下方查看</li>}
+            </ol>
           </div>
         )}
         {admin && o.payoutProviderSnapshot && (
@@ -2058,1463 +2150,1553 @@ export default function Home() {
       ),
     );
   return (
-    <div className={"app " + (role === "customer" ? "customer-workspace" : "")}>
-      <aside className="sidebar">
-        <button className="brand" onClick={() => go(navs[role][0][0])}>
-          <Brand dark compact />
-        </button>
-        <div className="sidebar-label">
-          {role === "admin"
-            ? "管理后台"
-            : role === "partner"
-              ? "合作伙伴"
-              : actor === "company-demo"
-                ? "商户工作台"
-                : "个人工作台"}
-        </div>
-        <nav aria-label="主导航">
-          {navs[role]
-            .filter(([p]) => !["routes", "funds"].includes(p) || !!workspace)
-            .map(([p, label, I]) => (
-              <button
-                key={p}
-                title={label}
-                className={
-                  page === p ||
-                  (p === "orders" && page === "detail") ||
-                  (p === "profile" &&
-                    ["recipients", "certification"].includes(page))
-                    ? "active"
-                    : ""
-                }
-                onClick={() => go(p)}
-              >
-                <I size={20} />
-                <span>{label}</span>
-              </button>
-            ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <button onClick={() => setSupport((v) => !v)}>
-            <Question size={21} />
-            帮助与支持
+    <ViewStateContext.Provider value={viewCache.current}>
+      <div
+        className={"app " + (role === "customer" ? "customer-workspace" : "")}
+      >
+        <aside className="sidebar">
+          <button className="brand" onClick={() => go(navs[role][0][0])}>
+            <Brand dark compact />
           </button>
-          <p>安全、清晰的每一笔付款</p>
-          {!workspace && <a href="/workspace">登录账户</a>}
-          <span className="tiny">汇途 · 全球代付</span>
-        </div>
-      </aside>
-      <div className="workspace">
-        <header className="topbar">
-          <a
-            className="mobile-brand-link"
-            href="/workspace"
-            aria-label="汇途工作台"
-          >
-            <Brand />
-          </a>
-          <div className="breadcrumb">
-            <span>
-              {role === "admin"
-                ? "管理后台"
-                : role === "partner"
-                  ? "合作伙伴"
-                  : "结汇"}
-            </span>
-            <b>/</b>
-            {title}
+          <div className="sidebar-label">
+            {role === "admin"
+              ? "管理后台"
+              : role === "partner"
+                ? "合作伙伴"
+                : actor === "company-demo"
+                  ? "商户工作台"
+                  : "个人工作台"}
           </div>
-          <div className="top-actions">
-            {workspace ? (
-              <>
-                <AccountMenu
-                  onError={setError}
-                  onProfile={
-                    role === "customer"
-                      ? () => {
-                          go("profile");
-                          setProfileTab("details");
-                        }
-                      : undefined
+          <nav aria-label="主导航">
+            {navs[role]
+              .filter(([p]) => !["routes", "funds"].includes(p) || !!workspace)
+              .map(([p, label, I]) => (
+                <button
+                  key={p}
+                  title={label}
+                  className={
+                    page === p ||
+                    (p === "orders" && page === "detail") ||
+                    (p === "profile" &&
+                      ["recipients", "certification"].includes(page))
+                      ? "active"
+                      : ""
                   }
-                  onWithdraw={
-                    role === "customer"
-                      ? () => {
-                          go("wallet");
-                          setWithdrawalRequest((v) => v + 1);
-                        }
-                      : undefined
-                  }
-                />
-              </>
-            ) : (
-              <>
-                <SelectField
-                  aria-label="切换工作台"
-                  value={actor}
-                  disabled={busy}
-                  onChange={(e) => changeActor(e.target.value as ActorKey)}
+                  onClick={() => go(p)}
                 >
-                  {actors.map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </SelectField>
-              </>
-            )}
-            <button
-              className="avatar"
-              aria-label="刷新"
-              disabled={busy}
-              onClick={() => void reload()}
-            >
-              <ArrowsClockwise size={18} />
+                  <I size={20} />
+                  <span>{label}</span>
+                </button>
+              ))}
+          </nav>
+          <div className="sidebar-bottom">
+            <button onClick={() => setSupport((v) => !v)}>
+              <Question size={21} />
+              帮助与支持
             </button>
+            <p>安全、清晰的每一笔付款</p>
+            {!workspace && <a href="/workspace">登录账户</a>}
+            <span className="tiny">汇途 · 全球代付</span>
           </div>
-        </header>
-        <main>
-          <div className="page-heading">
-            <div>
-              {role === "admin" && (
-                <div className="page-kicker">HUITU / OPERATIONS</div>
-              )}
-              <h1>{title}</h1>
-              {role !== "customer" && <p>{subtitles[page]}</p>}
+        </aside>
+        <div className="workspace">
+          <header className="topbar">
+            <a
+              className="mobile-brand-link"
+              href="/workspace"
+              aria-label="汇途工作台"
+            >
+              <Brand />
+            </a>
+            <div className="breadcrumb">
+              <span>
+                {role === "admin"
+                  ? "管理后台"
+                  : role === "partner"
+                    ? "合作伙伴"
+                    : "结汇"}
+              </span>
+              <b>/</b>
+              {title}
             </div>
-          </div>
-          {support && (
-            <section className="card support">
-              <h2>帮助与支持</h2>
-              <p>
-                您可以管理收款账户、提交结汇订单，并在订单中查看处理进度和付款回单。
-              </p>
-              <button className="button text" onClick={() => setSupport(false)}>
-                收起
-              </button>
-            </section>
-          )}
-          {error && (
-            <div className="api-error" role="alert">
-              <WarningCircle size={20} />
-              <div>
-                <strong>
-                  {connection === "error" ? "暂时无法加载" : "请求未完成"}
-                </strong>
-                <p>{error}</p>
-              </div>
-              <button
-                className="button outline"
-                disabled={busy}
-                onClick={() => void reload()}
-              >
-                重新读取
-              </button>
-            </div>
-          )}
-          {!data ? (
-            <div className="card">
-              <Empty
-                title={
-                  connection === "loading"
-                    ? "正在加载账户信息"
-                    : "暂时无法加载账户信息"
-                }
-              >
-                {connection === "loading"
-                  ? "正在加载，请稍候。"
-                  : "请稍后刷新重试，如仍无法加载，请联系平台客服。"}
-              </Empty>
-            </div>
-          ) : (
-            <>
-              {page === "routes" && workspace && (
-                <RouteSettings admin={role === "admin"} />
+            <div className="top-actions">
+              {workspace ? (
+                <>
+                  <AccountMenu
+                    onError={setError}
+                    onProfile={
+                      role === "customer"
+                        ? () => {
+                            go("profile");
+                            setProfileTab("details");
+                          }
+                        : undefined
+                    }
+                    onWithdraw={
+                      role === "customer"
+                        ? () => {
+                            go("wallet");
+                            setWithdrawalRequest((v) => v + 1);
+                          }
+                        : undefined
+                    }
+                  />
+                </>
+              ) : (
+                <>
+                  <SelectField
+                    aria-label="切换工作台"
+                    value={actor}
+                    disabled={busy}
+                    onChange={(e) => changeActor(e.target.value as ActorKey)}
+                  >
+                    {actors.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </SelectField>
+                </>
               )}
-              {page === "funds" && workspace && role === "admin" && (
-                <FundingAdmin
-                  onOpenOrder={async (id) => {
-                    await reload();
-                    setSelected(id);
-                    go("detail");
-                  }}
-                />
-              )}
-              {page === "wallet" && role === "customer" && (
-                <CustomerWallet
-                  withdrawalRequest={withdrawalRequest}
-                  onWithdrawalOpened={() => setWithdrawalRequest(0)}
-                  fundsDisabled={
-                    !!workspace &&
-                    !health?.simulatedTopupsEnabled &&
-                    !health?.depositsEnabled
-                  }
-                  realFunds={health?.fundsMode === "live"}
-                  fundingPayments={data.fundingPayments ?? []}
-                  moneyEnabled={!!health?.moneyOperationsEnabled}
-                  moneyMovements={data.moneyMovements ?? []}
-                  onRefresh={reload}
-                  key={actor}
-                  balances={walletBalances}
-                  deposits={data.walletDeposits ?? []}
-                  orders={orders}
-                  customerId={customerId}
-                  locked={locked}
-                  resumeDraft={resumeDraft}
-                  initialCurrency={asset}
-                  onTopup={openTopup}
-                  onExchange={(currency) => {
-                    if (!resumeDraft) editForm(() => setAsset(currency));
-                    resumeExchange();
-                  }}
+              {workspace && role === "customer" && data && (
+                <CustomerNotifications
+                  accountId={workspace.account.id}
+                  data={data}
                   onOrder={(id) => {
                     setSelected(id);
                     go("detail");
                   }}
+                  onWallet={(type) => {
+                    setHistoryRequest({ id: Date.now(), type });
+                    go("wallet");
+                  }}
                 />
               )}
-              {page === "profile" && role === "customer" && (
-                <>
-                  <section className="profile-overview">
-                    <div className="circle-icon">
-                      <User size={27} />
-                    </div>
-                    <div>
-                      <h2>{currentCustomer?.name}</h2>
-                      <p>
-                        {actor === "company-demo"
-                          ? "商户企业账户"
-                          : "个人账户"}{" "}
-                      </p>
-                    </div>
-                    <Badge status={currentCustomer?.status}>
-                      {currentCustomer?.status === "approved"
-                        ? "正常"
-                        : currentCustomer?.status === "suspended"
-                          ? "已停用"
-                          : "待审核"}
-                    </Badge>
-                  </section>
-                  {profileTab === "home" ? (
-                    <div className="profile-menu">
-                      <button onClick={() => setProfileTab("recipients")}>
-                        <span className="circle-icon">
-                          <Bank size={24} />
-                        </span>
-                        <div>
-                          <strong>收款人管理</strong>
-                          <small>{beneficiaries.length} 个收款账户</small>
-                        </div>
-                        <ArrowRight size={19} />
-                      </button>
-                      <button
-                        onClick={() =>
-                          setProfileTab(workspace ? "details" : "certification")
-                        }
-                      >
-                        <span className="circle-icon">
-                          <User size={24} />
-                        </span>
-                        <div>
-                          <strong>用户详情</strong>
-                          <small>
-                            查看{actor === "company-demo" ? "企业" : "个人"}
-                            资料与账户状态
-                          </small>
-                        </div>
-                        <ArrowRight size={19} />
-                      </button>
-                      <button
-                        onClick={() =>
-                          workspace
-                            ? workspace.openSecurity?.()
-                            : setProfileTab("security")
-                        }
-                      >
-                        <span className="circle-icon">
-                          <Lock size={24} />
-                        </span>
-                        <div>
-                          <strong>账户安全</strong>
-                          <small>登录密码与二次验证</small>
-                        </div>
-                        <ArrowRight size={19} />
-                      </button>
-                      <button onClick={() => setSupport(true)}>
-                        <span className="circle-icon">
-                          <Question size={24} />
-                        </span>
-                        <div>
-                          <strong>帮助与支持</strong>
-                          <small>结汇与订单帮助</small>
-                        </div>
-                        <ArrowRight size={19} />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="profile-subheading">
-                      <button
-                        className="button text back-link"
-                        onClick={() => setProfileTab("home")}
-                      >
-                        <ArrowLeft size={16} /> 返回用户中心
-                      </button>
-                      <h2>
-                        {profileTab === "recipients"
-                          ? "收款人管理"
-                          : profileTab === "security"
-                            ? "安全与隐私"
-                            : profileTab === "details"
-                              ? "用户详情"
-                              : "账户资料"}
-                      </h2>
-                    </div>
-                  )}
-                  {profileTab === "details" && workspace && (
-                    <CustomerProfile
-                      customer={currentCustomer}
-                      balances={data?.walletBalances ?? []}
-                      orderCount={
-                        orders.filter(
-                          (o) => o.customerId === workspace.account.customerId,
-                        ).length
-                      }
-                      recipientCount={beneficiaries.length}
-                    />
-                  )}
-                  {profileTab === "security" && (
-                    <section className="card security-summary">
-                      <h3>账户与数据保护</h3>
-                      <p>请妥善保管登录信息，使用完毕后可退出账户。</p>
-                      <p>如需修改账户资料，请联系平台客服。</p>
-                    </section>
-                  )}
-                  {profileTab === "recipients" && (
-                    <div className="profile-add">
-                      <label>
-                        新增账户地区
-                        <SelectField
-                          aria-label="新增账户地区"
-                          value={market}
-                          onChange={(e) =>
-                            editForm(() => setMarket(e.target.value))
-                          }
-                        >
-                          <option value="CNY">中国大陆 · CNY</option>
-                          <option value="USD">美国 · USD</option>
-                          <option value="EUR">欧元区 · EUR</option>
-                          <option value="MXN">墨西哥 · MXN</option>
-                          <option value="BRL">巴西 · BRL</option>
-                          <option value="GBP">英国 · GBP</option>
-                        </SelectField>
-                      </label>
-                      <button
-                        className="button"
-                        onClick={addRecipient}
-                        disabled={locked}
-                      >
-                        <Plus size={17} />
-                        新增收款账户
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-              {page === "payment" && role === "customer" && (
-                <div className="exchange-flow">
-                  {step === 1 && actor === "company-demo" && (
-                    <div
-                      className="tabs light exchange-mode"
-                      aria-label="结汇方式"
-                    >
-                      <button
-                        className={mode === "single" ? "active" : ""}
-                        disabled={busy}
-                        onClick={() => {
-                          setMode("single");
-                          setChecked(false);
-                        }}
-                      >
-                        单笔结汇
-                      </button>
-                      <button
-                        className={mode === "batch" ? "active" : ""}
-                        disabled={busy}
-                        onClick={() => {
-                          setMode("batch");
-                          setBatchChecked(false);
-                        }}
-                      >
-                        批量结汇
-                      </button>
-                    </div>
-                  )}
-                  <Steps
-                    active={
-                      mode === "batch"
-                        ? batchPreview
-                          ? 3
-                          : visibleBatch?.items.some(
-                                (i) => i.status === "created",
-                              ) &&
-                              !visibleBatch.items.some(
-                                (i) => i.status === "valid",
-                              )
-                            ? 4
-                            : visibleBatch
-                              ? 2
-                              : 1
-                        : step
-                    }
-                    labels={
-                      mode === "batch"
-                        ? ["上传表格", "校验结果", "核对报价", "提交完成"]
-                        : ["填写结汇", "核对报价", "提交完成"]
-                    }
+              <button
+                className="avatar"
+                aria-label="刷新"
+                disabled={busy}
+                onClick={() => void reload()}
+              >
+                <ArrowsClockwise size={18} />
+              </button>
+            </div>
+          </header>
+          <main>
+            <div className="page-heading">
+              <div>
+                {role === "admin" && (
+                  <div className="page-kicker">HUITU / OPERATIONS</div>
+                )}
+                <h1>{title}</h1>
+                {role !== "customer" && <p>{subtitles[page]}</p>}
+              </div>
+            </div>
+            {support && (
+              <section className="card support">
+                <h2>帮助与支持</h2>
+                <p>
+                  您可以管理收款账户、提交结汇订单，并在订单中查看处理进度和付款回单。
+                </p>
+                <button
+                  className="button text"
+                  onClick={() => setSupport(false)}
+                >
+                  收起
+                </button>
+              </section>
+            )}
+            {error && (
+              <div className="api-error" role="alert">
+                <WarningCircle size={20} />
+                <div>
+                  <strong>
+                    {connection === "error" ? "暂时无法加载" : "请求未完成"}
+                  </strong>
+                  <p>{error}</p>
+                </div>
+                <button
+                  className="button outline"
+                  disabled={busy}
+                  onClick={() => void reload()}
+                >
+                  重新读取
+                </button>
+              </div>
+            )}
+            {!data ? (
+              <div className="card">
+                <div className="loading-skeleton" aria-hidden="true" />
+                <Empty
+                  title={
+                    connection === "loading"
+                      ? "正在加载账户信息"
+                      : "暂时无法加载账户信息"
+                  }
+                >
+                  {connection === "loading"
+                    ? "正在加载，请稍候。"
+                    : "请稍后刷新重试，如仍无法加载，请联系平台客服。"}
+                </Empty>
+              </div>
+            ) : (
+              <>
+                {page === "routes" && workspace && (
+                  <RouteSettings admin={role === "admin"} />
+                )}
+                {page === "funds" && workspace && role === "admin" && (
+                  <FundingAdmin
+                    initialTab={fundsTab}
+                    onOpenOrder={async (id) => {
+                      await reload();
+                      setSelected(id);
+                      go("detail");
+                    }}
                   />
-                  {step === 1 && mode === "single" ? (
-                    <div className="payment-layout exchange-single">
-                      <section className="payment-form">
-                        <h2>结汇金额</h2>
-                        <div
-                          className="amount-mode"
-                          role="group"
-                          aria-label="金额输入方式"
-                        >
-                          <button
-                            type="button"
-                            disabled={busy}
-                            aria-pressed={amountMode === "target_payout"}
-                            className={
-                              amountMode === "target_payout" ? "active" : ""
-                            }
-                            onClick={() =>
-                              editForm(() => setAmountMode("target_payout"))
-                            }
-                          >
-                            按到账金额
-                          </button>
-                          <button
-                            type="button"
-                            disabled={busy}
-                            aria-pressed={amountMode === "total_deposit"}
-                            className={
-                              amountMode === "total_deposit" ? "active" : ""
-                            }
-                            onClick={() =>
-                              editForm(() => setAmountMode("total_deposit"))
-                            }
-                          >
-                            按支付总额
-                          </button>
-                        </div>
-                        <label>
-                          {amountMode === "total_deposit"
-                            ? "支付总额（含费用）"
-                            : "收款金额"}
-                          <div className="input-unit amount">
-                            <input
-                              aria-label={
-                                amountMode === "total_deposit"
-                                  ? "支付总额（含费用）"
-                                  : "收款金额"
-                              }
-                              inputMode="decimal"
-                              placeholder={
-                                amountMode === "target_payout"
-                                  ? market === "CNY"
-                                    ? "例如 100000"
-                                    : "例如 50000"
-                                  : "例如 1000"
-                              }
-                              value={enteredAmount}
-                              disabled={busy}
-                              onChange={(e) =>
-                                editForm(() => setEnteredAmount(e.target.value))
-                              }
-                            />
-                            <SelectField
-                              aria-label={
-                                amountMode === "target_payout"
-                                  ? "出款币种"
-                                  : "稳定币"
-                              }
-                              value={
-                                amountMode === "target_payout" ? market : asset
-                              }
-                              disabled={busy}
-                              onChange={(e) =>
-                                editForm(() => {
-                                  if (amountMode === "target_payout") {
-                                    setMarket(e.target.value);
-                                    setBeneficiaryId("");
-                                  } else setAsset(e.target.value);
-                                })
-                              }
-                            >
-                              {amountMode === "target_payout" ? (
-                                <>
-                                  <option>CNY</option>
-                                  <option>USD</option>
-                                  <option>EUR</option>
-                                  <option>MXN</option>
-                                  <option>BRL</option>
-                                  <option>GBP</option>
-                                </>
-                              ) : (
-                                <>
-                                  <option>USDT</option>
-                                  <option>USDC</option>
-                                </>
-                              )}
-                            </SelectField>
-                          </div>
-                        </label>
-                        <div className="exchange-currency-row">
-                          {amountMode === "target_payout" ? (
-                            <label>
-                              支付稳定币
-                              <SelectField
-                                aria-label="支付稳定币"
-                                value={asset}
-                                disabled={busy}
-                                onChange={(e) =>
-                                  editForm(() => setAsset(e.target.value))
-                                }
-                              >
-                                <option>USDT</option>
-                                <option>USDC</option>
-                              </SelectField>
-                            </label>
-                          ) : (
-                            <label>
-                              收款地区 / 币种
-                              <SelectField
-                                aria-label="收款地区"
-                                value={market}
-                                disabled={busy}
-                                onChange={(e) =>
-                                  editForm(() => {
-                                    setMarket(e.target.value);
-                                    setBeneficiaryId("");
-                                  })
-                                }
-                              >
-                                <option value="CNY">中国大陆 · CNY</option>
-                                <option value="USD">美国 · USD</option>
-                                <option value="EUR">欧元区 · EUR</option>
-                                <option value="MXN">墨西哥 · MXN</option>
-                                <option value="BRL">巴西 · BRL</option>
-                                <option value="GBP">英国 · GBP</option>
-                              </SelectField>
-                            </label>
-                          )}
-                          <div className="exchange-available">
-                            <span>钱包可用余额</span>
-                            <strong>
-                              {money(sourceBalance?.available ?? "0")} {asset}
-                            </strong>
-                            <button
-                              className="link"
-                              disabled={busy}
-                              onClick={goTopup}
-                            >
-                              充值
-                            </button>
-                          </div>
-                        </div>
-                        <div className="card-heading recipient-heading">
-                          <h2>收款人</h2>
-                          <button
-                            className="link"
-                            disabled={busy}
-                            onClick={() => {
-                              go("profile");
-                              setProfileTab("recipients");
-                            }}
-                          >
-                            管理账户
-                          </button>
-                        </div>
-                        <div className="recipient-select">
-                          <div className="person-mark">
-                            <User size={22} />
-                          </div>
+                )}
+                {page === "wallet" && role === "customer" && (
+                  <CustomerWallet
+                    historyRequest={historyRequest}
+                    withdrawalRequest={withdrawalRequest}
+                    onWithdrawalOpened={() => setWithdrawalRequest(0)}
+                    fundsDisabled={
+                      !!workspace &&
+                      !health?.simulatedTopupsEnabled &&
+                      !health?.depositsEnabled
+                    }
+                    realFunds={health?.fundsMode === "live"}
+                    fundingPayments={data.fundingPayments ?? []}
+                    moneyEnabled={!!health?.moneyOperationsEnabled}
+                    moneyMovements={data.moneyMovements ?? []}
+                    onRefresh={reload}
+                    key={actor}
+                    balances={walletBalances}
+                    deposits={data.walletDeposits ?? []}
+                    orders={orders}
+                    customerId={customerId}
+                    locked={locked}
+                    resumeDraft={resumeDraft}
+                    initialCurrency={asset}
+                    onTopup={openTopup}
+                    onExchange={(currency) => {
+                      if (!resumeDraft) editForm(() => setAsset(currency));
+                      resumeExchange();
+                    }}
+                    onOrder={(id) => {
+                      setSelected(id);
+                      go("detail");
+                    }}
+                  />
+                )}
+                {page === "profile" && role === "customer" && (
+                  <>
+                    <section className="profile-overview">
+                      <div className="circle-icon">
+                        <User size={27} />
+                      </div>
+                      <div>
+                        <h2>{currentCustomer?.name}</h2>
+                        <p>
+                          {actor === "company-demo"
+                            ? "商户企业账户"
+                            : "个人账户"}{" "}
+                        </p>
+                      </div>
+                      <Badge status={currentCustomer?.status}>
+                        {currentCustomer?.status === "approved"
+                          ? "正常"
+                          : currentCustomer?.status === "suspended"
+                            ? "已停用"
+                            : "待审核"}
+                      </Badge>
+                    </section>
+                    {profileTab === "home" ? (
+                      <div className="profile-menu">
+                        <button onClick={() => setProfileTab("recipients")}>
+                          <span className="circle-icon">
+                            <Bank size={24} />
+                          </span>
                           <div>
-                            <SelectField
-                              aria-label="选择收款人"
-                              value={chosenBeneficiaryId}
-                              disabled={!usableBeneficiaries.length || busy}
-                              onChange={(e) =>
-                                editForm(() => setBeneficiaryId(e.target.value))
-                              }
-                            >
-                              {!usableBeneficiaries.length && (
-                                <option value="">暂无可用收款账户</option>
-                              )}
-                              {usableBeneficiaries.map((b) => (
-                                <option key={b.id} value={b.id}>
-                                  {b.name}
-                                </option>
-                              ))}
-                            </SelectField>
-                            <p>
-                              {recipient
-                                ? `${recipient.accountMasked} · ${recipient.currency}`
-                                : "添加收款账户后即可使用"}
-                            </p>
+                            <strong>收款人管理</strong>
+                            <small>{beneficiaries.length} 个收款账户</small>
                           </div>
-                          <Bank size={22} className="teal" />
-                        </div>
-                        <div className="actions exchange-recipient-actions">
-                          <button
-                            className="link"
-                            disabled={locked}
-                            onClick={addRecipient}
-                          >
-                            <Plus size={16} />
-                            新增收款账户
-                          </button>
-                          <span className="muted small">请核对收款信息</span>
-                        </div>
-                        <details className="exchange-details">
-                          <summary>费用说明</summary>
-                          <p>
-                            {amountMode === "total_deposit"
-                              ? "支付总额包含服务费与通道费，扣除费用后的本金用于兑换。"
-                              : "按目标到账金额反算稳定币本金及费用；收款银行如另收费，以实际渠道规则为准。"}
-                          </p>
-                          <p>
-                            报价在有效期内锁定汇率及费用，提交前请核对收款信息。
-                          </p>
-                        </details>
-                      </section>
-                      <aside
-                        className="quote-panel exchange-quote"
-                        aria-label="本次报价"
-                      >
-                        <div className="card-heading">
-                          <h2>本次报价</h2>
-                          {quote ? (
-                            <Badge status={remaining ? "valid" : "error"}>
-                              {remaining
-                                ? `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")} 有效`
-                                : "已过期"}
-                            </Badge>
-                          ) : (
-                            <span className="muted small">待报价</span>
-                          )}
-                        </div>
-                        <p className="quote-label">收款人预计到账</p>
-                        <div className="quote-amount">
-                          {quote
-                            ? symbol(quote.payoutCurrency) +
-                              money(quote.payoutAmount)
-                            : "—"}
-                          <span>{quote?.payoutCurrency ?? market}</span>
-                        </div>
-                        {quote ? (
-                          <FeeRows quote={quote} />
-                        ) : (
-                          <div className="quote-placeholder">
-                            <p>
-                              {quoteBusy
-                                ? "正在获取报价…"
-                                : "填写金额并选择可用收款人"}
-                            </p>
-                          </div>
-                        )}
-                        {quoteError && <Note danger>{quoteError}</Note>}
-                        {quote && !enoughBalance && (
-                          <Note danger>
-                            余额不足，需 {money(quote.totalDeposit)}{" "}
-                            {quote.sourceCurrency}。充值后草稿会保留。
-                          </Note>
-                        )}
+                          <ArrowRight size={19} />
+                        </button>
                         <button
-                          className="button full big"
-                          disabled={
-                            locked ||
-                            quoteBusy ||
-                            !enoughBalance ||
-                            !quote ||
-                            remaining === 0 ||
-                            currentCustomer?.status !== "approved"
+                          onClick={() =>
+                            setProfileTab(
+                              workspace ? "details" : "certification",
+                            )
                           }
+                        >
+                          <span className="circle-icon">
+                            <User size={24} />
+                          </span>
+                          <div>
+                            <strong>用户详情</strong>
+                            <small>
+                              查看{actor === "company-demo" ? "企业" : "个人"}
+                              资料与账户状态
+                            </small>
+                          </div>
+                          <ArrowRight size={19} />
+                        </button>
+                        <button
+                          onClick={() =>
+                            workspace
+                              ? workspace.openSecurity?.()
+                              : setProfileTab("security")
+                          }
+                        >
+                          <span className="circle-icon">
+                            <Lock size={24} />
+                          </span>
+                          <div>
+                            <strong>账户安全</strong>
+                            <small>登录密码与二次验证</small>
+                          </div>
+                          <ArrowRight size={19} />
+                        </button>
+                        <button onClick={() => setSupport(true)}>
+                          <span className="circle-icon">
+                            <Question size={24} />
+                          </span>
+                          <div>
+                            <strong>帮助与支持</strong>
+                            <small>结汇与订单帮助</small>
+                          </div>
+                          <ArrowRight size={19} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="profile-subheading">
+                        <button
+                          className="button text back-link"
+                          onClick={() => setProfileTab("home")}
+                        >
+                          <ArrowLeft size={16} /> 返回用户中心
+                        </button>
+                        <h2>
+                          {profileTab === "recipients"
+                            ? "收款人管理"
+                            : profileTab === "security"
+                              ? "安全与隐私"
+                              : profileTab === "details"
+                                ? "用户详情"
+                                : "账户资料"}
+                        </h2>
+                      </div>
+                    )}
+                    {profileTab === "details" && workspace && (
+                      <CustomerProfile
+                        customer={currentCustomer}
+                        balances={data?.walletBalances ?? []}
+                        orderCount={
+                          orders.filter(
+                            (o) =>
+                              o.customerId === workspace.account.customerId,
+                          ).length
+                        }
+                        recipientCount={beneficiaries.length}
+                      />
+                    )}
+                    {profileTab === "security" && (
+                      <section className="card security-summary">
+                        <h3>账户与数据保护</h3>
+                        <p>请妥善保管登录信息，使用完毕后可退出账户。</p>
+                        <p>如需修改账户资料，请联系平台客服。</p>
+                      </section>
+                    )}
+                    {profileTab === "recipients" && (
+                      <div className="profile-add">
+                        <label>
+                          新增账户地区
+                          <SelectField
+                            aria-label="新增账户地区"
+                            value={market}
+                            onChange={(e) =>
+                              editForm(() => setMarket(e.target.value))
+                            }
+                          >
+                            <option value="CNY">中国大陆 · CNY</option>
+                            <option value="USD">美国 · USD</option>
+                            <option value="EUR">欧元区 · EUR</option>
+                            <option value="MXN">墨西哥 · MXN</option>
+                            <option value="BRL">巴西 · BRL</option>
+                            <option value="GBP">英国 · GBP</option>
+                          </SelectField>
+                        </label>
+                        <button
+                          className="button"
+                          onClick={addRecipient}
+                          disabled={locked}
+                        >
+                          <Plus size={17} />
+                          新增收款账户
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+                {page === "payment" && role === "customer" && (
+                  <div className="exchange-flow">
+                    {step === 1 && actor === "company-demo" && (
+                      <div
+                        className="tabs light exchange-mode"
+                        aria-label="结汇方式"
+                      >
+                        <button
+                          className={mode === "single" ? "active" : ""}
+                          disabled={busy}
                           onClick={() => {
-                            setStep(2);
+                            setMode("single");
                             setChecked(false);
-                            window.scrollTo(0, 0);
                           }}
                         >
-                          下一步，核对结汇 <ArrowRight size={20} />
+                          单笔结汇
                         </button>
-                        {quote && remaining === 0 && (
-                          <button
-                            className="button outline full"
-                            disabled={locked || quoteBusy}
-                            onClick={() => setQuoteVersion((v) => v + 1)}
-                          >
-                            报价过期，重新获取
-                          </button>
-                        )}
-                        {quoteError && (
-                          <button
-                            className="button text full"
-                            disabled={locked || quoteBusy}
-                            onClick={() => setQuoteVersion((v) => v + 1)}
-                          >
-                            重试报价
-                          </button>
-                        )}
-                        {quote && !enoughBalance && (
-                          <button
-                            className="button outline full"
-                            disabled={busy}
-                            onClick={goTopup}
-                          >
-                            前往钱包充值 <ArrowRight size={17} />
-                          </button>
-                        )}
-                        {currentCustomer?.status !== "approved" && (
-                          <Note danger>
-                            当前客户尚未通过审核，无法创建报价。
-                          </Note>
-                        )}
-                        <p className="center muted small exchange-disclaimer">
-                          下一步仍需确认，暂不冻结余额
-                        </p>
-                      </aside>
-                    </div>
-                  ) : step === 1 && mode === "batch" ? (
-                    <section className="card exchange-batch">
-                      {!visibleBatch ? (
-                        <>
-                          {currentCustomer?.kind === "company" && (
-                            <MerchantBatchImport
-                              customerId={customerId}
-                              customerName={currentCustomer?.name ?? "当前商户"}
-                              disabled={locked}
-                              onImport={async (rows, clientBatchId) => {
-                                const result = await mutate<BatchResult>(
-                                  "batches/merchant",
-                                  { customerId, clientBatchId, rows },
-                                  "服务端逐行校验完成，请核对目标到账金额、有效行和错误行。",
-                                );
-                                if (result) {
-                                  setBatch(result);
-                                  setBatchChecked(false);
-                                  setBatchPreview(null);
-                                  setBatchKey(clientBatchId);
-                                }
-                                return !!result;
-                              }}
-                            />
-                          )}
-                          <details
-                            className="legacy-batch-import"
-                            open={
-                              currentCustomer?.kind !== "company"
-                                ? true
-                                : undefined
-                            }
-                          >
-                            <summary>兼容旧版收款账户 ID CSV</summary>
-                            <div className="card-heading">
-                              <h2>旧版本金 CSV</h2>
-                              <button
-                                className="link"
-                                onClick={() =>
-                                  downloadCSV(
-                                    "汇途批量模板.csv",
-                                    template()
-                                      .split("\n")
-                                      .map((line) => line.split(",")),
-                                  )
-                                }
-                              >
-                                <Download size={17} />
-                                下载模板
-                              </button>
-                            </div>
-                            <Note>
-                              批量 CSV 的 sourceAmount
-                              始终表示兑换本金，费用另加。 CSV 将提交给隔离 API
-                              校验与保存。仅导入虚构资料；最多 100
-                              行、100KB，使用当前客户已保存的收款账户 ID。
-                            </Note>
-                            <div className="upload-zone">
-                              <Upload size={28} />
-                              <strong>导入 CSV 演示文件</strong>
-                              <span>每行独立验证 · UTF-8 编码</span>
-                              <label className="button outline file-label">
-                                选择 CSV
-                                <input
-                                  type="file"
-                                  accept=".csv,text/csv"
-                                  aria-label="导入 CSV"
-                                  disabled={busy}
-                                  onChange={async (e) => {
-                                    const f = e.target.files?.[0];
-                                    if (!f) return;
-                                    if (f.size > 100000) {
-                                      setError("文件请小于 100KB");
-                                      return;
-                                    }
-                                    setBatchText(await f.text());
-                                    setBatch(null);
-                                    setBatchPreview(null);
-                                    setBatchKey("");
-                                    setToast(
-                                      "CSV 已在浏览器读取，点击下方按钮提交服务端校验。",
-                                    );
-                                    e.target.value = "";
-                                  }}
-                                />
-                              </label>
-                            </div>
-                            <label>
-                              演示 CSV
-                              <textarea
-                                aria-label="演示 CSV"
-                                value={batchText}
-                                rows={6}
-                                spellCheck={false}
-                                disabled={busy}
-                                placeholder="clientItemId,beneficiaryId,sourceCurrency,sourceAmount"
-                                onChange={(e) => {
-                                  setBatchText(e.target.value);
-                                  setBatch(null);
-                                  setBatchPreview(null);
-                                  setBatchKey("");
-                                }}
-                              />
-                            </label>
-                            <div className="actions">
-                              <button
-                                className="button"
-                                disabled={
-                                  locked || !batchText.trim() || !!batch
-                                }
-                                onClick={() => void importBatch()}
-                              >
-                                提交服务端校验
-                              </button>
-                              <button
-                                className="button text"
-                                disabled={busy}
-                                onClick={() => {
-                                  setBatchText(template(true));
-                                  setBatch(null);
-                                  setBatchPreview(null);
-                                  setBatchKey("");
-                                }}
-                              >
-                                载入含错误样例
-                              </button>
-                            </div>
-                          </details>
-                        </>
-                      ) : batchPreview ? (
-                        <>
-                          <div className="card-heading exchange-stage-heading">
-                            <div>
-                              <h2>核对批次报价</h2>
-                              <p className="muted small">
-                                {batchPreview.quotes.length} 笔有效行 ·{" "}
-                                {visibleBatch.batch.clientBatchId}
-                              </p>
-                            </div>
-                            <Badge status={batchRemaining ? "valid" : "error"}>
-                              {batchRemaining
-                                ? `${batchRemaining} 秒有效`
-                                : "报价已过期"}
-                            </Badge>
-                          </div>
-                          <div className="exchange-batch-totals">
-                            {batchPreview.totals
-                              .filter((t) =>
-                                batchPreview.quotes.some(
-                                  (q) => q.sourceCurrency === t.currency,
-                                ),
-                              )
-                              .map((t) => (
-                                <section
-                                  className="exchange-currency-total"
-                                  key={t.currency}
-                                >
-                                  <h3>{t.currency}</h3>
-                                  <dl className="details">
-                                    <div>
-                                      <dt>兑换本金</dt>
-                                      <dd>
-                                        {money(t.sourceAmount)} {t.currency}
-                                      </dd>
-                                    </div>
-                                    <div>
-                                      <dt>服务费</dt>
-                                      <dd>
-                                        {money(t.serviceFee)} {t.currency}
-                                      </dd>
-                                    </div>
-                                    <div>
-                                      <dt>通道费</dt>
-                                      <dd>
-                                        {money(t.channelFee)} {t.currency}
-                                      </dd>
-                                    </div>
-                                    <div className="divided">
-                                      <dt>确认后冻结总额</dt>
-                                      <dd>
-                                        <strong>
-                                          {money(t.totalDeposit)} {t.currency}
-                                        </strong>
-                                      </dd>
-                                    </div>
-                                    <div>
-                                      <dt>钱包可用余额</dt>
-                                      <dd>
-                                        {money(
-                                          walletBalances.find(
-                                            (w) => w.currency === t.currency,
-                                          )?.available ?? "0",
-                                        )}{" "}
-                                        {t.currency}
-                                      </dd>
-                                    </div>
-                                  </dl>
-                                </section>
-                              ))}
-                          </div>
-                          <details
-                            className="exchange-details exchange-quote-lines"
-                            open
-                          >
-                            <summary>
-                              逐笔收款人、到账金额与费用 ·{" "}
-                              {batchPreview.quotes.length} 笔
-                            </summary>
-                            <div className="table-scroll">
-                              <table>
-                                <thead>
-                                  <tr>
-                                    <th>参考号 / 收款人</th>
-                                    <th>预计到账</th>
-                                    <th>汇率</th>
-                                    <th>费用</th>
-                                    <th>支付总额</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {batchPreview.quotes.map((q) => (
-                                    <tr key={q.id}>
-                                      <td>
-                                        <strong>{q.clientItemId}</strong>
-                                        <small>
-                                          {beneficiaries.find(
-                                            (b) => b.id === q.beneficiaryId,
-                                          )?.name ??
-                                            visibleBatch.items.find(
-                                              (i) => i.id === q.itemId,
-                                            )?.recipientName ??
-                                            "收款人"}{" "}
-                                          ·{" "}
-                                          {beneficiaries.find(
-                                            (b) => b.id === q.beneficiaryId,
-                                          )?.accountMasked ??
-                                            visibleBatch.items.find(
-                                              (i) => i.id === q.itemId,
-                                            )?.accountMasked}
-                                        </small>
-                                      </td>
-                                      <td>
-                                        {money(q.payoutAmount)}{" "}
-                                        {q.payoutCurrency}
-                                      </td>
-                                      <td>
-                                        1 {q.sourceCurrency} = {q.customerRate}{" "}
-                                        {q.payoutCurrency}
-                                      </td>
-                                      <td>
-                                        <small>
-                                          服务费 {money(q.serviceFee)}{" "}
-                                          {q.sourceCurrency}
-                                        </small>
-                                        <small>
-                                          通道费 {money(q.channelFee)}{" "}
-                                          {q.sourceCurrency}
-                                        </small>
-                                      </td>
-                                      <td>
-                                        {money(q.totalDeposit)}{" "}
-                                        {q.sourceCurrency}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </details>
-                          {visibleBatch.items.some(
-                            (i) => i.status === "error",
-                          ) && (
-                            <Note>
-                              {
-                                visibleBatch.items.filter(
-                                  (i) => i.status === "error",
-                                ).length
-                              }{" "}
-                              行校验未通过，不参与本次报价，也不会创建订单。
-                            </Note>
-                          )}
-                          {!batchEnough && (
-                            <Note danger>
-                              部分币种余额不足，暂不能提交。前往钱包充值后可返回重新报价。
-                            </Note>
-                          )}
-                          {batchRemaining === 0 && (
-                            <Note danger>
-                              报价已过期，请重新获取并核对后再确认。
-                            </Note>
-                          )}
-                          <p className="exchange-freeze-note">
-                            <Lock size={17} />
-                            确认后冻结以上本金与费用。不同币种独立核算，未知付款结果保持冻结。
-                          </p>
-                          <label className="checkbox">
-                            <input
-                              type="checkbox"
-                              checked={batchChecked}
-                              disabled={
-                                locked || !batchEnough || !batchRemaining
-                              }
-                              onChange={(e) =>
-                                setBatchChecked(e.target.checked)
-                              }
-                            />
-                            我已核对有效行、每笔收款人、报价与费用
-                          </label>
-                          <div className="actions exchange-batch-actions">
-                            <button
-                              className="button"
-                              disabled={
-                                locked ||
-                                !batchChecked ||
-                                !batchEnough ||
-                                !batchRemaining
-                              }
-                              onClick={() => void submitBatch()}
-                            >
-                              {busy ? "正在提交…" : "确认并冻结余额"}
-                              <ArrowRight size={18} />
-                            </button>
-                            <button
-                              className="button outline"
-                              disabled={locked}
-                              onClick={() => void previewBatch()}
-                            >
-                              重新获取报价
-                            </button>
-                            {!batchEnough && (
-                              <button
-                                className="button outline"
-                                disabled={busy}
-                                onClick={() => {
-                                  setBatchPreview(null);
-                                  setBatchChecked(false);
-                                  goTopup();
-                                }}
-                              >
-                                前往钱包充值
-                              </button>
-                            )}
-                            <button
-                              className="button text"
-                              disabled={busy}
-                              onClick={() => {
-                                setBatchPreview(null);
-                                setBatchChecked(false);
-                              }}
-                            >
-                              <ArrowLeft size={16} />
-                              返回校验结果
-                            </button>
-                          </div>
-                          <p className="muted small">
-                            仅为
-                            模拟报价与付款，提交时服务端会再次检查余额和有效期。
-                          </p>
-                        </>
-                      ) : visibleBatch.items.some(
-                          (i) => i.status === "created",
-                        ) &&
-                        !visibleBatch.items.some(
-                          (i) => i.status === "valid",
-                        ) ? (
-                        <div className="exchange-batch-success">
-                          <div className="circle-icon">
-                            <CheckCircle size={34} />
-                          </div>
-                          <h2>批次已提交</h2>
-                          <p>
-                            {
-                              visibleBatch.items.filter(
-                                (i) => i.status === "created",
-                              ).length
-                            }{" "}
-                            笔订单已创建，对应余额已冻结。
-                          </p>
-                          <p className="muted small">
-                            {visibleBatch.batch.clientBatchId}
-                          </p>
-                          <Note>
-                            提交不代表付款完成。处理进度、失败或待确认结果及回单，请在订单中查看。
-                          </Note>
-                          {visibleBatch.items.some(
-                            (i) => i.status === "error",
-                          ) && (
-                            <details className="exchange-details">
-                              <summary>
-                                {
-                                  visibleBatch.items.filter(
-                                    (i) => i.status === "error",
-                                  ).length
-                                }{" "}
-                                行未创建订单，查看原因
-                              </summary>
-                              {visibleBatch.items
-                                .filter((i) => i.status === "error")
-                                .map((item) => (
-                                  <div className="batch-row" key={item.id}>
-                                    <div>
-                                      <strong>
-                                        {item.clientItemId || "缺少参考号"}
-                                      </strong>
-                                      <small>
-                                        {item.errors
-                                          .map(batchErrorLabel)
-                                          .join("；")}
-                                      </small>
-                                    </div>
-                                  </div>
-                                ))}
-                              <button
-                                className="button outline"
-                                disabled={busy}
-                                onClick={() => {
-                                  setBatch(null);
-                                  setBatchPreview(null);
-                                  setBatchChecked(false);
-                                  setBatchKey("");
-                                }}
-                              >
-                                修改错误行并重新上传
-                              </button>
-                            </details>
-                          )}
-                          <div className="actions">
-                            <button
-                              className="button"
-                              onClick={() => go("orders")}
-                            >
-                              前往订单查看 <ArrowRight size={18} />
-                            </button>
-                            <button
-                              className="button outline"
-                              disabled={busy}
-                              onClick={() => {
-                                setBatch(null);
-                                setBatchPreview(null);
-                                setBatchChecked(false);
-                                setBatchKey("");
-                                setBatchText("");
-                              }}
-                            >
-                              创建新批次
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="card-heading exchange-stage-heading">
-                            <div>
-                              <h2>核对校验结果</h2>
-                              <p className="muted small">
-                                {visibleBatch.batch.clientBatchId}
-                              </p>
-                            </div>
-                            <button
-                              className="link"
-                              disabled={busy}
-                              onClick={() => {
-                                setBatch(null);
-                                setBatchPreview(null);
-                                setBatchChecked(false);
-                                setBatchKey("");
-                              }}
-                            >
-                              <ArrowLeft size={16} />
-                              更换文件 / 修改后重传
-                            </button>
-                          </div>
-                          <div className="batch-statline exchange-validation-counts">
-                            <span>共 {visibleBatch.items.length} 行</span>
-                            <span className="teal">
-                              通过{" "}
-                              {
-                                visibleBatch.items.filter(
-                                  (i) => i.status === "valid",
-                                ).length
-                              }
-                            </span>
-                            <span
-                              className={
-                                visibleBatch.items.some(
-                                  (i) => i.status === "error",
-                                )
-                                  ? "red"
-                                  : ""
-                              }
-                            >
-                              待修改{" "}
-                              {
-                                visibleBatch.items.filter(
-                                  (i) => i.status === "error",
-                                ).length
-                              }
-                            </span>
-                            {visibleBatch.items.some(
-                              (i) => i.status === "created",
-                            ) && (
-                              <button
-                                className="link"
-                                onClick={() => go("orders")}
-                              >
-                                已提交{" "}
-                                {
-                                  visibleBatch.items.filter(
-                                    (i) => i.status === "created",
-                                  ).length
-                                }{" "}
-                                笔，查看订单
-                              </button>
-                            )}
-                          </div>
-                          <div className="exchange-validation-list">
-                            {visibleBatch.items.map((item, i) => (
-                              <div className="batch-row" key={item.id}>
-                                <span
-                                  className={
-                                    "line-number " +
-                                    (item.status === "error" ? "error" : "")
-                                  }
-                                >
-                                  {item.rowNumber ?? i + 1}
-                                </span>
-                                <div>
-                                  <strong>
-                                    {item.clientItemId || "缺少参考号"}
-                                  </strong>
-                                  <small>
-                                    {item.errors
-                                      .map(batchErrorLabel)
-                                      .join("；") ||
-                                      (item.orderId
-                                        ? "订单 " + shortId(item.orderId)
-                                        : item.targetAmount
-                                          ? `${item.recipientName ?? "收款人"} · ${item.bankName ?? ""} · ${item.accountMasked ?? ""} · 目标到账 ${money(item.targetAmount)} ${item.targetCurrency}`
-                                          : `${money(item.sourceAmount)} ${item.sourceCurrency} 本金`)}
-                                  </small>
-                                </div>
-                                <Badge status={item.status}>
-                                  {item.status === "created"
-                                    ? "已创建订单"
-                                    : undefined}
-                                </Badge>
-                              </div>
-                            ))}
-                          </div>
-                          <p className="muted small">
-                            仅通过校验的行进入报价。错误行可修改后重新上传，不会创建订单。
-                          </p>
-                          <div className="actions exchange-batch-actions">
-                            <button
-                              className="button"
-                              disabled={
-                                locked ||
+                        <button
+                          className={mode === "batch" ? "active" : ""}
+                          disabled={busy}
+                          onClick={() => {
+                            setMode("batch");
+                            setBatchChecked(false);
+                          }}
+                        >
+                          批量结汇
+                        </button>
+                      </div>
+                    )}
+                    <Steps
+                      active={
+                        mode === "batch"
+                          ? batchPreview
+                            ? 3
+                            : visibleBatch?.items.some(
+                                  (i) => i.status === "created",
+                                ) &&
                                 !visibleBatch.items.some(
                                   (i) => i.status === "valid",
                                 )
+                              ? 4
+                              : visibleBatch
+                                ? 2
+                                : 1
+                          : step
+                      }
+                      labels={
+                        mode === "batch"
+                          ? ["上传表格", "校验结果", "核对报价", "提交完成"]
+                          : ["填写结汇", "核对报价", "提交完成"]
+                      }
+                    />
+                    {step === 1 && mode === "single" ? (
+                      <div className="payment-layout exchange-single">
+                        <section className="payment-form">
+                          <h2>结汇金额</h2>
+                          <div
+                            className="amount-mode"
+                            role="group"
+                            aria-label="金额输入方式"
+                          >
+                            <button
+                              type="button"
+                              disabled={busy}
+                              aria-pressed={amountMode === "target_payout"}
+                              className={
+                                amountMode === "target_payout" ? "active" : ""
                               }
-                              onClick={() => void previewBatch()}
+                              onClick={() =>
+                                editForm(() => setAmountMode("target_payout"))
+                              }
                             >
-                              下一步，获取批次报价 <ArrowRight size={18} />
+                              按到账金额
                             </button>
                             <button
-                              className="button outline"
+                              type="button"
+                              disabled={busy}
+                              aria-pressed={amountMode === "total_deposit"}
+                              className={
+                                amountMode === "total_deposit" ? "active" : ""
+                              }
                               onClick={() =>
-                                downloadCSV("汇途-批次逐行结果.csv", [
-                                  [
-                                    "clientItemId",
-                                    "status",
-                                    "errors",
-                                    "orderId",
-                                    "payoutStatus",
-                                    "completionStatus",
-                                    "receiptStatus",
-                                  ],
-                                  ...visibleBatch.items.map((i) => [
-                                    i.clientItemId,
-                                    i.status,
-                                    i.errors.map(batchErrorLabel).join("; "),
-                                    i.orderId ?? "",
-                                    orders.find((o) => o.id === i.orderId)
-                                      ?.payoutStatus ?? "",
-                                    orders.find((o) => o.id === i.orderId)
-                                      ?.completionStatus ?? "",
-                                    orders.find((o) => o.id === i.orderId)
-                                      ?.receiptStatus ?? "",
-                                  ]),
-                                ])
+                                editForm(() => setAmountMode("total_deposit"))
                               }
                             >
-                              <Download size={17} />
-                              下载逐行结果
+                              按支付总额
                             </button>
                           </div>
-                        </>
-                      )}
-                    </section>
-                  ) : step === 2 && quote ? (
-                    <section className="exchange-confirm">
-                      <div className="mobile-quote exchange-confirm-summary">
-                        <div className="card-heading">
-                          <p>收款人预计到账 · {quote.payoutCurrency}</p>
-                          <Badge status={remaining ? "valid" : "error"}>
-                            {remaining
-                              ? `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")} 有效`
-                              : "报价已过期"}
-                          </Badge>
-                        </div>
-                        <strong>
-                          {symbol(quote.payoutCurrency)}
-                          {money(quote.payoutAmount)}
-                        </strong>
-                      </div>
-                      <div className="card confirm-card">
-                        <div className="card-heading">
-                          <span className="muted">收款人</span>
-                          <span className="success-text">
-                            <Bank size={18} />
-                            已保存
-                          </span>
-                        </div>
-                        <h2>
-                          {beneficiaries.find(
-                            (b) => b.id === quote.beneficiaryId,
-                          )?.name ?? "收款人"}
-                        </h2>
-                        <p>
-                          {
-                            beneficiaries.find(
-                              (b) => b.id === quote.beneficiaryId,
-                            )?.accountMasked
-                          }{" "}
-                          ·{" "}
-                          {
-                            (
-                              {
-                                CNY: "中国大陆",
-                                USD: "美国",
-                                EUR: "欧元区",
-                                GBP: "英国",
-                                MXN: "墨西哥",
-                                BRL: "巴西",
-                              } as Record<string, string>
-                            )[quote.payoutCurrency]
-                          }{" "}
-                          · {quote.payoutCurrency}
-                        </p>
-                        <div className="ruleline" />
-                        <FeeRows quote={quote} />
-                        <div className="wallet-inline">
-                          <span>钱包可用余额</span>
-                          <strong>
-                            {money(
-                              walletBalances.find(
-                                (w) => w.currency === quote.sourceCurrency,
-                              )?.available ?? "0",
-                            )}{" "}
-                            {quote.sourceCurrency}
-                          </strong>
-                        </div>
-                        <p className="exchange-freeze-note">
-                          <Lock size={18} />
-                          确认后冻结 {money(quote.totalDeposit)}{" "}
-                          {quote.sourceCurrency}
-                          （含费用），付款完成后扣除。
-                        </p>
-                        <details className="exchange-details">
-                          <summary>报价详情</summary>
-                          <dl className="details">
-                            <div>
-                              <dt>金额输入方式</dt>
-                              <dd>
-                                {quote.amountMode === "total_deposit"
-                                  ? "支付总额（含费用）"
-                                  : "收款金额"}
-                              </dd>
+                          <label>
+                            {amountMode === "total_deposit"
+                              ? "支付总额（含费用）"
+                              : "收款金额"}
+                            <div className="input-unit amount">
+                              <input
+                                aria-label={
+                                  amountMode === "total_deposit"
+                                    ? "支付总额（含费用）"
+                                    : "收款金额"
+                                }
+                                inputMode="decimal"
+                                placeholder={
+                                  amountMode === "target_payout"
+                                    ? market === "CNY"
+                                      ? "例如 100000"
+                                      : "例如 50000"
+                                    : "例如 1000"
+                                }
+                                value={enteredAmount}
+                                disabled={busy}
+                                onChange={(e) =>
+                                  editForm(() =>
+                                    setEnteredAmount(e.target.value),
+                                  )
+                                }
+                              />
+                              <SelectField
+                                aria-label={
+                                  amountMode === "target_payout"
+                                    ? "出款币种"
+                                    : "稳定币"
+                                }
+                                value={
+                                  amountMode === "target_payout"
+                                    ? market
+                                    : asset
+                                }
+                                disabled={busy}
+                                onChange={(e) =>
+                                  editForm(() => {
+                                    if (amountMode === "target_payout") {
+                                      setMarket(e.target.value);
+                                      setBeneficiaryId("");
+                                    } else setAsset(e.target.value);
+                                  })
+                                }
+                              >
+                                {amountMode === "target_payout" ? (
+                                  <>
+                                    <option>CNY</option>
+                                    <option>USD</option>
+                                    <option>EUR</option>
+                                    <option>MXN</option>
+                                    <option>BRL</option>
+                                    <option>GBP</option>
+                                  </>
+                                ) : (
+                                  <>
+                                    <option>USDT</option>
+                                    <option>USDC</option>
+                                  </>
+                                )}
+                              </SelectField>
                             </div>
-
-                            <div>
-                              <dt>到期时间</dt>
-                              <dd>{date(quote.expiresAt)}</dd>
+                          </label>
+                          <div className="exchange-currency-row">
+                            {amountMode === "target_payout" ? (
+                              <label>
+                                支付稳定币
+                                <SelectField
+                                  aria-label="支付稳定币"
+                                  value={asset}
+                                  disabled={busy}
+                                  onChange={(e) =>
+                                    editForm(() => setAsset(e.target.value))
+                                  }
+                                >
+                                  <option>USDT</option>
+                                  <option>USDC</option>
+                                </SelectField>
+                              </label>
+                            ) : (
+                              <label>
+                                收款地区 / 币种
+                                <SelectField
+                                  aria-label="收款地区"
+                                  value={market}
+                                  disabled={busy}
+                                  onChange={(e) =>
+                                    editForm(() => {
+                                      setMarket(e.target.value);
+                                      setBeneficiaryId("");
+                                    })
+                                  }
+                                >
+                                  <option value="CNY">中国大陆 · CNY</option>
+                                  <option value="USD">美国 · USD</option>
+                                  <option value="EUR">欧元区 · EUR</option>
+                                  <option value="MXN">墨西哥 · MXN</option>
+                                  <option value="BRL">巴西 · BRL</option>
+                                  <option value="GBP">英国 · GBP</option>
+                                </SelectField>
+                              </label>
+                            )}
+                            <div className="exchange-available">
+                              <span>钱包可用余额</span>
+                              <strong>
+                                {money(sourceBalance?.available ?? "0")} {asset}
+                              </strong>
+                              <button
+                                className="link"
+                                disabled={busy}
+                                onClick={goTopup}
+                              >
+                                充值
+                              </button>
                             </div>
-                          </dl>
-                          <p>未知付款结果保持冻结，平台确认后更新状态。</p>
-                        </details>
-                        <label className="checkbox">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={busy}
-                            onChange={(e) => setChecked(e.target.checked)}
-                          />
-                          我已核对收款账户、费用与总额
-                        </label>
-                        {!enoughBalance && (
-                          <>
+                          </div>
+                          <div className="card-heading recipient-heading">
+                            <h2>收款人</h2>
+                            <button
+                              className="link"
+                              disabled={busy}
+                              onClick={() => {
+                                go("profile");
+                                setProfileTab("recipients");
+                              }}
+                            >
+                              {usableBeneficiaries.length
+                                ? "管理账户"
+                                : "查看已保存账户"}
+                            </button>
+                          </div>
+                          {!usableBeneficiaries.length && (
+                            <div className="recipient-empty">
+                              <strong>添加您的第一个收款人</strong>
+                              <p>填写{market}收款账户，保存后继续结汇</p>
+                              <button
+                                className="button"
+                                disabled={locked}
+                                onClick={addRecipient}
+                              >
+                                <Plus size={17} />
+                                添加收款人
+                              </button>
+                            </div>
+                          )}
+                          {usableBeneficiaries.length > 0 && (
+                            <div className="recipient-select">
+                              <div className="person-mark">
+                                <User size={22} />
+                              </div>
+                              <div>
+                                <SelectField
+                                  aria-label="选择收款人"
+                                  value={chosenBeneficiaryId}
+                                  disabled={!usableBeneficiaries.length || busy}
+                                  onChange={(e) =>
+                                    editForm(() =>
+                                      setBeneficiaryId(e.target.value),
+                                    )
+                                  }
+                                >
+                                  {!usableBeneficiaries.length && (
+                                    <option value="">暂无可用收款账户</option>
+                                  )}
+                                  {usableBeneficiaries.map((b) => (
+                                    <option key={b.id} value={b.id}>
+                                      {b.name}
+                                    </option>
+                                  ))}
+                                </SelectField>
+                                <p>
+                                  {recipient
+                                    ? `${recipient.accountMasked} · ${recipient.currency}`
+                                    : "添加收款账户后即可使用"}
+                                </p>
+                              </div>
+                              <Bank size={22} className="teal" />
+                            </div>
+                          )}
+                          {usableBeneficiaries.length > 0 && (
+                            <div className="actions exchange-recipient-actions">
+                              <button
+                                className="link"
+                                disabled={locked}
+                                onClick={addRecipient}
+                              >
+                                <Plus size={16} />
+                                新增收款账户
+                              </button>
+                              <span className="muted small">
+                                请核对收款信息
+                              </span>
+                            </div>
+                          )}
+                          <details className="exchange-details">
+                            <summary>费用说明</summary>
+                            <p>
+                              {amountMode === "total_deposit"
+                                ? "支付总额包含服务费与通道费，扣除费用后的本金用于兑换。"
+                                : "按目标到账金额反算稳定币本金及费用；收款银行如另收费，以实际渠道规则为准。"}
+                            </p>
+                            <p>
+                              报价在有效期内锁定汇率及费用，提交前请核对收款信息。
+                            </p>
+                          </details>
+                        </section>
+                        <aside
+                          className="quote-panel exchange-quote"
+                          aria-label="本次报价"
+                        >
+                          <div className="card-heading">
+                            <h2>本次报价</h2>
+                            {quote ? (
+                              <Badge status={remaining ? "valid" : "error"}>
+                                {remaining
+                                  ? `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")} 有效`
+                                  : "已过期"}
+                              </Badge>
+                            ) : (
+                              <span className="muted small">待报价</span>
+                            )}
+                          </div>
+                          <p className="quote-label">收款人预计到账</p>
+                          <div className="quote-amount">
+                            {quote
+                              ? symbol(quote.payoutCurrency) +
+                                money(quote.payoutAmount)
+                              : "—"}
+                            <span>{quote?.payoutCurrency ?? market}</span>
+                          </div>
+                          {quote ? (
+                            <FeeRows quote={quote} />
+                          ) : (
+                            <div className="quote-placeholder">
+                              <p>
+                                {quoteBusy
+                                  ? "正在获取报价…"
+                                  : "填写金额并选择可用收款人"}
+                              </p>
+                            </div>
+                          )}
+                          {quoteError && <Note danger>{quoteError}</Note>}
+                          {quote && !enoughBalance && (
                             <Note danger>
-                              可用余额不足，请先充值。当前草稿会保留。
+                              余额不足，需 {money(quote.totalDeposit)}{" "}
+                              {quote.sourceCurrency}。充值后草稿会保留。
                             </Note>
+                          )}
+                          <button
+                            className="button full big"
+                            disabled={
+                              locked ||
+                              quoteBusy ||
+                              !enoughBalance ||
+                              !quote ||
+                              remaining === 0 ||
+                              currentCustomer?.status !== "approved"
+                            }
+                            onClick={() => {
+                              setStep(2);
+                              setChecked(false);
+                              window.scrollTo(0, 0);
+                            }}
+                          >
+                            下一步，核对结汇 <ArrowRight size={20} />
+                          </button>
+                          {quote && remaining === 0 && (
+                            <button
+                              className="button outline full"
+                              disabled={locked || quoteBusy}
+                              onClick={() => setQuoteVersion((v) => v + 1)}
+                            >
+                              报价过期，重新获取
+                            </button>
+                          )}
+                          {quoteError && (
+                            <button
+                              className="button text full"
+                              disabled={locked || quoteBusy}
+                              onClick={() => setQuoteVersion((v) => v + 1)}
+                            >
+                              重试报价
+                            </button>
+                          )}
+                          {quote && !enoughBalance && (
                             <button
                               className="button outline full"
                               disabled={busy}
                               onClick={goTopup}
                             >
-                              前往钱包
+                              前往钱包充值 <ArrowRight size={17} />
                             </button>
+                          )}
+                          {currentCustomer?.status !== "approved" && (
+                            <Note danger>
+                              当前客户尚未通过审核，无法创建报价。
+                            </Note>
+                          )}
+                          <p className="center muted small exchange-disclaimer">
+                            下一步仍需确认，暂不冻结余额
+                          </p>
+                        </aside>
+                      </div>
+                    ) : step === 1 && mode === "batch" ? (
+                      <section className="card exchange-batch">
+                        {!visibleBatch ? (
+                          <>
+                            {currentCustomer?.kind === "company" && (
+                              <MerchantBatchImport
+                                customerId={customerId}
+                                customerName={
+                                  currentCustomer?.name ?? "当前商户"
+                                }
+                                disabled={locked}
+                                onImport={async (rows, clientBatchId) => {
+                                  const result = await mutate<BatchResult>(
+                                    "batches/merchant",
+                                    { customerId, clientBatchId, rows },
+                                    "服务端逐行校验完成，请核对目标到账金额、有效行和错误行。",
+                                  );
+                                  if (result) {
+                                    setBatch(result);
+                                    setBatchChecked(false);
+                                    setBatchPreview(null);
+                                    setBatchKey(clientBatchId);
+                                  }
+                                  return !!result;
+                                }}
+                              />
+                            )}
+                            <details
+                              className="legacy-batch-import"
+                              open={
+                                currentCustomer?.kind !== "company"
+                                  ? true
+                                  : undefined
+                              }
+                            >
+                              <summary>兼容旧版收款账户 ID CSV</summary>
+                              <div className="card-heading">
+                                <h2>旧版本金 CSV</h2>
+                                <button
+                                  className="link"
+                                  onClick={() =>
+                                    downloadCSV(
+                                      "汇途批量模板.csv",
+                                      template()
+                                        .split("\n")
+                                        .map((line) => line.split(",")),
+                                    )
+                                  }
+                                >
+                                  <Download size={17} />
+                                  下载模板
+                                </button>
+                              </div>
+                              <Note>
+                                批量 CSV 的 sourceAmount
+                                始终表示兑换本金，费用另加。 CSV 将提交给隔离
+                                API 校验与保存。仅导入虚构资料；最多 100
+                                行、100KB，使用当前客户已保存的收款账户 ID。
+                              </Note>
+                              <div className="upload-zone">
+                                <Upload size={28} />
+                                <strong>导入 CSV 演示文件</strong>
+                                <span>每行独立验证 · UTF-8 编码</span>
+                                <label className="button outline file-label">
+                                  选择 CSV
+                                  <input
+                                    type="file"
+                                    accept=".csv,text/csv"
+                                    aria-label="导入 CSV"
+                                    disabled={busy}
+                                    onChange={async (e) => {
+                                      const f = e.target.files?.[0];
+                                      if (!f) return;
+                                      if (f.size > 100000) {
+                                        setError("文件请小于 100KB");
+                                        return;
+                                      }
+                                      setBatchText(await f.text());
+                                      setBatch(null);
+                                      setBatchPreview(null);
+                                      setBatchKey("");
+                                      setToast(
+                                        "CSV 已在浏览器读取，点击下方按钮提交服务端校验。",
+                                      );
+                                      e.target.value = "";
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                              <label>
+                                演示 CSV
+                                <textarea
+                                  aria-label="演示 CSV"
+                                  value={batchText}
+                                  rows={6}
+                                  spellCheck={false}
+                                  disabled={busy}
+                                  placeholder="clientItemId,beneficiaryId,sourceCurrency,sourceAmount"
+                                  onChange={(e) => {
+                                    setBatchText(e.target.value);
+                                    setBatch(null);
+                                    setBatchPreview(null);
+                                    setBatchKey("");
+                                  }}
+                                />
+                              </label>
+                              <div className="actions">
+                                <button
+                                  className="button"
+                                  disabled={
+                                    locked || !batchText.trim() || !!batch
+                                  }
+                                  onClick={() => void importBatch()}
+                                >
+                                  提交服务端校验
+                                </button>
+                                <button
+                                  className="button text"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setBatchText(template(true));
+                                    setBatch(null);
+                                    setBatchPreview(null);
+                                    setBatchKey("");
+                                  }}
+                                >
+                                  载入含错误样例
+                                </button>
+                              </div>
+                            </details>
+                          </>
+                        ) : batchPreview ? (
+                          <>
+                            <div className="card-heading exchange-stage-heading">
+                              <div>
+                                <h2>核对批次报价</h2>
+                                <p className="muted small">
+                                  {batchPreview.quotes.length} 笔有效行 ·{" "}
+                                  {visibleBatch.batch.clientBatchId}
+                                </p>
+                              </div>
+                              <Badge
+                                status={batchRemaining ? "valid" : "error"}
+                              >
+                                {batchRemaining
+                                  ? `${batchRemaining} 秒有效`
+                                  : "报价已过期"}
+                              </Badge>
+                            </div>
+                            <div className="exchange-batch-totals">
+                              {batchPreview.totals
+                                .filter((t) =>
+                                  batchPreview.quotes.some(
+                                    (q) => q.sourceCurrency === t.currency,
+                                  ),
+                                )
+                                .map((t) => (
+                                  <section
+                                    className="exchange-currency-total"
+                                    key={t.currency}
+                                  >
+                                    <h3>{t.currency}</h3>
+                                    <dl className="details">
+                                      <div>
+                                        <dt>兑换本金</dt>
+                                        <dd>
+                                          {money(t.sourceAmount)} {t.currency}
+                                        </dd>
+                                      </div>
+                                      <div>
+                                        <dt>服务费</dt>
+                                        <dd>
+                                          {money(t.serviceFee)} {t.currency}
+                                        </dd>
+                                      </div>
+                                      <div>
+                                        <dt>通道费</dt>
+                                        <dd>
+                                          {money(t.channelFee)} {t.currency}
+                                        </dd>
+                                      </div>
+                                      <div className="divided">
+                                        <dt>确认后冻结总额</dt>
+                                        <dd>
+                                          <strong>
+                                            {money(t.totalDeposit)} {t.currency}
+                                          </strong>
+                                        </dd>
+                                      </div>
+                                      <div>
+                                        <dt>钱包可用余额</dt>
+                                        <dd>
+                                          {money(
+                                            walletBalances.find(
+                                              (w) => w.currency === t.currency,
+                                            )?.available ?? "0",
+                                          )}{" "}
+                                          {t.currency}
+                                        </dd>
+                                      </div>
+                                    </dl>
+                                  </section>
+                                ))}
+                            </div>
+                            <details
+                              className="exchange-details exchange-quote-lines"
+                              open
+                            >
+                              <summary>
+                                逐笔收款人、到账金额与费用 ·{" "}
+                                {batchPreview.quotes.length} 笔
+                              </summary>
+                              <div className="table-scroll">
+                                <table>
+                                  <thead>
+                                    <tr>
+                                      <th>参考号 / 收款人</th>
+                                      <th>预计到账</th>
+                                      <th>汇率</th>
+                                      <th>费用</th>
+                                      <th>支付总额</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {batchPreview.quotes.map((q) => (
+                                      <tr key={q.id}>
+                                        <td>
+                                          <strong>{q.clientItemId}</strong>
+                                          <small>
+                                            {beneficiaries.find(
+                                              (b) => b.id === q.beneficiaryId,
+                                            )?.name ??
+                                              visibleBatch.items.find(
+                                                (i) => i.id === q.itemId,
+                                              )?.recipientName ??
+                                              "收款人"}{" "}
+                                            ·{" "}
+                                            {beneficiaries.find(
+                                              (b) => b.id === q.beneficiaryId,
+                                            )?.accountMasked ??
+                                              visibleBatch.items.find(
+                                                (i) => i.id === q.itemId,
+                                              )?.accountMasked}
+                                          </small>
+                                        </td>
+                                        <td>
+                                          {money(q.payoutAmount)}{" "}
+                                          {q.payoutCurrency}
+                                        </td>
+                                        <td>
+                                          1 {q.sourceCurrency} ={" "}
+                                          {q.customerRate} {q.payoutCurrency}
+                                        </td>
+                                        <td>
+                                          <small>
+                                            服务费 {money(q.serviceFee)}{" "}
+                                            {q.sourceCurrency}
+                                          </small>
+                                          <small>
+                                            通道费 {money(q.channelFee)}{" "}
+                                            {q.sourceCurrency}
+                                          </small>
+                                        </td>
+                                        <td>
+                                          {money(q.totalDeposit)}{" "}
+                                          {q.sourceCurrency}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </details>
+                            {visibleBatch.items.some(
+                              (i) => i.status === "error",
+                            ) && (
+                              <Note>
+                                {
+                                  visibleBatch.items.filter(
+                                    (i) => i.status === "error",
+                                  ).length
+                                }{" "}
+                                行校验未通过，不参与本次报价，也不会创建订单。
+                              </Note>
+                            )}
+                            {!batchEnough && (
+                              <Note danger>
+                                部分币种余额不足，暂不能提交。前往钱包充值后可返回重新报价。
+                              </Note>
+                            )}
+                            {batchRemaining === 0 && (
+                              <Note danger>
+                                报价已过期，请重新获取并核对后再确认。
+                              </Note>
+                            )}
+                            <p className="exchange-freeze-note">
+                              <Lock size={17} />
+                              确认后冻结以上本金与费用。不同币种独立核算，未知付款结果保持冻结。
+                            </p>
+                            <label className="checkbox">
+                              <input
+                                type="checkbox"
+                                checked={batchChecked}
+                                disabled={
+                                  locked || !batchEnough || !batchRemaining
+                                }
+                                onChange={(e) =>
+                                  setBatchChecked(e.target.checked)
+                                }
+                              />
+                              我已核对有效行、每笔收款人、报价与费用
+                            </label>
+                            <div className="actions exchange-batch-actions">
+                              <button
+                                className="button"
+                                disabled={
+                                  locked ||
+                                  !batchChecked ||
+                                  !batchEnough ||
+                                  !batchRemaining
+                                }
+                                onClick={() => void submitBatch()}
+                              >
+                                {busy ? "正在提交…" : "确认并冻结余额"}
+                                <ArrowRight size={18} />
+                              </button>
+                              <button
+                                className="button outline"
+                                disabled={locked}
+                                onClick={() => void previewBatch()}
+                              >
+                                重新获取报价
+                              </button>
+                              {!batchEnough && (
+                                <button
+                                  className="button outline"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setBatchPreview(null);
+                                    setBatchChecked(false);
+                                    goTopup();
+                                  }}
+                                >
+                                  前往钱包充值
+                                </button>
+                              )}
+                              <button
+                                className="button text"
+                                disabled={busy}
+                                onClick={() => {
+                                  setBatchPreview(null);
+                                  setBatchChecked(false);
+                                }}
+                              >
+                                <ArrowLeft size={16} />
+                                返回校验结果
+                              </button>
+                            </div>
+                            <p className="muted small">
+                              仅为
+                              模拟报价与付款，提交时服务端会再次检查余额和有效期。
+                            </p>
+                          </>
+                        ) : visibleBatch.items.some(
+                            (i) => i.status === "created",
+                          ) &&
+                          !visibleBatch.items.some(
+                            (i) => i.status === "valid",
+                          ) ? (
+                          <div className="exchange-batch-success">
+                            <div className="circle-icon">
+                              <CheckCircle size={34} />
+                            </div>
+                            <h2>批次已提交</h2>
+                            <p>
+                              {
+                                visibleBatch.items.filter(
+                                  (i) => i.status === "created",
+                                ).length
+                              }{" "}
+                              笔订单已创建，对应余额已冻结。
+                            </p>
+                            <p className="muted small">
+                              {visibleBatch.batch.clientBatchId}
+                            </p>
+                            <Note>
+                              提交不代表付款完成。处理进度、失败或待确认结果及回单，请在订单中查看。
+                            </Note>
+                            {visibleBatch.items.some(
+                              (i) => i.status === "error",
+                            ) && (
+                              <details className="exchange-details">
+                                <summary>
+                                  {
+                                    visibleBatch.items.filter(
+                                      (i) => i.status === "error",
+                                    ).length
+                                  }{" "}
+                                  行未创建订单，查看原因
+                                </summary>
+                                {visibleBatch.items
+                                  .filter((i) => i.status === "error")
+                                  .map((item) => (
+                                    <div className="batch-row" key={item.id}>
+                                      <div>
+                                        <strong>
+                                          {item.clientItemId || "缺少参考号"}
+                                        </strong>
+                                        <small>
+                                          {item.errors
+                                            .map(batchErrorLabel)
+                                            .join("；")}
+                                        </small>
+                                      </div>
+                                    </div>
+                                  ))}
+                                <button
+                                  className="button outline"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setBatch(null);
+                                    setBatchPreview(null);
+                                    setBatchChecked(false);
+                                    setBatchKey("");
+                                  }}
+                                >
+                                  修改错误行并重新上传
+                                </button>
+                              </details>
+                            )}
+                            <div className="actions">
+                              <button
+                                className="button"
+                                onClick={() => go("orders")}
+                              >
+                                前往订单查看 <ArrowRight size={18} />
+                              </button>
+                              <button
+                                className="button outline"
+                                disabled={busy}
+                                onClick={() => {
+                                  setBatch(null);
+                                  setBatchPreview(null);
+                                  setBatchChecked(false);
+                                  setBatchKey("");
+                                  setBatchText("");
+                                }}
+                              >
+                                创建新批次
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="card-heading exchange-stage-heading">
+                              <div>
+                                <h2>核对校验结果</h2>
+                                <p className="muted small">
+                                  {visibleBatch.batch.clientBatchId}
+                                </p>
+                              </div>
+                              <button
+                                className="link"
+                                disabled={busy}
+                                onClick={() => {
+                                  setBatch(null);
+                                  setBatchPreview(null);
+                                  setBatchChecked(false);
+                                  setBatchKey("");
+                                }}
+                              >
+                                <ArrowLeft size={16} />
+                                更换文件 / 修改后重传
+                              </button>
+                            </div>
+                            <div className="batch-statline exchange-validation-counts">
+                              <span>共 {visibleBatch.items.length} 行</span>
+                              <span className="teal">
+                                通过{" "}
+                                {
+                                  visibleBatch.items.filter(
+                                    (i) => i.status === "valid",
+                                  ).length
+                                }
+                              </span>
+                              <span
+                                className={
+                                  visibleBatch.items.some(
+                                    (i) => i.status === "error",
+                                  )
+                                    ? "red"
+                                    : ""
+                                }
+                              >
+                                待修改{" "}
+                                {
+                                  visibleBatch.items.filter(
+                                    (i) => i.status === "error",
+                                  ).length
+                                }
+                              </span>
+                              {visibleBatch.items.some(
+                                (i) => i.status === "created",
+                              ) && (
+                                <button
+                                  className="link"
+                                  onClick={() => go("orders")}
+                                >
+                                  已提交{" "}
+                                  {
+                                    visibleBatch.items.filter(
+                                      (i) => i.status === "created",
+                                    ).length
+                                  }{" "}
+                                  笔，查看订单
+                                </button>
+                              )}
+                            </div>
+                            <div className="exchange-validation-list">
+                              {visibleBatch.items.map((item, i) => (
+                                <div className="batch-row" key={item.id}>
+                                  <span
+                                    className={
+                                      "line-number " +
+                                      (item.status === "error" ? "error" : "")
+                                    }
+                                  >
+                                    {item.rowNumber ?? i + 1}
+                                  </span>
+                                  <div>
+                                    <strong>
+                                      {item.clientItemId || "缺少参考号"}
+                                    </strong>
+                                    <small>
+                                      {item.errors
+                                        .map(batchErrorLabel)
+                                        .join("；") ||
+                                        (item.orderId
+                                          ? "订单 " + shortId(item.orderId)
+                                          : item.targetAmount
+                                            ? `${item.recipientName ?? "收款人"} · ${item.bankName ?? ""} · ${item.accountMasked ?? ""} · 目标到账 ${money(item.targetAmount)} ${item.targetCurrency}`
+                                            : `${money(item.sourceAmount)} ${item.sourceCurrency} 本金`)}
+                                    </small>
+                                  </div>
+                                  <Badge status={item.status}>
+                                    {item.status === "created"
+                                      ? "已创建订单"
+                                      : undefined}
+                                  </Badge>
+                                </div>
+                              ))}
+                            </div>
+                            <p className="muted small">
+                              仅通过校验的行进入报价。错误行可修改后重新上传，不会创建订单。
+                            </p>
+                            <div className="actions exchange-batch-actions">
+                              <button
+                                className="button"
+                                disabled={
+                                  locked ||
+                                  !visibleBatch.items.some(
+                                    (i) => i.status === "valid",
+                                  )
+                                }
+                                onClick={() => void previewBatch()}
+                              >
+                                下一步，获取批次报价 <ArrowRight size={18} />
+                              </button>
+                              <button
+                                className="button outline"
+                                onClick={() =>
+                                  downloadCSV("汇途-批次逐行结果.csv", [
+                                    [
+                                      "clientItemId",
+                                      "status",
+                                      "errors",
+                                      "orderId",
+                                      "payoutStatus",
+                                      "completionStatus",
+                                      "receiptStatus",
+                                    ],
+                                    ...visibleBatch.items.map((i) => [
+                                      i.clientItemId,
+                                      i.status,
+                                      i.errors.map(batchErrorLabel).join("; "),
+                                      i.orderId ?? "",
+                                      orders.find((o) => o.id === i.orderId)
+                                        ?.payoutStatus ?? "",
+                                      orders.find((o) => o.id === i.orderId)
+                                        ?.completionStatus ?? "",
+                                      orders.find((o) => o.id === i.orderId)
+                                        ?.receiptStatus ?? "",
+                                    ]),
+                                  ])
+                                }
+                              >
+                                <Download size={17} />
+                                下载逐行结果
+                              </button>
+                            </div>
                           </>
                         )}
-                        {remaining === 0 && (
-                          <Note danger>报价已过期，请返回重新获取并核对。</Note>
-                        )}
-                        <button
-                          className="button full big"
-                          disabled={
-                            locked ||
-                            !checked ||
-                            remaining === 0 ||
-                            !enoughBalance
-                          }
-                          onClick={() => void createOrder()}
-                        >
-                          {busy ? "正在提交…" : "确认结汇并冻结余额"}
-                          <ArrowRight size={20} />
-                        </button>
-                        <div className="actions centered">
+                      </section>
+                    ) : step === 2 && quote ? (
+                      <section className="exchange-confirm">
+                        <div className="mobile-quote exchange-confirm-summary">
+                          <div className="card-heading">
+                            <p>收款人预计到账 · {quote.payoutCurrency}</p>
+                            <Badge status={remaining ? "valid" : "error"}>
+                              {remaining
+                                ? `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")} 有效`
+                                : "报价已过期"}
+                            </Badge>
+                          </div>
+                          <strong>
+                            {symbol(quote.payoutCurrency)}
+                            {money(quote.payoutAmount)}
+                          </strong>
+                        </div>
+                        <div className="card confirm-card">
+                          <div className="card-heading">
+                            <span className="muted">收款人</span>
+                            <span className="success-text">
+                              <Bank size={18} />
+                              已保存
+                            </span>
+                          </div>
+                          <h2>
+                            {beneficiaries.find(
+                              (b) => b.id === quote.beneficiaryId,
+                            )?.name ?? "收款人"}
+                          </h2>
+                          <p>
+                            {
+                              beneficiaries.find(
+                                (b) => b.id === quote.beneficiaryId,
+                              )?.accountMasked
+                            }{" "}
+                            ·{" "}
+                            {
+                              (
+                                {
+                                  CNY: "中国大陆",
+                                  USD: "美国",
+                                  EUR: "欧元区",
+                                  GBP: "英国",
+                                  MXN: "墨西哥",
+                                  BRL: "巴西",
+                                } as Record<string, string>
+                              )[quote.payoutCurrency]
+                            }{" "}
+                            · {quote.payoutCurrency}
+                          </p>
+                          <div className="ruleline" />
+                          <FeeRows quote={quote} />
+                          <div className="wallet-inline">
+                            <span>钱包可用余额</span>
+                            <strong>
+                              {money(
+                                walletBalances.find(
+                                  (w) => w.currency === quote.sourceCurrency,
+                                )?.available ?? "0",
+                              )}{" "}
+                              {quote.sourceCurrency}
+                            </strong>
+                          </div>
+                          <p className="exchange-freeze-note">
+                            <Lock size={18} />
+                            确认后冻结 {money(quote.totalDeposit)}{" "}
+                            {quote.sourceCurrency}
+                            （含费用），付款完成后扣除。
+                          </p>
+                          <details className="exchange-details">
+                            <summary>报价详情</summary>
+                            <dl className="details">
+                              <div>
+                                <dt>金额输入方式</dt>
+                                <dd>
+                                  {quote.amountMode === "total_deposit"
+                                    ? "支付总额（含费用）"
+                                    : "收款金额"}
+                                </dd>
+                              </div>
+
+                              <div>
+                                <dt>到期时间</dt>
+                                <dd>{date(quote.expiresAt)}</dd>
+                              </div>
+                            </dl>
+                            <p>未知付款结果保持冻结，平台确认后更新状态。</p>
+                          </details>
+                          <label className="checkbox">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={busy}
+                              onChange={(e) => setChecked(e.target.checked)}
+                            />
+                            我已核对收款账户、费用与总额
+                          </label>
+                          {!enoughBalance && (
+                            <>
+                              <Note danger>
+                                可用余额不足，请先充值。当前草稿会保留。
+                              </Note>
+                              <button
+                                className="button outline full"
+                                disabled={busy}
+                                onClick={goTopup}
+                              >
+                                前往钱包
+                              </button>
+                            </>
+                          )}
+                          {remaining === 0 && (
+                            <Note danger>
+                              报价已过期，请返回重新获取并核对。
+                            </Note>
+                          )}
                           <button
-                            className="button text"
+                            className="button full big"
+                            disabled={
+                              locked ||
+                              !checked ||
+                              remaining === 0 ||
+                              !enoughBalance
+                            }
+                            onClick={() => void createOrder()}
+                          >
+                            {busy ? "正在提交…" : "确认结汇并冻结余额"}
+                            <ArrowRight size={20} />
+                          </button>
+                          <div className="actions centered">
+                            <button
+                              className="button text"
+                              disabled={busy}
+                              onClick={() => {
+                                setStep(1);
+                                setQuote(null);
+                                setChecked(false);
+                              }}
+                            >
+                              <ArrowLeft size={16} />
+                              返回修改 / 重新报价
+                            </button>
+                          </div>
+                        </div>
+                      </section>
+                    ) : step === 3 && order && order.id === selected ? (
+                      <section className="card exchange-order-success">
+                        <div className="circle-icon">
+                          <CheckCircle size={34} />
+                        </div>
+                        <h2>结汇订单已提交</h2>
+                        <p>订单 {shortId(order.id)}</p>
+                        {fundingPanel(order)}
+                        <div className="actions">
+                          <button
+                            className="button"
+                            onClick={() => go("detail")}
+                          >
+                            查看订单状态 <ArrowRight size={18} />
+                          </button>
+                          <button
+                            className="button outline"
                             disabled={busy}
                             onClick={() => {
                               setStep(1);
@@ -3522,26 +3704,20 @@ export default function Home() {
                               setChecked(false);
                             }}
                           >
-                            <ArrowLeft size={16} />
-                            返回修改 / 重新报价
+                            再创建一笔结汇
+                          </button>
+                          <button
+                            className="button text"
+                            onClick={() => go("orders")}
+                          >
+                            全部订单与回单
                           </button>
                         </div>
-                      </div>
-                    </section>
-                  ) : step === 3 && order && order.id === selected ? (
-                    <section className="card exchange-order-success">
-                      <div className="circle-icon">
-                        <CheckCircle size={34} />
-                      </div>
-                      <h2>结汇订单已提交</h2>
-                      <p>订单 {shortId(order.id)}</p>
-                      {fundingPanel(order)}
-                      <div className="actions">
-                        <button className="button" onClick={() => go("detail")}>
-                          查看订单状态 <ArrowRight size={18} />
-                        </button>
+                      </section>
+                    ) : (
+                      <Empty title="请重新核对结汇信息">
                         <button
-                          className="button outline"
+                          className="button"
                           disabled={busy}
                           onClick={() => {
                             setStep(1);
@@ -3549,1211 +3725,1222 @@ export default function Home() {
                             setChecked(false);
                           }}
                         >
-                          再创建一笔结汇
+                          返回填写结汇
                         </button>
+                      </Empty>
+                    )}
+                  </div>
+                )}
+                {(page === "recipients" ||
+                  (page === "profile" && profileTab === "recipients")) && (
+                  <>
+                    <div className="section-actions">
+                      {maker && (
                         <button
-                          className="button text"
-                          onClick={() => go("orders")}
-                        >
-                          全部订单与回单
-                        </button>
-                      </div>
-                    </section>
-                  ) : (
-                    <Empty title="请重新核对结汇信息">
-                      <button
-                        className="button"
-                        disabled={busy}
-                        onClick={() => {
-                          setStep(1);
-                          setQuote(null);
-                          setChecked(false);
-                        }}
-                      >
-                        返回填写结汇
-                      </button>
-                    </Empty>
-                  )}
-                </div>
-              )}
-              {(page === "recipients" ||
-                (page === "profile" && profileTab === "recipients")) && (
-                <>
-                  <div className="section-actions">
-                    {maker && (
-                      <button
-                        className="button"
-                        disabled={
-                          locked ||
-                          !customers.some((c) => c.status === "approved")
-                        }
-                        onClick={() =>
-                          workspace
-                            ? setRecipientForm({ currency: market })
-                            : openCommand({
-                                title: "新增收款账户",
-                                description:
-                                  "创建中国大陆 CNY 路线的虚构账户（尾号 8888）。保存后即可使用，无需人工审核，仅检查字段和格式；不收集或验证真实银行账号。",
-                                path: "beneficiaries",
-                                base: {
-                                  country: "CN",
-                                  currency: "CNY",
-                                  accountMasked: "**** 8888",
-                                  accountToken: "mock-vault-" + uid(),
-                                },
-                                fields: [
-                                  {
-                                    key: "customerId",
-                                    label: "所属客户",
-                                    value:
-                                      role === "customer"
-                                        ? customerId
-                                        : (customers.find(
-                                            (c) => c.status === "approved",
-                                          )?.id ?? ""),
-                                    type: "select",
-                                    options: customers
-                                      .filter((c) => c.status === "approved")
-                                      .map((c) => [c.id, c.name]),
+                          className="button"
+                          disabled={
+                            locked ||
+                            !customers.some((c) => c.status === "approved")
+                          }
+                          onClick={() =>
+                            workspace
+                              ? setRecipientForm({ currency: market })
+                              : openCommand({
+                                  title: "新增收款账户",
+                                  description:
+                                    "创建中国大陆 CNY 路线的虚构账户（尾号 8888）。保存后即可使用，无需人工审核，仅检查字段和格式；不收集或验证真实银行账号。",
+                                  path: "beneficiaries",
+                                  base: {
+                                    country: "CN",
+                                    currency: "CNY",
+                                    accountMasked: "**** 8888",
+                                    accountToken: "mock-vault-" + uid(),
                                   },
-                                  {
-                                    key: "name",
-                                    label: "收款人名称",
-                                    value: "新收款人",
-                                  },
-                                ],
-                                button: "保存收款账户",
-                                success: "收款账户已保存，即可用于结汇。",
-                              })
-                        }
-                      >
-                        <Plus size={18} />
-                        新增收款人
-                      </button>
-                    )}
-                  </div>
-                  {role === "customer" && beneficiaries.length > 0 && (
-                    <label className="recipient-search">
-                      搜索收款人
-                      <input
-                        type="search"
-                        placeholder="姓名、账号尾号或币种"
-                        value={recipientSearch}
-                        onChange={(e) => {
-                          setRecipientSearch(e.target.value);
-                          setRecipientLimit(6);
-                        }}
-                      />
-                    </label>
-                  )}
-                  <div className="recipient-grid">
-                    {shownRecipients.map((b) => (
-                      <div className="card recipient-card" key={b.id}>
-                        <div className="card-heading">
-                          <div className="circle-icon">
-                            <Bank size={27} />
-                          </div>
-                          <Badge
-                            status={
-                              recipientUsable(b.status) ? "valid" : "suspended"
-                            }
-                          >
-                            {workspace && !b.detailsComplete
-                              ? "资料待补全"
-                              : recipientUsable(b.status)
-                                ? "可用"
-                                : "已停用"}
-                          </Badge>
-                        </div>
-                        <h2>{b.name}</h2>
-                        <p>{b.accountMasked}</p>
-                        {b.bankName && (
-                          <p className="muted small">{b.bankName}</p>
-                        )}
-                        <span className="tag">
-                          {new Intl.DisplayNames(["zh-CN"], {
-                            type: "region",
-                          }).of(b.country)}{" "}
-                          · {b.currency}
-                        </span>
-                        {role === "admin" && (
-                          <p className="record-id">收款账户 ID · {b.id}</p>
-                        )}
-                        <div className="ruleline" />
-                        <div className="actions">
-                          {role === "customer" &&
-                            recipientUsable(b.status) &&
-                            (!workspace || b.detailsComplete) && (
-                              <button
-                                className="button outline"
-                                disabled={locked}
-                                onClick={() => {
-                                  setMarket(b.currency);
-                                  setBeneficiaryId(b.id);
-                                  setMode("single");
-                                  setStep(1);
-                                  setQuote(null);
-                                  setChecked(false);
-                                  go("payment");
-                                }}
-                              >
-                                用于结汇 <ArrowRight size={16} />
-                              </button>
-                            )}
-                          {workspace && b.detailsComplete && (
-                            <button
-                              className="button text"
-                              onClick={() =>
-                                void request<FullRecipientInput>(
-                                  `beneficiaries/${b.id}/details`,
-                                )
-                                  .then(setRecipientDetails)
-                                  .catch((e) => setError(errorText(e)))
-                              }
-                            >
-                              查看账户
-                            </button>
-                          )}
-                          {workspace && !b.detailsComplete && (
-                            <button
-                              className="button outline"
-                              onClick={() =>
-                                setRecipientForm({
-                                  currency: b.currency,
-                                  holder: b.name,
-                                  customerId: b.customerId,
+                                  fields: [
+                                    {
+                                      key: "customerId",
+                                      label: "所属客户",
+                                      value:
+                                        role === "customer"
+                                          ? customerId
+                                          : (customers.find(
+                                              (c) => c.status === "approved",
+                                            )?.id ?? ""),
+                                      type: "select",
+                                      options: customers
+                                        .filter((c) => c.status === "approved")
+                                        .map((c) => [c.id, c.name]),
+                                    },
+                                    {
+                                      key: "name",
+                                      label: "收款人名称",
+                                      value: "新收款人",
+                                    },
+                                  ],
+                                  button: "保存收款账户",
+                                  success: "收款账户已保存，即可用于结汇。",
                                 })
+                          }
+                        >
+                          <Plus size={18} />
+                          新增收款人
+                        </button>
+                      )}
+                    </div>
+                    {role === "customer" && beneficiaries.length > 0 && (
+                      <label className="recipient-search">
+                        搜索收款人
+                        <input
+                          type="search"
+                          placeholder="姓名、账号尾号或币种"
+                          value={recipientSearch}
+                          onChange={(e) => {
+                            setRecipientSearch(e.target.value);
+                            setRecipientLimit(6);
+                          }}
+                        />
+                      </label>
+                    )}
+                    <div className="recipient-grid">
+                      {shownRecipients.map((b) => (
+                        <div className="card recipient-card" key={b.id}>
+                          <div className="card-heading">
+                            <div className="circle-icon">
+                              <Bank size={27} />
+                            </div>
+                            <Badge
+                              status={
+                                recipientUsable(b.status)
+                                  ? "valid"
+                                  : "suspended"
                               }
                             >
-                              重新绑定
-                            </button>
-                          )}
-                          {!recipientUsable(b.status) && (
-                            <span className="muted small">账户已停用</span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  {role === "customer" &&
-                    matchingRecipients.length > recipientLimit && (
-                      <button
-                        className="button outline full"
-                        onClick={() => setRecipientLimit((n) => n + 6)}
-                      >
-                        查看更多收款人
-                      </button>
-                    )}
-                  {role === "customer" &&
-                    beneficiaries.length > 0 &&
-                    !matchingRecipients.length && (
-                      <Empty title="没有匹配的收款人" />
-                    )}
-                  {!beneficiaries.length && (
-                    <div className="card">
-                      <Empty title="暂无可见收款人" />
-                    </div>
-                  )}
-                </>
-              )}
-              {(page === "certification" ||
-                (page === "profile" && profileTab === "certification")) && (
-                <>
-                  {role === "admin" && maker && (
-                    <div className="actions">
-                      <button
-                        className="button"
-                        disabled={locked}
-                        onClick={() =>
-                          openCommand({
-                            title: "新增演示客户",
-                            description:
-                              "创建待审核的虚构客户。不上传身份文件，不代表完成真实 KYC / KYB。",
-                            path: "customers",
-                            fields: [
-                              {
-                                key: "kind",
-                                label: "主体类型",
-                                value: "company",
-                                type: "select",
-                                options: [
-                                  ["personal", "个人"],
-                                  ["company", "企业"],
-                                ],
-                              },
-                              {
-                                key: "name",
-                                label: "虚构客户名称",
-                                value: "新企业",
-                              },
-                            ],
-                            button: "创建待审核客户",
-                            success: "演示客户已创建，等待管理员审核。",
-                          })
-                        }
-                      >
-                        <Plus size={17} />
-                        新增演示客户
-                      </button>
-                    </div>
-                  )}
-                  <div className="recipient-grid">
-                    {customers.map((c) => (
-                      <div className="card" key={c.id}>
-                        <div className="card-heading">
-                          <div className="circle-icon">
-                            <ShieldCheck size={32} />
+                              {workspace && !b.detailsComplete
+                                ? "资料待补全"
+                                : recipientUsable(b.status)
+                                  ? "可用"
+                                  : "已停用"}
+                            </Badge>
                           </div>
-                          <Badge status={c.status}>
-                            {role === "customer"
-                              ? c.status === "approved"
-                                ? "正常"
-                                : c.status === "suspended"
-                                  ? "已停用"
-                                  : "待审核"
-                              : undefined}
-                          </Badge>
-                        </div>
-                        <h2>
-                          {role === "customer"
-                            ? "账户资料"
-                            : c.kind === "company"
-                              ? "企业认证"
-                              : "个人认证"}{" "}
-                          · {c.name}
-                        </h2>
-                        {role === "customer" && workspace ? (
-                          <dl className="details">
-                            <div>
-                              <dt>账户名称</dt>
-                              <dd>{workspace.account.name}</dd>
-                            </div>
-                            <div>
-                              <dt>登录账号</dt>
-                              <dd>
-                                {workspace.account.username ??
-                                  workspace.account.email ??
-                                  "—"}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt>账户类型</dt>
-                              <dd>
-                                {c.kind === "company" ? "企业账户" : "个人账户"}
-                              </dd>
-                            </div>
-                          </dl>
-                        ) : (
-                          <>
-                            {" "}
-                            <p>来自服务端的演示主体资料。无需真实身份证件。</p>
-                            <div className="demo-profile">
-                              <div>
-                                主体类型{" "}
-                                <span>
-                                  {c.kind === "company"
-                                    ? "企业 KYB（样例）"
-                                    : "个人 KYC（样例）"}
-                                </span>
-                              </div>
-                              <div>
-                                身份文件 <span>未收集，未接入真实核验</span>
-                              </div>
-                              <div>
-                                客户 ID <span>{c.id}</span>
-                              </div>
-                            </div>
-                          </>
-                        )}
-                        {finance && (
+                          <h2>{b.name}</h2>
+                          <p>{b.accountMasked}</p>
+                          {b.bankName && (
+                            <p className="muted small">{b.bankName}</p>
+                          )}
+                          <span className="tag">
+                            {new Intl.DisplayNames(["zh-CN"], {
+                              type: "region",
+                            }).of(b.country)}{" "}
+                            · {b.currency}
+                          </span>
+                          {role === "admin" && (
+                            <p className="record-id">收款账户 ID · {b.id}</p>
+                          )}
+                          <div className="ruleline" />
                           <div className="actions">
-                            {c.status !== "approved" && (
+                            {role === "customer" &&
+                              recipientUsable(b.status) &&
+                              (!workspace || b.detailsComplete) && (
+                                <button
+                                  className="button outline"
+                                  disabled={locked}
+                                  onClick={() => {
+                                    setMarket(b.currency);
+                                    setBeneficiaryId(b.id);
+                                    setMode("single");
+                                    setStep(1);
+                                    setQuote(null);
+                                    setChecked(false);
+                                    go("payment");
+                                  }}
+                                >
+                                  用于结汇 <ArrowRight size={16} />
+                                </button>
+                              )}
+                            {workspace && b.detailsComplete && (
                               <button
-                                className="button outline"
-                                disabled={locked}
+                                className="button text"
                                 onClick={() =>
-                                  void mutate(
-                                    `customers/${c.id}/review`,
-                                    { status: "approved" },
-                                    "客户审核已通过。",
+                                  void request<FullRecipientInput>(
+                                    `beneficiaries/${b.id}/details`,
                                   )
+                                    .then(setRecipientDetails)
+                                    .catch((e) => setError(errorText(e)))
                                 }
                               >
-                                审核通过
+                                查看账户
                               </button>
                             )}
-                            {c.status === "approved" && (
+                            {workspace && !b.detailsComplete && (
                               <button
                                 className="button outline"
-                                disabled={locked}
                                 onClick={() =>
-                                  openCommand({
-                                    title: "暂停演示客户",
-                                    description:
-                                      "暂停后，该客户将无法创建新报价或执行受限操作。",
-                                    path: `customers/${c.id}/review`,
-                                    base: { status: "suspended" },
-                                    button: "暂停演示客户",
-                                    success:
-                                      "客户已暂停，后续操作由服务端权限与状态校验控制。",
+                                  setRecipientForm({
+                                    currency: b.currency,
+                                    holder: b.name,
+                                    customerId: b.customerId,
                                   })
                                 }
                               >
-                                暂停客户
+                                重新绑定
                               </button>
                             )}
+                            {!recipientUsable(b.status) && (
+                              <span className="muted small">账户已停用</span>
+                            )}
                           </div>
-                        )}
-                        {role === "admin" && (
-                          <Note>
-                            本页面状态不代表已完成真实身份核验、合规审批或开户。
-                          </Note>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  {!customers.length && (
-                    <Empty title="暂无当前身份可见的客户" />
-                  )}
-                </>
-              )}
-              {page === "orders" &&
-                (role === "admin" ? (
-                  <OrderHistory
-                    orders={orders}
-                    customers={customers}
-                    beneficiaries={beneficiaries}
-                    persistence={health?.persistence}
-                    onOpen={(id) => {
-                      setSelected(id);
-                      go("detail");
-                    }}
-                  />
-                ) : (
-                  <CustomerOrders
-                    key={actor}
-                    data={data}
-                    request={request}
-                    onDownload={downloadPublishedReceipt}
-                    onOpen={(id) => {
-                      setSelected(id);
-                      go("detail");
-                    }}
-                    onResumeBatch={(id) => {
-                      const selectedBatch = data.batches?.find(
-                        (b) => b.id === id && b.customerId === customerId,
-                      );
-                      if (!selectedBatch) return;
-                      setBatch({
-                        batch: selectedBatch,
-                        items:
-                          data.batchItems?.filter((i) => i.batchId === id) ??
-                          [],
-                      });
-                      setBatchPreview(null);
-                      setBatchChecked(false);
-                      setBatchKey(selectedBatch.clientBatchId);
-                      setMode("batch");
-                      setStep(1);
-                      setQuote(null);
-                      setChecked(false);
-                      go("payment");
-                    }}
-                  />
-                ))}
-              {page === "overview" && (
-                <OverviewPanel
-                  orders={orders}
-                  persistence={health?.persistence}
-                  onNavigate={(next) => go(next as Page)}
-                />
-              )}
-              {page === "directory" &&
-                (workspace && role === "admin" ? (
-                  <AdminCustomers
-                    onOpenRecipient={(id) => {
-                      void request<FullRecipientInput>(
-                        `beneficiaries/${id}/details`,
-                      )
-                        .then(setRecipientDetails)
-                        .catch((e) => setError(errorText(e)));
-                    }}
-                    onOpenOrder={async (id) => {
-                      await reload();
-                      setSelected(id);
-                      go("detail");
-                    }}
-                  />
-                ) : (
-                  <CustomerDirectoryPanel
-                    customers={customers}
-                    beneficiaries={beneficiaries}
-                    orders={orders}
-                    onOpenOrder={(id) => {
-                      setSelected(id);
-                      go("detail");
-                    }}
-                  />
-                ))}
-              {page === "referrals" && (
-                <>
-                  {workspace ? (
-                    <PartnerAdminPanel />
-                  ) : (
-                    <ReferralPartnersPanel
-                      customers={customers}
-                      commissions={commissionRows}
-                      settlements={settlementRows}
-                    />
-                  )}
-                </>
-              )}
-              {page === "providers" && (
-                <PayoutProvidersPanel
-                  providers={data.payoutProviders ?? []}
-                  busy={locked}
-                  onSave={(input) =>
-                    mutate(
-                      "admin/payout-providers",
-                      input,
-                      "出款合作方配置已保存，新订单按新默认分配。历史归属保持不变。",
-                    )
-                  }
-                />
-              )}
-              {page === "detail" && (
-                <>
-                  <button
-                    className="button text back"
-                    onClick={() => go("orders")}
-                  >
-                    <ArrowLeft size={16} />
-                    返回订单记录
-                  </button>
-                  {orderDetail(role === "admin")}
-                </>
-              )}
-              {page === "workbench" && (
-                <>
-                  <MerchantOverview
-                    orders={orders}
-                    selectedQueue={merchantQueue}
-                    onSelectQueue={(queue) => {
-                      setMerchantQueue(queue);
-                      setFilter("all");
-                    }}
-                  />
-                  <div className="workspace-actions">
-                    <span className="muted small">
-                      同一后端 · {orders.length} 笔订单 ·{" "}
-                      {
-                        orders.filter((o) => o.payoutStatus === "unknown")
-                          .length
-                      }{" "}
-                      笔结果待核实
-                    </span>
-                    {maker && !workspace && (
-                      <div className="workspace-controls">
+                        </div>
+                      ))}
+                    </div>
+                    {role === "customer" &&
+                      matchingRecipients.length > recipientLimit && (
                         <button
-                          className="button outline"
-                          disabled={locked}
-                          onClick={seedScenario}
+                          className="button outline full"
+                          onClick={() => setRecipientLimit((n) => n + 6)}
                         >
-                          <Plus size={17} />
-                          创建示例订单
+                          查看更多收款人
                         </button>
-                        {!workspace &&
-                          canResetDemoSession(actor, health?.persistence) && (
-                            <button
-                              className="button outline reset-session"
-                              disabled={locked}
-                              onClick={resetSession}
-                              aria-label="重置当前会话演示数据"
-                            >
-                              <ArrowsClockwise size={17} />
-                              重置当前会话
-                            </button>
-                          )}
-                      </div>
-                    )}
-                  </div>
-                  <div className="admin-layout">
-                    <section>
-                      {orderTable()}
-                      {orderDetail(true)}
-                    </section>
-                    <aside>
-                      {pricingPanel()}
-                      <div className="card mini-note">
-                        <ShieldCheck size={24} />
-                        <h3>统一商家工作台</h3>
-                        <p>
-                          官方自营订单核对后即可确认，系统自动生成内部记录；回单可后补。未知结果先核实，禁止重复确认。
-                        </p>
-                        <Note>
-                          所有操作受服务端控制。客户、商家和伙伴入口仅用于演示，不能替代正式登录。
-                        </Note>
-                      </div>
-                    </aside>
-                  </div>
-                </>
-              )}
-              {page === "receipts" && role === "admin" && (
-                <ReceiptLibrary
-                  key={actor}
-                  orders={orders}
-                  request={receiptRequest}
-                  onChanged={reload}
-                  download={downloadPrivateReceipt}
-                  initialOrderId={receiptOrderId}
-                />
-              )}
-              {page === "pricing" && (
-                <PricingSettingsPanel
-                  automatic={!!workspace}
-                  onReload={() => void reload()}
-                  current={data.pricingCurrent}
-                  history={data.pricingHistory ?? []}
-                  busy={locked}
-                  persistence={health?.persistence}
-                  onPreview={previewPricing}
-                  onPublish={(input) =>
-                    mutate(
-                      "admin/pricing/publish",
-                      input,
-                      "费率版本已发布。新报价使用新配置，原报价和订单快照不变。",
-                    )
-                  }
-                />
-              )}
-              {page === "reconciliation" && (
-                <>
-                  <div className="stat-grid">
-                    <div className="card stat">
-                      <div>
-                        <span>历史待复核</span>
-                        <strong>
-                          {
-                            orders.filter(
-                              (o) =>
-                                o.payoutStatus === "sent" &&
-                                !o.reconciled &&
-                                o.completionStatus !== "completed",
-                            ).length
-                          }
-                        </strong>
-                        <small>不含正常确认完成的订单</small>
-                      </div>
-                    </div>
-                    <div className="card stat">
-                      <div>
-                        <span>未解决差异</span>
-                        <strong className="red">
-                          {data.discrepancies?.filter(
-                            (d) => d.status === "open",
-                          ).length ?? 0}
-                        </strong>
-                        <small>不同币种不混合合计</small>
-                      </div>
-                    </div>
-                    <div className="card stat">
-                      <div>
-                        <span>核对一致</span>
-                        <strong>
-                          {orders.filter((o) => o.reconciled).length}
-                        </strong>
-                        <small>人工核对记录，不代表银行认证</small>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="card">
-                    <div className="card-heading">
-                      <h2>差异处理队列</h2>
-                      <button
-                        className="button outline"
-                        disabled={busy}
-                        onClick={() => void reload()}
-                      >
-                        <ArrowsClockwise size={16} />
-                        刷新
-                      </button>
-                    </div>
-                    <div className="table-scroll">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>差异类型</th>
-                            <th>订单</th>
-                            <th>详情</th>
-                            <th>状态</th>
-                            <th>操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {data.discrepancies?.map((d) => (
-                            <tr key={d.id}>
-                              <td>{d.kind}</td>
-                              <td>
-                                {d.orderId ? shortId(d.orderId) : "未分配"}
-                              </td>
-                              <td className="wrap-cell">{d.detail}</td>
-                              <td>
-                                <Badge status={d.status} />
-                              </td>
-                              <td>
-                                {finance && d.status === "open" && (
-                                  <button
-                                    className="button outline"
-                                    disabled={locked}
-                                    onClick={() =>
-                                      openCommand({
-                                        title: "提交差异处理依据",
-                                        description:
-                                          "服务端根据差异类型校验。未分配入金不能仅凭文字标记解决；需要实现相应资金分配流程。",
-                                        path: `discrepancies/${d.id}/resolve`,
-                                        fields: [evidence("")],
-                                        button: "提交处理依据",
-                                        success:
-                                          "差异处理请求已由服务端校验并保存。",
-                                      })
-                                    }
-                                  >
-                                    提交依据
-                                  </button>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    {!data.discrepancies?.length && (
-                      <Empty title="暂无可见差异" />
-                    )}
-                    <Note>
-                      对账不会改写客户报价。要核对某笔订单，请在出款工作台选择该订单直接核对付款记录。
-                    </Note>
-                  </div>
-                  {orderTable()}
-                </>
-              )}
-              {page === "audit" && (
-                <div className="card">
-                  <div className="card-heading">
-                    <h2>服务端操作记录</h2>
-                    <button
-                      className="button outline"
-                      disabled={!audits?.length}
-                      onClick={() =>
-                        downloadCSV("汇途-服务端审计记录.csv", [
-                          ["time", "actor", "action", "target"],
-                          ...(audits ?? []).map((a) => [
-                            a.at,
-                            a.actorId,
-                            a.action,
-                            a.targetId,
-                          ]),
-                        ])
-                      }
-                    >
-                      <Download size={16} />
-                      导出记录
-                    </button>
-                  </div>
-                  {!finance && actor !== "auditor-demo" ? (
-                    <Note>操作记录仅向商家管理员开放。</Note>
-                  ) : auditError ? (
-                    <Note danger>{auditError}</Note>
-                  ) : audits === null ? (
-                    <Empty title="正在读取审计记录" />
-                  ) : !audits.length ? (
-                    <Empty title="还没有操作记录">
-                      服务器保存的关键操作将在这里显示。
-                    </Empty>
-                  ) : (
-                    [...audits].reverse().map((a) => (
-                      <div className="audit-row" key={a.id}>
-                        <Clock size={18} />
-                        <div>
-                          <strong>{a.action}</strong>
-                          <small>
-                            {a.actorId} · {date(a.at)} · {shortId(a.targetId)}
-                          </small>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-              {role === "partner" &&
-                ["partner", "clients", "commissions", "settlements"].includes(
-                  page,
-                ) && (
-                  <>
-                    {page === "partner" && (
-                      <>
-                        <section className="invite-banner">
-                          <div className="circle-icon">
-                            <PaperPlaneTilt size={35} />
-                          </div>
-                          <div>
-                            <h2>每笔服务费，清晰可查</h2>
-                            <p>单层推荐 · 完成后计提 · 服务端观察期</p>
-                          </div>
-                          <div className="partner-banner-note">
-                            <ShieldCheck size={20} />
-                            <span>
-                              仅返回脱敏客户和佣金
-                              <br />
-                              邀请注册尚未接入
-                            </span>
-                          </div>
-                        </section>
-                        <div className="stat-grid">
-                          <div className="card stat">
-                            <div className="circle-icon">
-                              <CurrencyCircleDollar size={27} />
-                            </div>
-                            <div>
-                              <span>可结算佣金记录</span>
-                              <strong>
-                                {
-                                  commissionRows.filter(
-                                    (c) => c.eligibility === "available",
-                                  ).length
-                                }
-                                <em> 笔</em>
-                              </strong>
-                              <small>按币种和月份独立结算</small>
-                            </div>
-                          </div>
-                          <div className="card stat">
-                            <div className="circle-icon">
-                              <Clock size={27} />
-                            </div>
-                            <div>
-                              <span>观察期内</span>
-                              <strong>
-                                {
-                                  commissionRows.filter(
-                                    (c) => c.eligibility === "hold",
-                                  ).length
-                                }
-                                <em> 笔</em>
-                              </strong>
-                              <small>服务端判定最早可结算时间</small>
-                            </div>
-                          </div>
-                          <div className="card stat">
-                            <div className="circle-icon">
-                              <ChartBar size={27} />
-                            </div>
-                            <div>
-                              <span>已批准结算单</span>
-                              <strong>
-                                {
-                                  settlementRows.filter(
-                                    (s) => s.status === "approved",
-                                  ).length
-                                }
-                                <em> 张</em>
-                              </strong>
-                              <small>审批记录，不代表实际付款</small>
-                            </div>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                    <div className="card partner-details">
-                      <div className="card-heading">
-                        <div>
-                          <h2>
-                            {page === "settlements"
-                              ? "月度结算记录"
-                              : "客户与佣金明细"}
-                          </h2>
-                          <p>同一服务端 · 当前伙伴的授权数据范围</p>
-                        </div>
-                        <button
-                          className="button outline"
-                          disabled={!commissionRows.length}
-                          onClick={() =>
-                            downloadCSV("汇途-伙伴佣金.csv", [
-                              [
-                                "customerAlias",
-                                "serviceFeeBase",
-                                "currency",
-                                "rate",
-                                "commission",
-                                "state",
-                                "eligibility",
-                                "eligibleAt",
-                              ],
-                              ...commissionRows.map((c) => [
-                                c.customerAlias ?? "",
-                                c.base,
-                                c.currency,
-                                c.rate,
-                                c.value,
-                                c.state,
-                                c.eligibility ?? "",
-                                c.eligibleAt,
-                              ]),
-                            ])
-                          }
-                        >
-                          <Download size={17} />
-                          下载明细
-                        </button>
-                      </div>
-                      <div className="tabs">
-                        {[
-                          ["clients", "我的客户"],
-                          ["commissions", "佣金明细"],
-                          ["settlements", "结算记录"],
-                        ].map(([p, label]) => (
-                          <button
-                            key={p}
-                            className={
-                              page === p ||
-                              (page === "partner" && p === "commissions")
-                                ? "active"
-                                : ""
-                            }
-                            onClick={() => go(p as Page)}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                      {page === "settlements" ? (
-                        settlementsTable()
-                      ) : page === "clients" ? (
-                        <>
-                          <div className="table-scroll">
-                            <table>
-                              <thead>
-                                <tr>
-                                  <th>客户别名</th>
-                                  <th>佣金记录数</th>
-                                  <th>数据范围</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {[
-                                  ...new Set(
-                                    commissionRows
-                                      .map((c) => c.customerAlias)
-                                      .filter(Boolean),
-                                  ),
-                                ].map((alias) => (
-                                  <tr key={alias}>
-                                    <td>{alias}</td>
-                                    <td>
-                                      {
-                                        commissionRows.filter(
-                                          (c) => c.customerAlias === alias,
-                                        ).length
-                                      }
-                                    </td>
-                                    <td>无本金、身份文件或银行账户</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          {!commissionRows.length && (
-                            <Empty title="暂无有佣金记录的客户" />
-                          )}
-                          <Note>
-                            此列表只从当前伙伴的佣金记录归纳客户别名，不代表全部邀请或注册客户。
-                          </Note>
-                        </>
-                      ) : (
-                        commissionTable()
                       )}
-                    </div>
-                    <section className="card settlement-bar">
-                      <div>
-                        <h2>月度结算</h2>
-                        <p>管理员生成草稿并确认结算记录</p>
+                    {role === "customer" &&
+                      beneficiaries.length > 0 &&
+                      !matchingRecipients.length && (
+                        <Empty title="没有匹配的收款人" />
+                      )}
+                    {!beneficiaries.length && (
+                      <div className="card">
+                        <Empty title="暂无可见收款人" />
                       </div>
-                      <div className="actions">
-                        <button
-                          className="button outline"
-                          onClick={() => go("settlements")}
-                        >
-                          查看结算记录
-                        </button>
-                      </div>
-                    </section>
+                    )}
                   </>
                 )}
-              {role === "admin" && page === "settlements" && (
-                <>
-                  <div className="card">
-                    <div className="card-heading">
-                      <div>
-                        <h2>佣金结算管理</h2>
-                        <p>
-                          仅对已关闭月份、符合观察期与冻结规则的记录生成结算单。
-                        </p>
-                      </div>
-                      {finance && (
+                {(page === "certification" ||
+                  (page === "profile" && profileTab === "certification")) && (
+                  <>
+                    {role === "admin" && maker && (
+                      <div className="actions">
                         <button
                           className="button"
                           disabled={locked}
-                          onClick={() => {
-                            const d = new Date();
-                            d.setUTCDate(1);
-                            d.setUTCMonth(d.getUTCMonth() - 1);
+                          onClick={() =>
                             openCommand({
-                              title: "生成月度结算草稿",
+                              title: "新增演示客户",
                               description:
-                                "服务端按币种、月份、观察期及冻结状态筛选佣金。无可结算金额时会明确拒绝，不会生成虚假余额。",
-                              path: "settlements",
+                                "创建待审核的虚构客户。不上传身份文件，不代表完成真实 KYC / KYB。",
+                              path: "customers",
                               fields: [
                                 {
-                                  key: "partnerId",
-                                  label: "推广伙伴",
-                                  value:
-                                    data?.partners?.filter(
-                                      (p) => p.status === "active",
-                                    )[0]?.id ?? "partner-1",
-                                  ...(workspace
-                                    ? {
-                                        type: "select" as const,
-                                        options: (data?.partners ?? [])
-                                          .filter((p) => p.status === "active")
-                                          .map(
-                                            (p) =>
-                                              [p.id, p.name] as [
-                                                string,
-                                                string,
-                                              ],
-                                          ),
-                                      }
-                                    : {}),
-                                },
-                                {
-                                  key: "month",
-                                  label: "已关闭月份",
-                                  value: d.toISOString().slice(0, 7),
-                                  type: "month",
-                                },
-                                {
-                                  key: "currency",
-                                  label: "结算币种",
-                                  value: "USDT",
+                                  key: "kind",
+                                  label: "主体类型",
+                                  value: "company",
                                   type: "select",
                                   options: [
-                                    ["USDT", "USDT"],
-                                    ["USDC", "USDC"],
+                                    ["personal", "个人"],
+                                    ["company", "企业"],
                                   ],
                                 },
+                                {
+                                  key: "name",
+                                  label: "虚构客户名称",
+                                  value: "新企业",
+                                },
                               ],
-                              button: "生成服务端草稿",
-                              success: "月度结算草稿已生成，请核对后确认。",
-                            });
-                          }}
+                              button: "创建待审核客户",
+                              success: "演示客户已创建，等待管理员审核。",
+                            })
+                          }
                         >
-                          生成结算草稿
+                          <Plus size={17} />
+                          新增演示客户
                         </button>
-                      )}
-                    </div>
-                    {!finance && actor !== "auditor-demo" ? (
-                      <Note>佣金明细与结算记录仅向商家管理员开放。</Note>
-                    ) : (
-                      <>
-                        {settlementsTable()}
-                        <div className="ruleline" />
-                        <h3>服务端佣金记录</h3>
-                        {commissionTable()}
-                      </>
+                      </div>
                     )}
-                  </div>
-                </>
-              )}
-            </>
-          )}
-          <footer>
-            <span>汇途 · 全球代付</span>
-            <button onClick={() => setSupport((v) => !v)}>帮助与支持</button>
-          </footer>
-        </main>
-        <nav
-          className={"mobile-nav " + (role === "admin" ? "admin-mobile" : "")}
-          aria-label="移动导航"
-        >
-          {navs[role]
-            .filter(([p]) => !["routes", "funds"].includes(p) || !!workspace)
-            .map(([p, label, I]) => (
-              <button
-                key={p}
-                className={
-                  page === p ||
-                  (p === "orders" && page === "detail") ||
-                  (p === "profile" &&
-                    ["recipients", "certification"].includes(page))
-                    ? "active"
-                    : ""
-                }
-                onClick={() => go(p)}
-              >
-                <I size={21} />
-                <span>{label}</span>
-              </button>
-            ))}
-        </nav>
-      </div>
-      {recipientForm && (
-        <RecipientAccountForm
-          initialCurrency={recipientForm.currency}
-          holder={recipientForm.holder}
-          customerId={recipientForm.customerId}
-          customers={
-            role === "admin"
-              ? customers
-                  .filter((c) => c.status === "approved")
-                  .map((c) => ({ id: c.id, name: c.name }))
-              : undefined
-          }
-          onClose={() => setRecipientForm(null)}
-          onSaved={async (id, currency) => {
-            await reload();
-            setBeneficiaryId(id);
-            setMarket(currency);
-            setRecipientSearch("");
-            setRecipientForm(null);
-            setQuote(null);
-            setChecked(false);
-            setToast("收款账户已绑定");
-          }}
-        />
-      )}
-      {recipientDetails && (
-        <Modal
-          title="收款账户"
-          busy={false}
-          onClose={() => setRecipientDetails(null)}
-        >
-          <dl className="details">
-            {accountFields(recipientDetails.method)
-              .filter((f) => recipientDetails.fields[f.id])
-              .map((f) => (
-                <div key={f.id}>
-                  <dt>{f.label}</dt>
-                  <dd style={{ overflowWrap: "anywhere" }}>
-                    {OPTION_NAMES[recipientDetails.fields[f.id]] ??
-                      recipientDetails.fields[f.id]}
-                  </dd>
-                </div>
-              ))}
-          </dl>
-        </Modal>
-      )}
-      {toast && (
-        <div className="toast" role="status">
-          <CheckCircle size={19} />
-          {toast}
-        </div>
-      )}
-      {command && (
-        <Modal
-          title={command.title}
-          busy={busy}
-          onClose={() => setCommand(null)}
-        >
-          <p>{command.description}</p>
-          {command.review && (
-            <dl className="details">
-              {command.review.map(([label, value]) => (
-                <div key={label}>
-                  <dt>{label}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submitCommand();
-            }}
-          >
-            {command.fields?.map((field) => (
-              <label key={field.key}>
-                {field.label}
-                {field.type === "select" ? (
-                  <SelectField
-                    required={field.required !== false}
-                    disabled={busy}
-                    value={commandValues[field.key] ?? ""}
-                    onChange={(e) =>
-                      setCommandValues((v) => ({
-                        ...v,
-                        [field.key]: e.target.value,
-                      }))
-                    }
-                  >
-                    {field.options?.map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </SelectField>
-                ) : field.type === "textarea" ? (
-                  <textarea
-                    required={field.required !== false}
-                    disabled={busy}
-                    maxLength={500}
-                    rows={3}
-                    value={commandValues[field.key] ?? ""}
-                    onChange={(e) =>
-                      setCommandValues((v) => ({
-                        ...v,
-                        [field.key]: e.target.value,
-                      }))
-                    }
+                    <div className="recipient-grid">
+                      {customers.map((c) => (
+                        <div className="card" key={c.id}>
+                          <div className="card-heading">
+                            <div className="circle-icon">
+                              <ShieldCheck size={32} />
+                            </div>
+                            <Badge status={c.status}>
+                              {role === "customer"
+                                ? c.status === "approved"
+                                  ? "正常"
+                                  : c.status === "suspended"
+                                    ? "已停用"
+                                    : "待审核"
+                                : undefined}
+                            </Badge>
+                          </div>
+                          <h2>
+                            {role === "customer"
+                              ? "账户资料"
+                              : c.kind === "company"
+                                ? "企业认证"
+                                : "个人认证"}{" "}
+                            · {c.name}
+                          </h2>
+                          {role === "customer" && workspace ? (
+                            <dl className="details">
+                              <div>
+                                <dt>账户名称</dt>
+                                <dd>{workspace.account.name}</dd>
+                              </div>
+                              <div>
+                                <dt>登录账号</dt>
+                                <dd>
+                                  {workspace.account.username ??
+                                    workspace.account.email ??
+                                    "—"}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>账户类型</dt>
+                                <dd>
+                                  {c.kind === "company"
+                                    ? "企业账户"
+                                    : "个人账户"}
+                                </dd>
+                              </div>
+                            </dl>
+                          ) : (
+                            <>
+                              {" "}
+                              <p>
+                                来自服务端的演示主体资料。无需真实身份证件。
+                              </p>
+                              <div className="demo-profile">
+                                <div>
+                                  主体类型{" "}
+                                  <span>
+                                    {c.kind === "company"
+                                      ? "企业 KYB（样例）"
+                                      : "个人 KYC（样例）"}
+                                  </span>
+                                </div>
+                                <div>
+                                  身份文件 <span>未收集，未接入真实核验</span>
+                                </div>
+                                <div>
+                                  客户 ID <span>{c.id}</span>
+                                </div>
+                              </div>
+                            </>
+                          )}
+                          {finance && (
+                            <div className="actions">
+                              {c.status !== "approved" && (
+                                <button
+                                  className="button outline"
+                                  disabled={locked}
+                                  onClick={() =>
+                                    void mutate(
+                                      `customers/${c.id}/review`,
+                                      { status: "approved" },
+                                      "客户审核已通过。",
+                                    )
+                                  }
+                                >
+                                  审核通过
+                                </button>
+                              )}
+                              {c.status === "approved" && (
+                                <button
+                                  className="button outline"
+                                  disabled={locked}
+                                  onClick={() =>
+                                    openCommand({
+                                      title: "暂停演示客户",
+                                      description:
+                                        "暂停后，该客户将无法创建新报价或执行受限操作。",
+                                      path: `customers/${c.id}/review`,
+                                      base: { status: "suspended" },
+                                      button: "暂停演示客户",
+                                      success:
+                                        "客户已暂停，后续操作由服务端权限与状态校验控制。",
+                                    })
+                                  }
+                                >
+                                  暂停客户
+                                </button>
+                              )}
+                            </div>
+                          )}
+                          {role === "admin" && (
+                            <Note>
+                              本页面状态不代表已完成真实身份核验、合规审批或开户。
+                            </Note>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {!customers.length && (
+                      <Empty title="暂无当前身份可见的客户" />
+                    )}
+                  </>
+                )}
+                {page === "orders" &&
+                  (role === "admin" ? (
+                    <OrderHistory
+                      orders={orders}
+                      customers={customers}
+                      beneficiaries={beneficiaries}
+                      persistence={health?.persistence}
+                      onOpen={(id) => {
+                        setSelected(id);
+                        go("detail");
+                      }}
+                    />
+                  ) : (
+                    <CustomerOrders
+                      key={actor}
+                      data={data}
+                      request={request}
+                      onDownload={downloadPublishedReceipt}
+                      onOpen={(id) => {
+                        setSelected(id);
+                        go("detail");
+                      }}
+                      onResumeBatch={(id) => {
+                        const selectedBatch = data.batches?.find(
+                          (b) => b.id === id && b.customerId === customerId,
+                        );
+                        if (!selectedBatch) return;
+                        setBatch({
+                          batch: selectedBatch,
+                          items:
+                            data.batchItems?.filter((i) => i.batchId === id) ??
+                            [],
+                        });
+                        setBatchPreview(null);
+                        setBatchChecked(false);
+                        setBatchKey(selectedBatch.clientBatchId);
+                        setMode("batch");
+                        setStep(1);
+                        setQuote(null);
+                        setChecked(false);
+                        go("payment");
+                      }}
+                    />
+                  ))}
+                {page === "overview" && workspace && role === "admin" && (
+                  <AdminTaskCenter
+                    orders={orders}
+                    customers={customers}
+                    onFunds={(tab) => {
+                      viewCache.current.set("funds-tab", tab);
+                      setFundsTab(tab);
+                      go("funds");
+                    }}
+                    onOrder={(id) => {
+                      setSelected(id);
+                      go("detail");
+                    }}
+                    onReviewCustomers={() => go("certification")}
                   />
-                ) : (
-                  <input
-                    required={field.required !== false}
-                    disabled={busy}
-                    type={field.type === "month" ? "month" : "text"}
-                    maxLength={500}
-                    value={commandValues[field.key] ?? ""}
-                    onChange={(e) =>
-                      setCommandValues((v) => ({
-                        ...v,
-                        [field.key]: e.target.value,
-                      }))
+                )}
+                {page === "overview" && (
+                  <OverviewPanel
+                    orders={orders}
+                    persistence={health?.persistence}
+                    onNavigate={(next) => go(next as Page)}
+                  />
+                )}
+                {page === "directory" &&
+                  (workspace && role === "admin" ? (
+                    <AdminCustomers
+                      onOpenRecipient={(id) => {
+                        void request<FullRecipientInput>(
+                          `beneficiaries/${id}/details`,
+                        )
+                          .then(setRecipientDetails)
+                          .catch((e) => setError(errorText(e)));
+                      }}
+                      onOpenOrder={async (id) => {
+                        await reload();
+                        setSelected(id);
+                        go("detail");
+                      }}
+                    />
+                  ) : (
+                    <CustomerDirectoryPanel
+                      customers={customers}
+                      beneficiaries={beneficiaries}
+                      orders={orders}
+                      onOpenOrder={(id) => {
+                        setSelected(id);
+                        go("detail");
+                      }}
+                    />
+                  ))}
+                {page === "referrals" && (
+                  <>
+                    {workspace ? (
+                      <PartnerAdminPanel />
+                    ) : (
+                      <ReferralPartnersPanel
+                        customers={customers}
+                        commissions={commissionRows}
+                        settlements={settlementRows}
+                      />
+                    )}
+                  </>
+                )}
+                {page === "providers" && (
+                  <PayoutProvidersPanel
+                    providers={data.payoutProviders ?? []}
+                    busy={locked}
+                    onSave={(input) =>
+                      mutate(
+                        "admin/payout-providers",
+                        input,
+                        "出款合作方配置已保存，新订单按新默认分配。历史归属保持不变。",
+                      )
                     }
                   />
                 )}
-              </label>
-            ))}
-            {commandError && (
-              <div className="modal-error" role="alert">
-                {commandError}
-              </div>
+                {page === "detail" && (
+                  <>
+                    <button
+                      className="button text back"
+                      onClick={() => go(detailOrigin.current)}
+                    >
+                      <ArrowLeft size={16} />
+                      返回
+                      {detailOrigin.current === "funds"
+                        ? "资金管理"
+                        : detailOrigin.current === "directory"
+                          ? "用户详情"
+                          : detailOrigin.current === "overview"
+                            ? "运营待办"
+                            : "订单记录"}
+                    </button>
+                    {orderDetail(role === "admin")}
+                  </>
+                )}
+                {page === "workbench" && (
+                  <>
+                    <MerchantOverview
+                      orders={orders}
+                      selectedQueue={merchantQueue}
+                      onSelectQueue={(queue) => {
+                        setMerchantQueue(queue);
+                        setFilter("all");
+                      }}
+                    />
+                    <div className="workspace-actions">
+                      <span className="muted small">
+                        同一后端 · {orders.length} 笔订单 ·{" "}
+                        {
+                          orders.filter((o) => o.payoutStatus === "unknown")
+                            .length
+                        }{" "}
+                        笔结果待核实
+                      </span>
+                      {maker && !workspace && (
+                        <div className="workspace-controls">
+                          <button
+                            className="button outline"
+                            disabled={locked}
+                            onClick={seedScenario}
+                          >
+                            <Plus size={17} />
+                            创建示例订单
+                          </button>
+                          {!workspace &&
+                            canResetDemoSession(actor, health?.persistence) && (
+                              <button
+                                className="button outline reset-session"
+                                disabled={locked}
+                                onClick={resetSession}
+                                aria-label="重置当前会话演示数据"
+                              >
+                                <ArrowsClockwise size={17} />
+                                重置当前会话
+                              </button>
+                            )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="admin-layout">
+                      <section>
+                        {orderTable()}
+                        {orderDetail(true)}
+                      </section>
+                      <aside>
+                        {pricingPanel()}
+                        <div className="card mini-note">
+                          <ShieldCheck size={24} />
+                          <h3>统一商家工作台</h3>
+                          <p>
+                            官方自营订单核对后即可确认，系统自动生成内部记录；回单可后补。未知结果先核实，禁止重复确认。
+                          </p>
+                          <Note>
+                            所有操作受服务端控制。客户、商家和伙伴入口仅用于演示，不能替代正式登录。
+                          </Note>
+                        </div>
+                      </aside>
+                    </div>
+                  </>
+                )}
+                {page === "receipts" && role === "admin" && (
+                  <ReceiptLibrary
+                    key={actor}
+                    orders={orders}
+                    request={receiptRequest}
+                    onChanged={reload}
+                    download={downloadPrivateReceipt}
+                    initialOrderId={receiptOrderId}
+                  />
+                )}
+                {page === "pricing" && (
+                  <PricingSettingsPanel
+                    automatic={!!workspace}
+                    onReload={() => void reload()}
+                    current={data.pricingCurrent}
+                    history={data.pricingHistory ?? []}
+                    busy={locked}
+                    persistence={health?.persistence}
+                    onPreview={previewPricing}
+                    onPublish={(input) =>
+                      mutate(
+                        "admin/pricing/publish",
+                        input,
+                        "费率版本已发布。新报价使用新配置，原报价和订单快照不变。",
+                      )
+                    }
+                  />
+                )}
+                {page === "reconciliation" && (
+                  <>
+                    <div className="stat-grid">
+                      <div className="card stat">
+                        <div>
+                          <span>历史待复核</span>
+                          <strong>
+                            {
+                              orders.filter(
+                                (o) =>
+                                  o.payoutStatus === "sent" &&
+                                  !o.reconciled &&
+                                  o.completionStatus !== "completed",
+                              ).length
+                            }
+                          </strong>
+                          <small>不含正常确认完成的订单</small>
+                        </div>
+                      </div>
+                      <div className="card stat">
+                        <div>
+                          <span>未解决差异</span>
+                          <strong className="red">
+                            {data.discrepancies?.filter(
+                              (d) => d.status === "open",
+                            ).length ?? 0}
+                          </strong>
+                          <small>不同币种不混合合计</small>
+                        </div>
+                      </div>
+                      <div className="card stat">
+                        <div>
+                          <span>核对一致</span>
+                          <strong>
+                            {orders.filter((o) => o.reconciled).length}
+                          </strong>
+                          <small>人工核对记录，不代表银行认证</small>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="card">
+                      <div className="card-heading">
+                        <h2>差异处理队列</h2>
+                        <button
+                          className="button outline"
+                          disabled={busy}
+                          onClick={() => void reload()}
+                        >
+                          <ArrowsClockwise size={16} />
+                          刷新
+                        </button>
+                      </div>
+                      <div className="table-scroll">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>差异类型</th>
+                              <th>订单</th>
+                              <th>详情</th>
+                              <th>状态</th>
+                              <th>操作</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {data.discrepancies?.map((d) => (
+                              <tr key={d.id}>
+                                <td>{d.kind}</td>
+                                <td>
+                                  {d.orderId ? shortId(d.orderId) : "未分配"}
+                                </td>
+                                <td className="wrap-cell">{d.detail}</td>
+                                <td>
+                                  <Badge status={d.status} />
+                                </td>
+                                <td>
+                                  {finance && d.status === "open" && (
+                                    <button
+                                      className="button outline"
+                                      disabled={locked}
+                                      onClick={() =>
+                                        openCommand({
+                                          title: "提交差异处理依据",
+                                          description:
+                                            "服务端根据差异类型校验。未分配入金不能仅凭文字标记解决；需要实现相应资金分配流程。",
+                                          path: `discrepancies/${d.id}/resolve`,
+                                          fields: [evidence("")],
+                                          button: "提交处理依据",
+                                          success:
+                                            "差异处理请求已由服务端校验并保存。",
+                                        })
+                                      }
+                                    >
+                                      提交依据
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {!data.discrepancies?.length && (
+                        <Empty title="暂无可见差异" />
+                      )}
+                      <Note>
+                        对账不会改写客户报价。要核对某笔订单，请在出款工作台选择该订单直接核对付款记录。
+                      </Note>
+                    </div>
+                    {orderTable()}
+                  </>
+                )}
+                {page === "audit" && (
+                  <div className="card">
+                    <div className="card-heading">
+                      <h2>服务端操作记录</h2>
+                      <button
+                        className="button outline"
+                        disabled={!audits?.length}
+                        onClick={() =>
+                          downloadCSV("汇途-服务端审计记录.csv", [
+                            ["time", "actor", "action", "target"],
+                            ...(audits ?? []).map((a) => [
+                              a.at,
+                              a.actorId,
+                              a.action,
+                              a.targetId,
+                            ]),
+                          ])
+                        }
+                      >
+                        <Download size={16} />
+                        导出记录
+                      </button>
+                    </div>
+                    {!finance && actor !== "auditor-demo" ? (
+                      <Note>操作记录仅向商家管理员开放。</Note>
+                    ) : auditError ? (
+                      <Note danger>{auditError}</Note>
+                    ) : audits === null ? (
+                      <Empty title="正在读取审计记录" />
+                    ) : !audits.length ? (
+                      <Empty title="还没有操作记录">
+                        服务器保存的关键操作将在这里显示。
+                      </Empty>
+                    ) : (
+                      [...audits].reverse().map((a) => (
+                        <div className="audit-row" key={a.id}>
+                          <Clock size={18} />
+                          <div>
+                            <strong>{a.action}</strong>
+                            <small>
+                              {a.actorId} · {date(a.at)} · {shortId(a.targetId)}
+                            </small>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+                {role === "partner" &&
+                  ["partner", "clients", "commissions", "settlements"].includes(
+                    page,
+                  ) && (
+                    <>
+                      {page === "partner" && (
+                        <>
+                          <section className="invite-banner">
+                            <div className="circle-icon">
+                              <PaperPlaneTilt size={35} />
+                            </div>
+                            <div>
+                              <h2>每笔服务费，清晰可查</h2>
+                              <p>单层推荐 · 完成后计提 · 服务端观察期</p>
+                            </div>
+                            <div className="partner-banner-note">
+                              <ShieldCheck size={20} />
+                              <span>
+                                仅返回脱敏客户和佣金
+                                <br />
+                                邀请注册尚未接入
+                              </span>
+                            </div>
+                          </section>
+                          <div className="stat-grid">
+                            <div className="card stat">
+                              <div className="circle-icon">
+                                <CurrencyCircleDollar size={27} />
+                              </div>
+                              <div>
+                                <span>可结算佣金记录</span>
+                                <strong>
+                                  {
+                                    commissionRows.filter(
+                                      (c) => c.eligibility === "available",
+                                    ).length
+                                  }
+                                  <em> 笔</em>
+                                </strong>
+                                <small>按币种和月份独立结算</small>
+                              </div>
+                            </div>
+                            <div className="card stat">
+                              <div className="circle-icon">
+                                <Clock size={27} />
+                              </div>
+                              <div>
+                                <span>观察期内</span>
+                                <strong>
+                                  {
+                                    commissionRows.filter(
+                                      (c) => c.eligibility === "hold",
+                                    ).length
+                                  }
+                                  <em> 笔</em>
+                                </strong>
+                                <small>服务端判定最早可结算时间</small>
+                              </div>
+                            </div>
+                            <div className="card stat">
+                              <div className="circle-icon">
+                                <ChartBar size={27} />
+                              </div>
+                              <div>
+                                <span>已批准结算单</span>
+                                <strong>
+                                  {
+                                    settlementRows.filter(
+                                      (s) => s.status === "approved",
+                                    ).length
+                                  }
+                                  <em> 张</em>
+                                </strong>
+                                <small>审批记录，不代表实际付款</small>
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                      <div className="card partner-details">
+                        <div className="card-heading">
+                          <div>
+                            <h2>
+                              {page === "settlements"
+                                ? "月度结算记录"
+                                : "客户与佣金明细"}
+                            </h2>
+                            <p>同一服务端 · 当前伙伴的授权数据范围</p>
+                          </div>
+                          <button
+                            className="button outline"
+                            disabled={!commissionRows.length}
+                            onClick={() =>
+                              downloadCSV("汇途-伙伴佣金.csv", [
+                                [
+                                  "customerAlias",
+                                  "serviceFeeBase",
+                                  "currency",
+                                  "rate",
+                                  "commission",
+                                  "state",
+                                  "eligibility",
+                                  "eligibleAt",
+                                ],
+                                ...commissionRows.map((c) => [
+                                  c.customerAlias ?? "",
+                                  c.base,
+                                  c.currency,
+                                  c.rate,
+                                  c.value,
+                                  c.state,
+                                  c.eligibility ?? "",
+                                  c.eligibleAt,
+                                ]),
+                              ])
+                            }
+                          >
+                            <Download size={17} />
+                            下载明细
+                          </button>
+                        </div>
+                        <div className="tabs">
+                          {[
+                            ["clients", "我的客户"],
+                            ["commissions", "佣金明细"],
+                            ["settlements", "结算记录"],
+                          ].map(([p, label]) => (
+                            <button
+                              key={p}
+                              className={
+                                page === p ||
+                                (page === "partner" && p === "commissions")
+                                  ? "active"
+                                  : ""
+                              }
+                              onClick={() => go(p as Page)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        {page === "settlements" ? (
+                          settlementsTable()
+                        ) : page === "clients" ? (
+                          <>
+                            <div className="table-scroll">
+                              <table>
+                                <thead>
+                                  <tr>
+                                    <th>客户别名</th>
+                                    <th>佣金记录数</th>
+                                    <th>数据范围</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {[
+                                    ...new Set(
+                                      commissionRows
+                                        .map((c) => c.customerAlias)
+                                        .filter(Boolean),
+                                    ),
+                                  ].map((alias) => (
+                                    <tr key={alias}>
+                                      <td>{alias}</td>
+                                      <td>
+                                        {
+                                          commissionRows.filter(
+                                            (c) => c.customerAlias === alias,
+                                          ).length
+                                        }
+                                      </td>
+                                      <td>无本金、身份文件或银行账户</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            {!commissionRows.length && (
+                              <Empty title="暂无有佣金记录的客户" />
+                            )}
+                            <Note>
+                              此列表只从当前伙伴的佣金记录归纳客户别名，不代表全部邀请或注册客户。
+                            </Note>
+                          </>
+                        ) : (
+                          commissionTable()
+                        )}
+                      </div>
+                      <section className="card settlement-bar">
+                        <div>
+                          <h2>月度结算</h2>
+                          <p>管理员生成草稿并确认结算记录</p>
+                        </div>
+                        <div className="actions">
+                          <button
+                            className="button outline"
+                            onClick={() => go("settlements")}
+                          >
+                            查看结算记录
+                          </button>
+                        </div>
+                      </section>
+                    </>
+                  )}
+                {role === "admin" && page === "settlements" && (
+                  <>
+                    <div className="card">
+                      <div className="card-heading">
+                        <div>
+                          <h2>佣金结算管理</h2>
+                          <p>
+                            仅对已关闭月份、符合观察期与冻结规则的记录生成结算单。
+                          </p>
+                        </div>
+                        {finance && (
+                          <button
+                            className="button"
+                            disabled={locked}
+                            onClick={() => {
+                              const d = new Date();
+                              d.setUTCDate(1);
+                              d.setUTCMonth(d.getUTCMonth() - 1);
+                              openCommand({
+                                title: "生成月度结算草稿",
+                                description:
+                                  "服务端按币种、月份、观察期及冻结状态筛选佣金。无可结算金额时会明确拒绝，不会生成虚假余额。",
+                                path: "settlements",
+                                fields: [
+                                  {
+                                    key: "partnerId",
+                                    label: "推广伙伴",
+                                    value:
+                                      data?.partners?.filter(
+                                        (p) => p.status === "active",
+                                      )[0]?.id ?? "partner-1",
+                                    ...(workspace
+                                      ? {
+                                          type: "select" as const,
+                                          options: (data?.partners ?? [])
+                                            .filter(
+                                              (p) => p.status === "active",
+                                            )
+                                            .map(
+                                              (p) =>
+                                                [p.id, p.name] as [
+                                                  string,
+                                                  string,
+                                                ],
+                                            ),
+                                        }
+                                      : {}),
+                                  },
+                                  {
+                                    key: "month",
+                                    label: "已关闭月份",
+                                    value: d.toISOString().slice(0, 7),
+                                    type: "month",
+                                  },
+                                  {
+                                    key: "currency",
+                                    label: "结算币种",
+                                    value: "USDT",
+                                    type: "select",
+                                    options: [
+                                      ["USDT", "USDT"],
+                                      ["USDC", "USDC"],
+                                    ],
+                                  },
+                                ],
+                                button: "生成服务端草稿",
+                                success: "月度结算草稿已生成，请核对后确认。",
+                              });
+                            }}
+                          >
+                            生成结算草稿
+                          </button>
+                        )}
+                      </div>
+                      {!finance && actor !== "auditor-demo" ? (
+                        <Note>佣金明细与结算记录仅向商家管理员开放。</Note>
+                      ) : (
+                        <>
+                          {settlementsTable()}
+                          <div className="ruleline" />
+                          <h3>服务端佣金记录</h3>
+                          {commissionTable()}
+                        </>
+                      )}
+                    </div>
+                  </>
+                )}
+              </>
             )}
-            <div className="actions">
-              <button
-                type="button"
-                className="button outline"
-                disabled={busy}
-                onClick={() => setCommand(null)}
-              >
-                取消
-              </button>
-              <button type="submit" className="button" disabled={locked}>
-                {busy ? "正在提交…" : command.button}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
-    </div>
+            <footer>
+              <span>汇途 · 全球代付</span>
+              <button onClick={() => setSupport((v) => !v)}>帮助与支持</button>
+            </footer>
+          </main>
+          <nav
+            className={"mobile-nav " + (role === "admin" ? "admin-mobile" : "")}
+            aria-label="移动导航"
+          >
+            {navs[role]
+              .filter(([p]) => !["routes", "funds"].includes(p) || !!workspace)
+              .map(([p, label, I]) => (
+                <button
+                  key={p}
+                  className={
+                    page === p ||
+                    (p === "orders" && page === "detail") ||
+                    (p === "profile" &&
+                      ["recipients", "certification"].includes(page))
+                      ? "active"
+                      : ""
+                  }
+                  onClick={() => go(p)}
+                >
+                  <I size={21} />
+                  <span>{label}</span>
+                </button>
+              ))}
+          </nav>
+        </div>
+        {recipientForm && (
+          <RecipientAccountForm
+            initialCurrency={recipientForm.currency}
+            holder={recipientForm.holder}
+            customerId={recipientForm.customerId}
+            customers={
+              role === "admin"
+                ? customers
+                    .filter((c) => c.status === "approved")
+                    .map((c) => ({ id: c.id, name: c.name }))
+                : undefined
+            }
+            onClose={() => setRecipientForm(null)}
+            onSaved={async (id, currency) => {
+              await reload();
+              setBeneficiaryId(id);
+              setMarket(currency);
+              setRecipientSearch("");
+              setRecipientForm(null);
+              setQuote(null);
+              setChecked(false);
+              setToast("收款账户已绑定");
+            }}
+          />
+        )}
+        {recipientDetails && (
+          <Modal
+            title="收款账户"
+            busy={false}
+            onClose={() => setRecipientDetails(null)}
+          >
+            <dl className="details">
+              {accountFields(recipientDetails.method)
+                .filter((f) => recipientDetails.fields[f.id])
+                .map((f) => (
+                  <div key={f.id}>
+                    <dt>{f.label}</dt>
+                    <dd style={{ overflowWrap: "anywhere" }}>
+                      {OPTION_NAMES[recipientDetails.fields[f.id]] ??
+                        recipientDetails.fields[f.id]}
+                    </dd>
+                  </div>
+                ))}
+            </dl>
+          </Modal>
+        )}
+        {toast && (
+          <div className="toast" role="status">
+            <CheckCircle size={19} />
+            {toast}
+          </div>
+        )}
+        {command && (
+          <Modal
+            title={command.title}
+            busy={busy}
+            onClose={() => setCommand(null)}
+          >
+            <p>{command.description}</p>
+            {command.review && (
+              <dl className="details">
+                {command.review.map(([label, value]) => (
+                  <div key={label}>
+                    <dt>{label}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submitCommand();
+              }}
+            >
+              {command.fields?.map((field) => (
+                <label key={field.key}>
+                  {field.label}
+                  {field.type === "select" ? (
+                    <SelectField
+                      required={field.required !== false}
+                      disabled={busy}
+                      value={commandValues[field.key] ?? ""}
+                      onChange={(e) =>
+                        setCommandValues((v) => ({
+                          ...v,
+                          [field.key]: e.target.value,
+                        }))
+                      }
+                    >
+                      {field.options?.map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </SelectField>
+                  ) : field.type === "textarea" ? (
+                    <textarea
+                      required={field.required !== false}
+                      disabled={busy}
+                      maxLength={500}
+                      rows={3}
+                      value={commandValues[field.key] ?? ""}
+                      onChange={(e) =>
+                        setCommandValues((v) => ({
+                          ...v,
+                          [field.key]: e.target.value,
+                        }))
+                      }
+                    />
+                  ) : (
+                    <input
+                      required={field.required !== false}
+                      disabled={busy}
+                      type={field.type === "month" ? "month" : "text"}
+                      maxLength={500}
+                      value={commandValues[field.key] ?? ""}
+                      onChange={(e) =>
+                        setCommandValues((v) => ({
+                          ...v,
+                          [field.key]: e.target.value,
+                        }))
+                      }
+                    />
+                  )}
+                </label>
+              ))}
+              {commandError && (
+                <div className="modal-error" role="alert">
+                  {commandError}
+                </div>
+              )}
+              <div className="actions">
+                <button
+                  type="button"
+                  className="button outline"
+                  disabled={busy}
+                  onClick={() => setCommand(null)}
+                >
+                  取消
+                </button>
+                <button type="submit" className="button" disabled={locked}>
+                  {busy ? "正在提交…" : command.button}
+                </button>
+              </div>
+            </form>
+          </Modal>
+        )}
+      </div>
+    </ViewStateContext.Provider>
   );
 }

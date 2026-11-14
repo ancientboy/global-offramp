@@ -37,6 +37,7 @@ export default function CustomerWallet({
   onExchange,
   onOrder,
   withdrawalRequest = 0,
+  historyRequest,
   onWithdrawalOpened,
 }: {
   balances: WalletBalance[];
@@ -55,6 +56,7 @@ export default function CustomerWallet({
   onTopup: (currency: string) => void;
   onExchange: (currency: string) => void;
   onOrder: (id: string) => void;
+  historyRequest?: { id: number; type: string };
   withdrawalRequest?: number;
   onWithdrawalOpened?: () => void;
 }) {
@@ -88,6 +90,12 @@ export default function CustomerWallet({
   const [currency, setCurrency] = useState(initialCurrency);
   const [history, setHistory] = useState(false);
   const [historyType, setHistoryType] = useState("deposits");
+  useEffect(() => {
+    if (historyRequest?.id) {
+      setHistory(true);
+      setHistoryType(historyRequest.type);
+    }
+  }, [historyRequest?.id]);
   const balance = balances.find(
     (b) => b.customerId === customerId && b.currency === currency,
   );
@@ -109,6 +117,7 @@ export default function CustomerWallet({
       {refundOpen && (
         <RefundDialog
           balances={balances}
+          movements={moneyMovements}
           currency={currency}
           available={balance?.available ?? "0"}
           onClose={() => {
@@ -121,6 +130,11 @@ export default function CustomerWallet({
         <FundingDialog
           currency={currency}
           initialPayment={activeFunding}
+          onCredited={onRefresh}
+          onExchange={() => {
+            setFundingOpen(false);
+            onExchange(currency);
+          }}
           onClose={() => {
             setFundingOpen(false);
             if (onRefresh) void onRefresh();
@@ -283,6 +297,14 @@ export default function CustomerWallet({
                       {r.network === "usdttrc20" ? "TRON · TRC20" : "Base"}
                     </small>
                     <small className="money-address">{r.destination}</small>
+                    {r.rejection_reason && (
+                      <p className="note danger">
+                        未通过原因：{r.rejection_reason}
+                      </p>
+                    )}
+                    {r.status === "approved" && (
+                      <p className="muted small">审核已通过，正在安排付款。</p>
+                    )}
                     {r.txid && (
                       <small className="money-address">交易：{r.txid}</small>
                     )}

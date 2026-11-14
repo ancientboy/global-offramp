@@ -33,6 +33,7 @@ export interface Quote {
   referenceRate?: string;
 }
 export interface Order {
+  updatedAt?: string;
   id: string;
   orderNumber?: string;
   payoutProviderSnapshot?: {
@@ -340,14 +341,7 @@ export function money(value: string | undefined): string {
 export function shortId(id: string) {
   return id.length > 16 ? id.slice(0, 8).toUpperCase() : id;
 }
-export function date(value: string) {
-  return (
-    new Date(value).toLocaleString("zh-CN", {
-      hour12: false,
-      timeZone: "UTC",
-    }) + " UTC"
-  );
-}
+export { displayDate as date } from "./experience-models";
 export function symbol(currency: string) {
   return (
     (

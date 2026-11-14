@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useViewState } from "./view-state";
 import SelectField from "./SelectField";
 import FinanceLedger, {
   adminRead,
@@ -19,14 +20,18 @@ export default function AdminCustomers({
   onOpenOrder: (id: string) => void;
   onOpenRecipient: (id: string) => void;
 }) {
-  const [q, setQ] = useState(""),
-    [status, setStatus] = useState(""),
-    [kind, setKind] = useState(""),
-    [applied, setApplied] = useState({ q: "", status: "", kind: "" }),
-    [page, setPage] = useState(1),
+  const [q, setQ] = useViewState("customers-q", ""),
+    [status, setStatus] = useViewState("customers-status", ""),
+    [kind, setKind] = useViewState("customers-kind", ""),
+    [applied, setApplied] = useViewState("customers-applied", {
+      q: "",
+      status: "",
+      kind: "",
+    }),
+    [page, setPage] = useViewState("customers-page", 1),
     [refresh, setRefresh] = useState(0),
     [data, setData] = useState<any>(null),
-    [selected, setSelected] = useState(""),
+    [selected, setSelected] = useViewState("customers-selected", ""),
     [detail, setDetail] = useState<any>(null),
     [error, setError] = useState(""),
     [detailError, setDetailError] = useState(""),

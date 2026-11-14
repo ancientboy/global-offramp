@@ -25,6 +25,7 @@ async function request(path: string, body?: unknown) {
     method: body === undefined ? "GET" : "POST",
     credentials: "same-origin",
     cache: "no-store",
+    signal: AbortSignal.timeout(15000),
     headers: { "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
@@ -48,10 +49,14 @@ export default function FundingDialog({
   currency,
   onClose,
   initialPayment,
+  onCredited,
+  onExchange,
 }: {
   currency: string;
   onClose: () => void;
   initialPayment?: any;
+  onCredited?: () => void | Promise<void>;
+  onExchange?: () => void;
 }) {
   const [config, setConfig] = useState<any>(null),
     [network, setNetwork] = useState(""),
@@ -77,10 +82,22 @@ export default function FundingDialog({
           const p = v.payments.find((p: any) => p.id === payment.id);
           if (p) setPayment(p);
         })
-        .catch(() => {});
+        .then(() => setError(""))
+        .catch(() => setError("状态更新暂时中断，请稍后重试或查看资金记录。"));
     }, 10000);
     return () => clearInterval(timer);
   }, [payment?.id]);
+  const creditedNotified = useRef("");
+  const creditedCallback = useRef(onCredited);
+  creditedCallback.current = onCredited;
+  useEffect(() => {
+    if (!payment?.credited_amount || creditedNotified.current === payment.id)
+      return;
+    creditedNotified.current = payment.id;
+    void Promise.resolve(creditedCallback.current?.()).catch(() =>
+      setError("已入账，余额暂未更新，请稍后刷新钱包。"),
+    );
+  }, [payment?.id, payment?.credited_amount]);
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitted.current) return;
@@ -200,7 +217,7 @@ export default function FundingDialog({
             <p>
               <strong>{fundingStatus(payment.status)}</strong>
             </p>
-            {payment.pay_address && (
+            {!payment.credited_amount && payment.pay_address && (
               <>
                 <div className="funding-payment-heading">
                   <strong>{currency}</strong>
@@ -262,9 +279,25 @@ export default function FundingDialog({
               </>
             )}
             {payment.credited_amount && (
-              <p>
-                已入账 {payment.credited_amount} {currency}
-              </p>
+              <div className="funding-success" role="status">
+                <h3>充值已到账</h3>
+                <p>
+                  实际入账{" "}
+                  <strong>
+                    {payment.credited_amount} {currency}
+                  </strong>
+                </p>
+                <div className="actions">
+                  {onExchange && (
+                    <button className="button" onClick={onExchange}>
+                      去结汇
+                    </button>
+                  )}
+                  <button className="button outline" onClick={onClose}>
+                    返回钱包
+                  </button>
+                </div>
+              </div>
             )}
           </>
         )}

@@ -1882,6 +1882,11 @@ test("invited customer completion accrues only service-fee commission to its bou
     const c1 = await f.login("commission-one"),
       c2 = await f.login("commission-two");
     const dashboard = await (await f.call("dashboard", undefined, c1)).json();
+    assert.deepEqual(dashboard.funnel, {
+      registered: 1,
+      funded: 1,
+      completed: 1,
+    });
     assert.equal(dashboard.commissions.length, 1);
     assert.equal(dashboard.commissions[0].base, "5.000000");
     assert.equal(dashboard.commissions[0].value, "1.000000");
@@ -1895,6 +1900,11 @@ test("invited customer completion accrues only service-fee commission to its bou
       /commission-client@example.com|Hidden beneficiary|never-show-bank-token|佣金客户完整名字|costRate|sourceAmount|accountMasked|walletBalances/,
     );
     const foreign = await (await f.call("dashboard", undefined, c2)).json();
+    assert.deepEqual(foreign.funnel, {
+      registered: 0,
+      funded: 0,
+      completed: 0,
+    });
     assert.equal(foreign.customers.length, 0);
     assert.equal(foreign.commissions.length, 0);
     assert.equal(foreign.settlements.length, 0);

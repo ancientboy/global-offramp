@@ -16,9 +16,4 @@ export function initialPaymentTime(
     ),
   );
 }
-export function providerDate(value: string): string {
-  return new Date(value).toLocaleString("zh-CN", {
-    hour12: false,
-    timeZoneName: "short",
-  });
-}
+export { displayDate as providerDate } from "./experience-models";

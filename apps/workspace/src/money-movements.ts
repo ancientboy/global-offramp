@@ -20,7 +20,7 @@ const inputSchema = z
     network: z.enum(["usdttrc20", "usdcbase"]),
     amount: z.string().regex(/^\d{1,18}(\.\d{1,6})?$/),
     destination: z.string().trim().max(100),
-    reason: z.string().trim().min(3).max(300),
+    reason: z.string().trim().max(300).default(""),
     idempotencyKey: z.string().regex(/^[A-Za-z0-9_-]{8,100}$/),
     providerId: z
       .string()
@@ -76,13 +76,24 @@ export class MoneyMovements {
       [randomUUID(), id, a.id, action, note],
     );
   }
-  async list(a: Account, reader: Pick<Auth["pool"], "query"> = this.auth.pool) {
+  async list(
+    a: Account,
+    reader: Pick<Auth["pool"], "query"> = this.auth.pool,
+    filter?: { kind: string; history: boolean; page: number },
+  ) {
     if (!["customer", "merchant_admin", "payout_provider"].includes(a.role))
       throw new HttpError(403, "FORBIDDEN");
     const rows = (
       await reader.query(
-        "SELECT m.id,m.kind,m.customer_id,m.provider_id,m.currency,m.network,m.amount::text,m.destination,m.reason,m.status,m.created_at,m.approved_at,m.updated_at,c.txid,c.log_index FROM workspace.money_movements m LEFT JOIN workspace.chain_transfer_claims c ON c.movement_id=m.id WHERE ($1='merchant_admin' OR ($1='customer' AND m.customer_id=$2 AND m.kind='refund') OR ($1='payout_provider' AND m.provider_id=$3 AND m.kind='provider_settlement')) ORDER BY m.created_at DESC LIMIT 100",
-        [a.role, a.customer_id, a.payout_provider_id ?? null],
+        "SELECT m.id,m.kind,m.customer_id,m.provider_id,m.currency,m.network,m.amount::text,m.destination,m.reason,m.status,m.created_at,m.approved_at,m.updated_at,c.txid,c.log_index,(SELECT e.note FROM workspace.money_movement_events e WHERE e.movement_id=m.id AND e.action='rejected' ORDER BY e.created_at DESC LIMIT 1) AS rejection_reason FROM workspace.money_movements m LEFT JOIN workspace.chain_transfer_claims c ON c.movement_id=m.id WHERE ($1='merchant_admin' OR ($1='customer' AND m.customer_id=$2 AND m.kind='refund') OR ($1='payout_provider' AND m.provider_id=$3 AND m.kind='provider_settlement')) AND ($4::text IS NULL OR m.kind=$4) AND ($5::boolean OR m.status IN ('requested','approved')) ORDER BY CASE WHEN $1='merchant_admin' AND m.status IN ('requested','approved') THEN 0 ELSE 1 END,m.created_at DESC,m.id LIMIT 100 OFFSET $6",
+        [
+          a.role,
+          a.customer_id,
+          a.payout_provider_id ?? null,
+          filter?.kind ?? null,
+          filter?.history ?? true,
+          ((filter?.page ?? 1) - 1) * 100,
+        ],
       )
     ).rows;
     return rows;
@@ -97,6 +108,8 @@ export class MoneyMovements {
         throw new HttpError(403, "FORBIDDEN");
     } else this.admin(a);
     const v = inputSchema.parse(input);
+    if (kind === "provider_settlement" && v.reason.length < 3)
+      throw new HttpError(400, "REASON_REQUIRED");
     if ((v.network === "usdttrc20" ? "USDT" : "USDC") !== v.currency)
       throw new HttpError(400, "UNSUPPORTED_NETWORK");
     if (kind === "refund" && v.providerId)
@@ -399,8 +412,20 @@ export class MoneyMovements {
     ).rows;
     return { ...record, events };
   }
-  async adminSummary(a: Account) {
+  async adminSummary(a: Account, params = new URLSearchParams()) {
     this.admin(a);
+    const filter = z
+      .object({
+        kind: z.enum(["refund", "provider_settlement"]),
+        history: z.enum(["true", "false"]).transform((v) => v === "true"),
+        page: z.coerce.number().int().min(1).max(100000),
+      })
+      .parse({
+        kind: params.get("kind") ?? "refund",
+        history: params.get("history") ?? "true",
+        page: params.get("page") ?? "1",
+      });
+    const filtered = params.has("kind");
     const state = await this.auth.store.read();
     const payables = (state.payoutProviders ?? initialProviders()).flatMap(
       (p) =>
@@ -419,7 +444,24 @@ export class MoneyMovements {
         })),
     );
     return {
-      records: await this.list(a),
+      records: await this.list(
+        a,
+        this.auth.pool,
+        filtered ? filter : undefined,
+      ),
+      total: Number(
+        (
+          await this.auth.pool.query(
+            "SELECT count(*)::int AS count FROM workspace.money_movements WHERE ($1::text IS NULL OR kind=$1) AND ($2::boolean OR status IN ('requested','approved'))",
+            [filtered ? filter.kind : null, filtered ? filter.history : true],
+          )
+        ).rows[0].count,
+      ),
+      pendingCounts: (
+        await this.auth.pool.query(
+          "SELECT kind,status,count(*)::int AS count FROM workspace.money_movements WHERE status IN ('requested','approved') GROUP BY kind,status",
+        )
+      ).rows,
       payables,
       verification: this.chain.config(),
     };
@@ -453,8 +495,17 @@ export class MoneyMovements {
           [a.customer_id],
         )
       ).rows;
+      const activity = new Map<string, string>();
+      for (const event of state.audits) {
+        if (event.at > (activity.get(event.targetId) ?? ""))
+          activity.set(event.targetId, event.at);
+      }
       const result = {
         ...data,
+        orders: data.orders?.map((o) => ({
+          ...o,
+          updatedAt: activity.get(String(o.id)) ?? o.createdAt,
+        })),
         storageMode: "postgres",
         storageLimits: null,
         moneyMovements,
