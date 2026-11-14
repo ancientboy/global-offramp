@@ -222,6 +222,12 @@ export class Auth {
           VALUES($1,$2,$3,$4,'customer',$5,$6) RETURNING id,email,display_name,role,customer_id`,
           [id, v.email, v.name, passwordHash, customerId, at],
         );
+        // A customer's self-chosen, policy-validated registration password is already final.
+        // Legacy/operator-initialized accounts still require a first-use change in live mode.
+        await c.query(
+          "INSERT INTO workspace.account_security(account_id,password_changed_at) VALUES($1,$2)",
+          [id, at],
+        );
         state.customers.push({
           id: customerId,
           name: v.name,

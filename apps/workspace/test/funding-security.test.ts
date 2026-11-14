@@ -46,6 +46,11 @@ async function fixture() {
     name: "User",
     kind: "personal",
   });
+  // Exercise first-use gates using a legacy/operator-initialized account.
+  await pool.query(
+    "UPDATE workspace.account_security SET password_changed_at=NULL WHERE account_id=$1",
+    [user.id],
+  );
   const account = (
     await pool.query("SELECT * FROM workspace.accounts WHERE id=$1", [user.id])
   ).rows[0] as Account;
@@ -607,6 +612,34 @@ test("a slower stale provider GET cannot overwrite a newer credited observation"
     assert.equal((await f.funding.list(f.account))[0].status, "credited");
     assert.equal((await f.store.read()).customers[0].status, "approved");
     assert.equal((await f.store.read()).journals.length, 1);
+  } finally {
+    await f.db.close();
+  }
+});
+
+test("a new customer's self-chosen strong password does not require a redundant first-login reset", async () => {
+  const f = await fixture();
+  try {
+    const user = await f.auth.register({
+        email: "new-customer@example.com",
+        password,
+        name: "New customer",
+        kind: "personal",
+      }),
+      login = await f.auth.login(
+        { identifier: "new-customer@example.com", password },
+        "new-customer",
+      );
+    const response = await f.app(
+      new Request("https://workspace.example/workspace/api/wallet/funding", {
+        headers: { cookie: "__Secure-offramp-workspace=" + login.token },
+      }),
+      "new-customer",
+    );
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).enabled, true);
+    const account = await f.auth.current(login.token);
+    assert.equal((await f.security.status(account)).passwordChanged, true);
   } finally {
     await f.db.close();
   }
