@@ -26,6 +26,7 @@ async function fixture() {
     "db/migrations/006_provider_accounts.sql",
     "db/migrations/007_partner_invites.sql",
     "db/migrations/008_funding_security.sql",
+    "db/migrations/009_funding_observation_sequence.sql",
   ])
     await db.exec(readFileSync(name, "utf8"));
   const pool: SqlPool = {

@@ -12,7 +12,7 @@ sql("CREATE ROLE offramp_live_app LOGIN PASSWORD '"+password+"' NOSUPERUSER NOCR
 sql('CREATE DATABASE offramp_live OWNER offramp_owner;')
 sql('REVOKE ALL ON DATABASE offramp_live FROM PUBLIC; GRANT CONNECT ON DATABASE offramp_live TO offramp_live_app;')
 # Fresh database only. Do not run legacy migrations against the existing sandbox.
-for f in ['db-runtime.sql']+[f'db/migrations/{n}' for n in ['002_workspace.sql','003_route_drafts.sql','004_operator_customer_username.sql','005_multi_fiat.sql','006_provider_accounts.sql','007_partner_invites.sql','008_funding_security.sql']]:sql((root/f).read_text(),'offramp_live')
+for f in ['db-runtime.sql']+[f'db/migrations/{n}' for n in ['002_workspace.sql','003_route_drafts.sql','004_operator_customer_username.sql','005_multi_fiat.sql','006_provider_accounts.sql','007_partner_invites.sql','008_funding_security.sql','009_funding_observation_sequence.sql']]:sql((root/f).read_text(),'offramp_live')
 grants=(root/'deploy/workspace/grants.sql').read_text().replace(':"app_role"','"offramp_live_app"');sql(grants,'offramp_live')
 p=Path('/etc/global-offramp/live');p.mkdir(mode=0o700,exist_ok=False)
 for name in ['live-recipient-vault.key','live-account-security.key']:

@@ -31,3 +31,6 @@ GRANT UPDATE(mfa_verified_at) ON workspace.sessions TO :"app_role";
 GRANT UPDATE(provider_id,pay_address,pay_amount,extra_id,status,review_reason,credited_amount,journal_id,next_check_at,checked_at,last_observation_at,updated_at) ON workspace.funding_payments TO :"app_role";
 
 GRANT UPDATE(password_hash) ON workspace.accounts TO :"app_role";
+
+GRANT USAGE ON SEQUENCE workspace.funding_observation_sequence TO :"app_role";
+GRANT UPDATE(last_observation) ON workspace.funding_payments TO :"app_role";

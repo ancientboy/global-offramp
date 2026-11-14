@@ -26,6 +26,7 @@ const migrations = [
   "db/migrations/006_provider_accounts.sql",
   "db/migrations/007_partner_invites.sql",
   "db/migrations/008_funding_security.sql",
+  "db/migrations/009_funding_observation_sequence.sql",
 ].map((p) => readFileSync(p, "utf8"));
 function poolFor(db: PGlite): SqlPool {
   return {

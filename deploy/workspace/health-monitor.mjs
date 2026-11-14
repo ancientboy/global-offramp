@@ -45,10 +45,12 @@ try {
     let last = 0;
     try {
       last = Date.parse(
-        await readFile(
-          "/var/lib/global-offramp-workspace/offsite-last-success",
-          "utf8",
-        ),
+        (
+          await readFile(
+            "/var/lib/global-offramp-workspace/offsite-last-success",
+            "utf8",
+          )
+        ).trim(),
       );
     } catch {}
     if (!last || Date.now() - last > 8 * 3600000)

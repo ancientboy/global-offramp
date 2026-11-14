@@ -247,17 +247,19 @@ export class Funding {
     );
   }
   async refresh(row: any) {
-    const observedAt = (
-      await this.auth.pool.query("SELECT clock_timestamp()::text AS at")
-    ).rows[0].at;
+    const observation = (
+      await this.auth.pool.query(
+        "SELECT nextval('workspace.funding_observation_sequence')::text AS sequence",
+      )
+    ).rows[0].sequence;
     const p = await this.provider.get(row.provider_id),
       pid = paymentId(p.payment_id);
     // Callback is a wake-up signal only. Financial decisions use the authenticated provider GET.
     await this.auth.store.transactionWithClient(async (s, c) => {
       const r = (
         await c.query(
-          "SELECT *,last_observation_at>$2::timestamptz AS superseded FROM workspace.funding_payments WHERE id=$1 FOR UPDATE",
-          [row.id, observedAt],
+          "SELECT *,last_observation>$2::bigint AS superseded FROM workspace.funding_payments WHERE id=$1 FOR UPDATE",
+          [row.id, observation],
         )
       ).rows[0];
       if (r.superseded) return;
@@ -341,8 +343,8 @@ export class Funding {
             ? "credited"
             : p.payment_status;
       await c.query(
-        "UPDATE workspace.funding_payments SET status=$2,review_reason=$3,checked_at=now(),last_observation_at=$4,next_check_at=now()+interval '15 minutes',updated_at=now() WHERE id=$1",
-        [r.id, status, review, observedAt],
+        "UPDATE workspace.funding_payments SET status=$2,review_reason=$3,checked_at=now(),last_observation=$4,next_check_at=now()+interval '15 minutes',updated_at=now() WHERE id=$1",
+        [r.id, status, review, observation],
       );
       if (review === "CREDITED_PAYMENT_CHANGED") {
         const customer = s.customers.find((x) => x.id === r.customer_id);

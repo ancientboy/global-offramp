@@ -50,6 +50,12 @@ async function main() {
       await pool.query(
         readFileSync("db/migrations/008_funding_security.sql", "utf8"),
       );
+      await pool.query(
+        readFileSync(
+          "db/migrations/009_funding_observation_sequence.sql",
+          "utf8",
+        ),
+      );
       console.log("Workspace schemas installed; no demo database touched");
     } else {
       // Piped JSON from a protected terminal prompt or secret manager; never argv/env/log.

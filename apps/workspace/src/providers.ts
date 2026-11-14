@@ -25,6 +25,9 @@ export async function providerDashboard(auth: Auth, account: Account) {
           depositStatus: o.depositStatus,
           fundingStatus: o.walletFundingStatus ?? null,
           canRecordPayment:
+            state.customers.some(
+              (c) => c.id === o.customerId && c.status === "approved",
+            ) &&
             o.depositStatus === "confirmed" &&
             ["draft", "approved", "awaiting_approval"].includes(
               o.payoutStatus,
