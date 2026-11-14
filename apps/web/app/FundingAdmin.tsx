@@ -1,9 +1,14 @@
 "use client";
 import { useEffect, useState } from "react";
+import FinanceLedger from "./FinanceLedger";
 import MoneyOperationsAdmin from "./MoneyOperationsAdmin";
 import { moneyRequest } from "./money-api";
 import { fundingStatus } from "./FundingDialog";
-export default function FundingAdmin() {
+export default function FundingAdmin({
+  onOpenOrder,
+}: {
+  onOpenOrder?: (id: string) => void;
+}) {
   const [review, setReview] = useState<any>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [data, setData] = useState<any>(null),
@@ -59,9 +64,16 @@ export default function FundingAdmin() {
       setReviewBusy(false);
     }
   }
-  if (!data && !error) return <MoneyOperationsAdmin />;
+  if (!data && !error)
+    return (
+      <>
+        <FinanceLedger onOpenOrder={onOpenOrder} />
+        <MoneyOperationsAdmin />
+      </>
+    );
   return (
     <>
+      <FinanceLedger onOpenOrder={onOpenOrder} />
       <section className="card" style={{ padding: 24, marginTop: 20 }}>
         <div className="card-heading">
           <h2>充值与资金监控</h2>

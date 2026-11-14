@@ -40,6 +40,7 @@ import MerchantOverview, {
 } from "./MerchantOverview";
 import OrderHistory from "./OrderHistory";
 import { securityMessages } from "./AccountSecurity";
+import AdminCustomers from "./AdminCustomers";
 import FundingAdmin from "./FundingAdmin";
 import CustomerWallet from "./CustomerWallet";
 import PartnerAdminPanel from "./PartnerAdminPanel";
@@ -2220,7 +2221,12 @@ export default function Home() {
                 <RouteSettings admin={role === "admin"} />
               )}
               {page === "funds" && workspace && role === "admin" && (
-                <FundingAdmin />
+                <FundingAdmin
+                  onOpenOrder={(id) => {
+                    setSelected(id);
+                    go("detail");
+                  }}
+                />
               )}
               {page === "wallet" && role === "customer" && (
                 <CustomerWallet
@@ -3924,17 +3930,32 @@ export default function Home() {
                   onNavigate={(next) => go(next as Page)}
                 />
               )}
-              {page === "directory" && (
-                <CustomerDirectoryPanel
-                  customers={customers}
-                  beneficiaries={beneficiaries}
-                  orders={orders}
-                  onOpenOrder={(id) => {
-                    setSelected(id);
-                    go("detail");
-                  }}
-                />
-              )}
+              {page === "directory" &&
+                (workspace && role === "admin" ? (
+                  <AdminCustomers
+                    onOpenRecipient={(id) => {
+                      void request<FullRecipientInput>(
+                        `beneficiaries/${id}/details`,
+                      )
+                        .then(setRecipientDetails)
+                        .catch((e) => setError(errorText(e)));
+                    }}
+                    onOpenOrder={(id) => {
+                      setSelected(id);
+                      go("detail");
+                    }}
+                  />
+                ) : (
+                  <CustomerDirectoryPanel
+                    customers={customers}
+                    beneficiaries={beneficiaries}
+                    orders={orders}
+                    onOpenOrder={(id) => {
+                      setSelected(id);
+                      go("detail");
+                    }}
+                  />
+                ))}
               {page === "referrals" && (
                 <>
                   {workspace ? (

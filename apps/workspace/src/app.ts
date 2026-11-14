@@ -1,3 +1,10 @@
+import {
+  financeSnapshot,
+  financePage,
+  financeCsv,
+  financeFilters,
+  customerPage,
+} from "./admin-finance";
 import { financialReport, reportCsv } from "./financial-report";
 import { MoneyMovements } from "./money-movements";
 import { ReceiptScanner } from "./receipt-scanner";
@@ -237,6 +244,40 @@ export function workspaceApp(
         path.startsWith("/settlements")
       )
         throw new HttpError(403, "REAL_SETTLEMENT_NOT_CONFIGURED");
+      if (path === "/admin/finance/transactions" && request.method === "GET") {
+        financeFilters(url.searchParams);
+        const result = financePage(
+          await financeSnapshot(auth, account),
+          url.searchParams,
+        );
+        if (url.searchParams.get("format") === "csv")
+          return new Response(financeCsv(result), {
+            headers: {
+              "content-type": "text/csv; charset=utf-8",
+              "content-disposition":
+                "attachment; filename=financial-transactions.csv",
+              "cache-control": "private, no-store",
+              "x-content-type-options": "nosniff",
+            },
+          });
+        return json(result);
+      }
+      if (path === "/admin/customers" && request.method === "GET")
+        return json(
+          customerPage(await financeSnapshot(auth, account), url.searchParams),
+        );
+      const customerDetail = /^\/admin\/customers\/([^/]+)$/.exec(path);
+      if (customerDetail && request.method === "GET") {
+        const snapshot = await financeSnapshot(auth, account),
+          id = decodeURIComponent(customerDetail[1]),
+          person = snapshot.people.find((p) => p.id === id);
+        if (!person) throw new HttpError(404, "NOT_FOUND");
+        return json({
+          asOf: snapshot.asOf,
+          customer: person,
+          recipients: snapshot.beneficiaries.filter((b) => b.customerId === id),
+        });
+      }
       const movementDetails = /^\/admin\/money\/(HTMOVE-[a-zA-Z0-9-]+)$/.exec(
         path,
       );
