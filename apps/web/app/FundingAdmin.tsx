@@ -18,8 +18,9 @@ export default function FundingAdmin({
       credentials: "same-origin",
       cache: "no-store",
     });
-    if (!r.ok) return;
+    if (!r.ok) throw Error("充值监控暂不可用。");
     setData(await r.json());
+    setError("");
   }
   useEffect(() => {
     void load().catch(() => setError("充值监控暂不可用。"));
@@ -64,20 +65,18 @@ export default function FundingAdmin({
       setReviewBusy(false);
     }
   }
-  if (!data && !error)
-    return (
-      <>
-        <FinanceLedger onOpenOrder={onOpenOrder} />
-        <MoneyOperationsAdmin />
-      </>
-    );
   return (
     <>
       <FinanceLedger onOpenOrder={onOpenOrder} />
       <section className="card" style={{ padding: 24, marginTop: 20 }}>
         <div className="card-heading">
           <h2>充值与资金监控</h2>
-          <button className="button outline" onClick={() => void load()}>
+          <button
+            className="button outline"
+            onClick={() =>
+              void load().catch(() => setError("充值监控暂不可用。"))
+            }
+          >
             刷新
           </button>
         </div>
@@ -88,7 +87,8 @@ export default function FundingAdmin({
             {r.matches ? "一致" : "存在差异，请暂停资金操作并核查"}
           </p>
         ))}
-        {!data?.records?.length && <p>暂无真实充值记录。</p>}
+        {!data && !error && <p role="status">正在加载充值记录…</p>}
+        {data && !data.records?.length && <p>暂无真实充值记录。</p>}
         {data?.records?.map((p: any) => (
           <div className="fund-record" key={p.id}>
             <div>
