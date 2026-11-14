@@ -34,3 +34,7 @@ GRANT UPDATE(password_hash) ON workspace.accounts TO :"app_role";
 
 GRANT USAGE ON SEQUENCE workspace.funding_observation_sequence TO :"app_role";
 GRANT UPDATE(last_observation) ON workspace.funding_payments TO :"app_role";
+
+GRANT SELECT,INSERT ON workspace.money_movements,workspace.money_movement_events,workspace.chain_transfer_claims,workspace.funding_reviews TO :"app_role";
+GRANT UPDATE(status,approved_by,approved_at,closing_journal,updated_at) ON workspace.money_movements TO :"app_role";
+GRANT UPDATE(allow_partial_credit) ON workspace.funding_payments TO :"app_role";

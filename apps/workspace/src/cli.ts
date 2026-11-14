@@ -56,6 +56,9 @@ async function main() {
           "utf8",
         ),
       );
+      await pool.query(
+        readFileSync("db/migrations/010_money_movements.sql", "utf8"),
+      );
       console.log("Workspace schemas installed; no demo database touched");
     } else {
       // Piped JSON from a protected terminal prompt or secret manager; never argv/env/log.

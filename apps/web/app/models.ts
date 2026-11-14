@@ -269,6 +269,7 @@ export interface Dashboard {
   walletBalances?: WalletBalance[];
   walletDeposits?: WalletDeposit[];
   fundingPayments?: any[];
+  moneyMovements?: any[];
   mode: string;
   customers?: Customer[];
   beneficiaries?: Beneficiary[];
@@ -288,6 +289,7 @@ export interface Dashboard {
 export interface Health {
   simulatedTopupsEnabled?: boolean;
   depositsEnabled?: boolean;
+  moneyOperationsEnabled?: boolean;
   fundsMode?: "sandbox" | "live";
   accessMode?: "public_demo";
   status: string;

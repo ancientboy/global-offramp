@@ -1,3 +1,5 @@
+import { MoneyMovements } from "./money-movements";
+import { ChainTransfers } from "./chain-transfers";
 import { workspaceHeaders } from "./security-headers";
 import { ReceiptScanner } from "./receipt-scanner";
 import { AccountSecurity } from "./account-security";
@@ -111,6 +113,18 @@ async function main() {
       security,
       scanner,
       funding,
+      money: new MoneyMovements(
+        auth,
+        new ChainTransfers({
+          usdttrc20: (process.env.WORKSPACE_TREASURY_USDTTRC20 ?? "")
+            .split(",")
+            .filter(Boolean),
+          usdcbase: (process.env.WORKSPACE_TREASURY_USDCBASE ?? "")
+            .split(",")
+            .filter(Boolean),
+        }),
+        fundsMode,
+      ),
       fundsMode,
       payoutsPaused:
         process.env.WORKSPACE_PAYOUTS_PAUSED !== "false" &&

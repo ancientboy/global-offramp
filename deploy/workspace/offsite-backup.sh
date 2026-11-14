@@ -14,6 +14,7 @@ mkdir -p /var/backups/global-offramp/encrypted
 if [ ! -f "$archive" ]; then
  extra=()
  if [ -f /etc/global-offramp/live/runtime.env ]; then extra=(-C /etc/global-offramp live/runtime.env live-recipient-vault.key live-account-security.key); fi
+ if [ -f /etc/global-offramp/live/wallet-policy.json ]; then extra+=(-C /etc/global-offramp live/wallet-policy.json); fi
  tar -cf - -C "$latest" . -C /etc/global-offramp recipient-vault.key account-security.key -C /etc/global-offramp/business runtime.env nowpayments.env "${extra[@]}" | gpg --batch --yes --pinentry-mode loopback --passphrase-file /etc/global-offramp/backup-encryption.key --symmetric --cipher-algo AES256 --compress-algo none --output "$archive.partial"
  mv "$archive.partial" "$archive"
 fi

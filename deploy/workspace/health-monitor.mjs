@@ -41,6 +41,14 @@ try {
     "SELECT count(*)::int AS n FROM workspace.funding_payments WHERE provider_id IS NOT NULL AND (checked_at IS NULL OR checked_at<now()-interval '1 hour') AND created_at<now()-interval '1 hour'",
   );
   if (pending.rows[0].n) await alert("funding.reconciliation_stale");
+  const movementMismatch = await pool.query(
+    `SELECT COALESCE(m.currency,l.currency) currency FROM (SELECT currency,sum(amount) held FROM workspace.money_movements WHERE status IN ('requested','approved') GROUP BY currency) m FULL JOIN (SELECT currency,sum(credit-debit) held FROM runtime.ledger_lines WHERE account LIKE 'liability:movement:%' GROUP BY currency) l USING(currency) WHERE COALESCE(m.held,0)<>COALESCE(l.held,0)`,
+  );
+  if (movementMismatch.rows.length) await alert("money.reservation_mismatch");
+  const movementStale = await pool.query(
+    "SELECT count(*)::int AS n FROM workspace.money_movements WHERE status IN ('requested','approved') AND updated_at<now()-interval '24 hours'",
+  );
+  if (movementStale.rows[0].n) await alert("money.pending_stale");
   if (process.env.OFFRAMP_OFFSITE_ENABLED === "true") {
     let last = 0;
     try {

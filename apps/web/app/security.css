@@ -92,3 +92,114 @@
 .security-panel .button {
   justify-self: start;
 }
+.money-admin {
+  padding: 24px;
+  margin-top: 20px;
+}
+.money-report-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.money-report-grid > div {
+  padding: 16px;
+  background: #f2f5ed;
+  border: 1px solid #dbe4d9;
+  border-radius: 14px;
+}
+.money-report-grid p {
+  font-size: 13px;
+  margin: 8px 0;
+}
+.money-report-grid span {
+  font-size: 12px;
+  color: #24756a;
+}
+.money-form {
+  display: grid;
+  gap: 12px;
+  max-width: 600px;
+  padding: 20px 0;
+}
+.money-form label {
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+}
+.money-form input {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #c9d8d0;
+  border-radius: 10px;
+  padding: 11px;
+  background: #fff;
+  font: inherit;
+}
+.money-form button {
+  justify-self: start;
+}
+.money-detail {
+  padding: 18px;
+  background: #f6f7f1;
+  border-radius: 14px;
+}
+.money-detail dl {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 12px;
+}
+.money-detail dd {
+  margin: 0;
+}
+.money-address {
+  overflow-wrap: anywhere;
+}
+.movement-row {
+  width: 100%;
+  text-align: left;
+}
+.movement-row > span {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.movement-row small {
+  overflow-wrap: anywhere;
+}
+.refund-record {
+  padding: 16px 0;
+  border-bottom: 1px solid #e2e8df;
+}
+.refund-record header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.refund-record small {
+  display: block;
+  margin: 8px 0;
+  color: #567069;
+}
+.wallet-refund-link {
+  margin-top: 16px;
+}
+@media (max-width: 600px) {
+  .money-admin {
+    padding: 16px;
+  }
+  .money-report-grid {
+    grid-template-columns: 1fr;
+  }
+  .money-admin .card-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .movement-row {
+    gap: 12px;
+  }
+  .money-detail dl {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+}

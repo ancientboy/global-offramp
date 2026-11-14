@@ -81,6 +81,7 @@ export class OfframpService {
     private readonly clock: () => Date = () => new Date(),
     private readonly config: typeof CONFIG = CONFIG,
     private readonly fundsMode: "mock" | "live" = "mock",
+    private readonly clearingAccounting: boolean = fundsMode === "live",
   ) {
     this.bootstrapPricing = initialPricing(config, clock());
   }
@@ -1048,12 +1049,25 @@ export class OfframpService {
         o.quote.payoutCurrency,
         o.quote.payoutAmount,
         "liability:payout:" + o.id,
-        this.fundsMode === "live"
+        this.fundsMode === "live" ||
+          o.conversion?.accountingBasis === "provider_clearing"
           ? "asset:provider:attested:" +
               (o.payoutProviderSnapshot?.id ?? "unassigned")
           : "asset:provider:mock",
         this.clock(),
       );
+      if (o.conversion?.accountingBasis === "provider_clearing")
+        transfer(
+          s,
+          "provider-payable:" + o.id,
+          o.quote.sourceCurrency,
+          o.quote.sourceAmount,
+          "liability:provider-allocation:" +
+            (o.payoutProviderSnapshot?.id ?? "unassigned"),
+          "liability:provider-settlement:" +
+            (o.payoutProviderSnapshot?.id ?? "unassigned"),
+          this.clock(),
+        );
       for (const [name, value] of [
         ["service", o.quote.serviceFee],
         ["channel", o.quote.channelFee],
@@ -1619,8 +1633,8 @@ export class OfframpService {
           o.quote.sourceCurrency,
           o.quote.sourceAmount,
           "liability:order:" + o.id,
-          this.fundsMode === "live"
-            ? "liability:provider-settlement:" +
+          this.clearingAccounting
+            ? "liability:provider-allocation:" +
                 (o.payoutProviderSnapshot?.id ?? "unassigned")
             : "asset:custody:mock",
           this.clock(),
@@ -1630,7 +1644,7 @@ export class OfframpService {
           "conversion-target:" + o.id,
           o.quote.payoutCurrency,
           o.quote.payoutAmount,
-          this.fundsMode === "live"
+          this.clearingAccounting
             ? "asset:provider:attested:" +
                 (o.payoutProviderSnapshot?.id ?? "unassigned")
             : "asset:provider:mock",
@@ -1639,8 +1653,11 @@ export class OfframpService {
         );
         o.conversionStatus = "recorded";
         o.conversion = {
+          ...(this.clearingAccounting
+            ? { accountingBasis: "provider_clearing" as const }
+            : {}),
           providerReference:
-            (this.fundsMode === "live" ? "ALLOCATION-" : "MOCK-ALLOCATION-") +
+            (this.clearingAccounting ? "ALLOCATION-" : "MOCK-ALLOCATION-") +
             o.id,
           actualRate: o.quote.customerRate,
           evidence:
@@ -2813,7 +2830,7 @@ export class OfframpService {
     }
     return view;
   }
-  async dashboard(actor: Actor) {
+  async dashboard(actor: Actor, options: { readOnly?: boolean } = {}) {
     let s = await this.store.read();
     const eligibility = (
       c: Commission,
@@ -2860,11 +2877,14 @@ export class OfframpService {
       };
     }
     authorize(actor, "order.read", actor.customerId);
-    if (!s.pricingHistory?.length)
-      s = await this.store.transaction((state) => {
-        this.ensurePricing(state);
-        return state;
-      });
+    if (!s.pricingHistory?.length) {
+      if (options.readOnly) this.ensurePricing(s);
+      else
+        s = await this.store.transaction((state) => {
+          this.ensurePricing(state);
+          return state;
+        });
+    }
     const customer = actor.role === "customer";
     return {
       mode: "MOCK",

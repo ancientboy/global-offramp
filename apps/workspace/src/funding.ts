@@ -72,10 +72,13 @@ export class Funding {
       maxDeposit: this.maxDeposit,
     };
   }
-  async list(account: Account) {
+  async list(
+    account: Account,
+    reader: Pick<Auth["pool"], "query"> = this.auth.pool,
+  ) {
     if (!["customer", "merchant_admin"].includes(account.role))
       throw new HttpError(403, "FORBIDDEN");
-    const r = await this.auth.pool.query(
+    const r = await reader.query(
       "SELECT id,currency,pay_currency,requested_amount::text,pay_address,pay_amount,extra_id,status,credited_amount::text,created_at,updated_at FROM workspace.funding_payments WHERE ($1::text IS NULL OR customer_id=$1) ORDER BY created_at DESC LIMIT 100",
       [account.role === "customer" ? account.customer_id : null],
     );
@@ -176,7 +179,7 @@ export class Funding {
       if (units(payAmount, 6) <= 0n)
         throw new HttpError(502, "INVALID_PROVIDER_AMOUNT");
       const r = await this.auth.pool.query(
-        "UPDATE workspace.funding_payments SET provider_id=$2,pay_address=$3,pay_amount=$4,extra_id=$5,status='waiting',updated_at=now() WHERE id=$1 RETURNING *",
+        "UPDATE workspace.funding_payments SET provider_id=$2,pay_address=$3,pay_amount=$4,extra_id=$5,status='waiting',updated_at=now() WHERE id=$1 AND provider_id IS NULL AND journal_id IS NULL AND status IN ('creating','creation_unknown') RETURNING *",
         [
           id,
           pid,
@@ -187,14 +190,33 @@ export class Funding {
             : String(response.payin_extra_id),
         ],
       );
+      if (!r.rows[0]) {
+        const existing = (
+          await this.auth.pool.query(
+            "SELECT * FROM workspace.funding_payments WHERE id=$1",
+            [id],
+          )
+        ).rows[0];
+        if (
+          existing?.provider_id === pid &&
+          existing.pay_address === response.pay_address
+        )
+          return this.view(existing);
+        throw new HttpError(409, "PAYMENT_ALREADY_LINKED");
+      }
       return this.view(r.rows[0]);
     } catch (e) {
       // Never repeat an ambiguous create request: a timeout may already have created an address.
-      await this.auth.pool.query(
-        "UPDATE workspace.funding_payments SET status='creation_unknown',review_reason='CREATE_REQUIRES_RECONCILIATION',updated_at=now() WHERE id=$1",
+      const unknown = await this.auth.pool.query(
+        "UPDATE workspace.funding_payments SET status='creation_unknown',review_reason='CREATE_REQUIRES_RECONCILIATION',updated_at=now() WHERE id=$1 AND provider_id IS NULL AND journal_id IS NULL RETURNING id",
         [id],
       );
-      await this.alert("deposit.creation_unknown", id);
+      await this.alert(
+        unknown.rows.length
+          ? "deposit.creation_unknown"
+          : "deposit.create_association_conflict",
+        id,
+      );
       throw e;
     }
   }
@@ -272,7 +294,10 @@ export class Funding {
         p.pay_address !== r.pay_address
       )
         review = "PAYMENT_IDENTITY_MISMATCH";
-      else if (p.payment_status === "finished") {
+      else if (
+        p.payment_status === "finished" ||
+        (p.payment_status === "partially_paid" && r.allow_partial_credit)
+      ) {
         if (p.outcome_currency !== r.pay_currency)
           review = "SETTLEMENT_ASSET_MISMATCH";
         else {
@@ -306,7 +331,10 @@ export class Funding {
         review = "UNKNOWN_PROVIDER_STATUS";
       if (
         r.journal_id &&
-        (p.payment_status !== "finished" ||
+        (!(
+          p.payment_status === "finished" ||
+          (p.payment_status === "partially_paid" && r.allow_partial_credit)
+        ) ||
           !amount ||
           units(amount, 6) !== units(String(r.credited_amount), 6))
       )
@@ -369,6 +397,13 @@ export class Funding {
     if (this.busy || !this.enabled) return;
     this.busy = true;
     try {
+      const abandoned = (
+        await this.auth.pool.query(
+          "UPDATE workspace.funding_payments SET status='creation_unknown',review_reason='CREATE_REQUIRES_RECONCILIATION',updated_at=now() WHERE status='creating' AND provider_id IS NULL AND created_at<now()-interval '2 minutes' RETURNING id",
+        )
+      ).rows;
+      for (const row of abandoned)
+        await this.alert("deposit.creation_unknown", row.id);
       const rows = (
         await this.auth.pool.query(
           "SELECT * FROM workspace.funding_payments WHERE provider_id IS NOT NULL AND next_check_at<=now() ORDER BY next_check_at LIMIT 20",
@@ -388,6 +423,107 @@ export class Funding {
     } finally {
       this.busy = false;
     }
+  }
+  async resolve(account: Account, id: string, input: unknown) {
+    if (account.role !== "merchant_admin")
+      throw new HttpError(403, "FORBIDDEN");
+    if (!this.enabled) throw new HttpError(503, "DEPOSITS_UNAVAILABLE");
+    const v = z
+      .object({
+        decision: z.enum(["link", "accept_partial"]),
+        providerId: z
+          .string()
+          .regex(/^[0-9]{1,30}$/)
+          .optional(),
+        note: z.string().trim().min(3).max(300),
+      })
+      .strict()
+      .parse(input);
+    const row = (
+      await this.auth.pool.query(
+        "SELECT * FROM workspace.funding_payments WHERE id=$1",
+        [id],
+      )
+    ).rows[0];
+    if (!row) throw new HttpError(404, "NOT_FOUND");
+    let p: any;
+    if (v.decision === "link") {
+      if (!v.providerId) throw new HttpError(400, "PAYMENT_ID_REQUIRED");
+      p = await this.provider.get(v.providerId);
+      if (
+        paymentId(p.payment_id) !== v.providerId ||
+        p.order_id !== id ||
+        p.pay_currency !== row.pay_currency ||
+        p.price_currency !== row.pay_currency ||
+        units(decimal6(p.price_amount), 6) !==
+          units(String(row.requested_amount), 6) ||
+        typeof p.pay_address !== "string" ||
+        !p.pay_address ||
+        p.pay_address.length > 300 ||
+        units(decimal6(p.pay_amount), 6) <= 0n
+      )
+        throw new HttpError(409, "PAYMENT_IDENTITY_MISMATCH");
+    }
+    if (v.decision === "accept_partial") {
+      if (!row.provider_id) throw new HttpError(409, "PAYMENT_NOT_LINKED");
+      p = await this.provider.get(row.provider_id);
+      if (row.allow_partial_credit && row.journal_id) {
+        await this.refresh({ id, provider_id: row.provider_id });
+        return { ok: true };
+      }
+      if (p.payment_status !== "partially_paid")
+        throw new HttpError(409, "NOT_PARTIALLY_PAID");
+      if (
+        paymentId(p.payment_id) !== row.provider_id ||
+        p.order_id !== id ||
+        p.pay_currency !== row.pay_currency ||
+        p.pay_address !== row.pay_address ||
+        p.outcome_currency !== row.pay_currency
+      )
+        throw new HttpError(409, "PAYMENT_IDENTITY_MISMATCH");
+    }
+    await this.auth.store.transactionWithClient(async (_s, c) => {
+      const r = (
+        await c.query(
+          "SELECT * FROM workspace.funding_payments WHERE id=$1 FOR UPDATE",
+          [id],
+        )
+      ).rows[0];
+      if (v.decision === "link") {
+        if (r.provider_id) {
+          if (r.provider_id === v.providerId) return;
+          throw new HttpError(409, "PAYMENT_ALREADY_LINKED");
+        }
+        if (r.status !== "creation_unknown")
+          throw new HttpError(409, "INVALID_STATE");
+        await c.query(
+          "UPDATE workspace.funding_payments SET provider_id=$2,pay_address=$3,pay_amount=$4,extra_id=$5,status='waiting',review_reason=NULL,next_check_at=now(),updated_at=now() WHERE id=$1",
+          [
+            id,
+            v.providerId,
+            p.pay_address,
+            String(p.pay_amount),
+            p.payin_extra_id == null ? null : String(p.payin_extra_id),
+          ],
+        );
+      } else {
+        if (!r.provider_id || r.journal_id)
+          throw new HttpError(409, "INVALID_STATE");
+        await c.query(
+          "UPDATE workspace.funding_payments SET allow_partial_credit=true,next_check_at=now() WHERE id=$1",
+          [id],
+        );
+      }
+      await c.query(
+        "INSERT INTO workspace.funding_reviews(id,payment_id,actor_id,decision,note) VALUES($1,$2,$3,$4,$5)",
+        [randomUUID(), id, account.id, v.decision, v.note],
+      );
+    });
+    await this.refresh({
+      id,
+      provider_id: v.decision === "link" ? v.providerId : row.provider_id,
+    });
+    return { ok: true };
   }
   async recheck(account: Account, id: string) {
     if (!this.enabled) throw new HttpError(503, "DEPOSITS_UNAVAILABLE");
@@ -440,7 +576,12 @@ export class Funding {
       payments,
       alerts,
       reconciliation,
-      records: await this.list(account),
+      records: (
+        await this.auth.pool.query(
+          "SELECT id,currency,pay_currency,requested_amount::text,credited_amount::text,status,provider_id,review_reason,allow_partial_credit,created_at,updated_at FROM workspace.funding_payments ORDER BY created_at DESC LIMIT 100",
+        )
+      ).rows,
+      enabled: this.enabled,
     };
   }
 }

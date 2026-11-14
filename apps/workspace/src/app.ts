@@ -1,3 +1,5 @@
+import { financialReport, reportCsv } from "./financial-report";
+import { MoneyMovements } from "./money-movements";
 import { ReceiptScanner } from "./receipt-scanner";
 import { AccountSecurity } from "./account-security";
 import { Funding, type FundsMode } from "./funding";
@@ -80,6 +82,7 @@ export function workspaceApp(
     security?: AccountSecurity;
     scanner?: ReceiptScanner;
     funding?: Funding;
+    money?: MoneyMovements;
     fundsMode?: FundsMode;
     payoutsPaused?: boolean;
   } = {},
@@ -91,6 +94,7 @@ export function workspaceApp(
     () => new Date(auth.now()),
     undefined,
     options.fundsMode === "live" ? "live" : "mock",
+    options.fundsMode === "live" || !!options.money,
   );
   return async (request: Request, ip: string): Promise<Response> => {
     try {
@@ -148,6 +152,7 @@ export function workspaceApp(
             receiptScanningEnabled: !!options.scanner,
             fundsMode: options.fundsMode ?? "sandbox",
             depositsEnabled: !!options.funding?.enabled,
+            moneyOperationsEnabled: !!options.money,
             payoutsPaused: options.payoutsPaused ?? false,
             simulatedTopupsEnabled: options.enableSimulatedTopups === true,
             recipientAccountsEnabled: !!options.recipientVault,
@@ -181,6 +186,8 @@ export function workspaceApp(
       }
       const token = tokenOf(request);
       const account = await auth.current(token);
+      if (path.startsWith("/admin/") && account.role !== "merchant_admin")
+        throw new HttpError(403, "FORBIDDEN");
       if (path === "/auth/security" && request.method === "GET") {
         if (!options.security) throw new HttpError(503, "SECURITY_UNAVAILABLE");
         return json({
@@ -216,6 +223,7 @@ export function workspaceApp(
           options.payoutsPaused &&
           request.method === "POST" &&
           (path === "/orders" ||
+            /^\/admin\/money\/[\w-]+\/verify$/.test(path) ||
             /^\/provider\/orders\/[\w-]+\/payment$/.test(path) ||
             /^\/batches\/[\w-]+\/submit$/.test(path) ||
             path === "/settlements" ||
@@ -229,6 +237,89 @@ export function workspaceApp(
         path.startsWith("/settlements")
       )
         throw new HttpError(403, "REAL_SETTLEMENT_NOT_CONFIGURED");
+      const movementDetails = /^\/admin\/money\/(HTMOVE-[a-zA-Z0-9-]+)$/.exec(
+        path,
+      );
+      if (movementDetails && request.method === "GET") {
+        if (!options.money)
+          throw new HttpError(503, "MONEY_OPERATIONS_UNAVAILABLE");
+        return json(await options.money.detail(account, movementDetails[1]));
+      }
+      if (path === "/admin/money/report" && request.method === "GET") {
+        const report = await financialReport(auth, account);
+        if (url.searchParams.get("format") === "csv")
+          return new Response(reportCsv(report), {
+            headers: {
+              "content-type": "text/csv; charset=utf-8",
+              "content-disposition":
+                "attachment; filename=financial-reconciliation.csv",
+              "cache-control": "private, no-store",
+              "x-content-type-options": "nosniff",
+            },
+          });
+        return json(report);
+      }
+      if (
+        path === "/wallet/refunds" ||
+        path === "/money-movements" ||
+        path === "/admin/money" ||
+        path === "/admin/provider-settlements" ||
+        /^\/(?:money-movements|admin\/money)\/HTMOVE-[a-zA-Z0-9-]+\/(decision|verify)$/.test(
+          path,
+        )
+      ) {
+        if (!options.money)
+          throw new HttpError(503, "MONEY_OPERATIONS_UNAVAILABLE");
+        if (path === "/wallet/refunds" && account.role !== "customer")
+          throw new HttpError(403, "FORBIDDEN");
+        if (
+          path === "/wallet/refunds" &&
+          request.method === "POST" &&
+          options.fundsMode === "live"
+        )
+          await options.security!.requireRecentMfa(account, token!);
+        if (request.method === "GET") {
+          if (path === "/admin/money")
+            return json(await options.money.adminSummary(account));
+          if (path === "/wallet/refunds" || path === "/money-movements")
+            return json({ records: await options.money.list(account) });
+          throw new HttpError(404, "NOT_FOUND");
+        }
+        await auth.rate("money-operation:" + account.id, 10, 60000);
+        if (path === "/wallet/refunds")
+          return json(
+            await options.money.create(account, "refund", await body()),
+            201,
+          );
+        if (path === "/admin/provider-settlements")
+          return json(
+            await options.money.create(
+              account,
+              "provider_settlement",
+              await body(),
+            ),
+            201,
+          );
+        const movement =
+          /^\/(?:money-movements|admin\/money)\/(HTMOVE-[a-zA-Z0-9-]+)\/(decision|verify)$/.exec(
+            path,
+          );
+        if (movement) {
+          const input = await body();
+          if (movement[2] === "verify")
+            return json(
+              await options.money.complete(account, movement[1], input),
+            );
+          if (
+            options.fundsMode === "live" &&
+            options.payoutsPaused &&
+            input.action === "approve"
+          )
+            throw new HttpError(503, "PAYOUTS_PAUSED");
+          return json(await options.money.decide(account, movement[1], input));
+        }
+        throw new HttpError(405, "METHOD_NOT_ALLOWED");
+      }
       if (path === "/wallet/funding" && request.method === "GET")
         return json(
           options.funding?.publicConfig() ?? { enabled: false, networks: [] },
@@ -239,6 +330,19 @@ export function workspaceApp(
           return json({ payments: await options.funding.list(account) });
         await auth.rate("deposit-create:" + account.id, 3, 60000);
         return json(await options.funding.create(account, await body()), 201);
+      }
+      const fundingReview =
+        /^\/admin\/funding\/(HTDEP-[a-zA-Z0-9-]+)\/resolve$/.exec(path);
+      if (fundingReview && request.method === "POST") {
+        if (!options.funding) throw new HttpError(503, "DEPOSITS_UNAVAILABLE");
+        await auth.rate("funding-review:" + account.id, 5, 60000);
+        return json(
+          await options.funding.resolve(
+            account,
+            fundingReview[1],
+            await body(),
+          ),
+        );
       }
       const fundingRecheck =
         /^\/admin\/funding\/(HTDEP-[a-zA-Z0-9-]+)\/recheck$/.exec(path);
@@ -251,6 +355,15 @@ export function workspaceApp(
         if (!options.funding) throw new HttpError(503, "DEPOSITS_UNAVAILABLE");
         return json(await options.funding.summary(account));
       }
+      if (
+        path === "/dashboard" &&
+        request.method === "GET" &&
+        account.role === "customer" &&
+        options.money
+      )
+        return json(
+          await options.money.customerDashboard(account, options.funding),
+        );
       if (
         path === "/beneficiaries" &&
         request.method === "POST" &&
@@ -578,6 +691,8 @@ export function workspaceApp(
         const data = await result.json();
         return json({
           ...data,
+          storageMode: "postgres",
+          storageLimits: null,
           fundingPayments: await options.funding.list(account),
         });
       }

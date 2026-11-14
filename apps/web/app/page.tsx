@@ -91,6 +91,7 @@ import { WorkspaceContext, resolvePortalActor } from "./workspace-context";
 import RouteSettings from "./RouteSettings";
 
 type Page =
+  | "funds"
   | "routes"
   | "wallet"
   | "profile"
@@ -140,6 +141,7 @@ const navs: Record<ViewRole, [Page, string, Icon][]> = {
   ],
   admin: [
     ["overview", "经营概览", ChartBar],
+    ["funds", "资金管理", CurrencyCircleDollar],
     ["routes", "路线配置", Bank],
     ["workbench", "出款工作台", Wallet],
     ["orders", "全部订单", FileText],
@@ -162,6 +164,7 @@ const navs: Record<ViewRole, [Page, string, Icon][]> = {
   ],
 };
 const titles: Record<Page, string> = {
+  funds: "资金管理",
   routes: "结汇付款地区",
   receipts: "回单资料库",
   overview: "经营概览",
@@ -185,6 +188,7 @@ const titles: Record<Page, string> = {
   settlements: "结算记录",
 };
 const subtitles: Record<Page, string> = {
+  funds: "管理充值、退款、服务商结算与账务核对",
   routes: "支持六种法币结汇付款，查看可用地区、汇率与费用",
   receipts: "私有存储、本地识别、人工关联，原件不会自动分享给客户",
   overview: "按订单创建、登记付款分别统计，不同币种独立核算",
@@ -2066,7 +2070,7 @@ export default function Home() {
         </div>
         <nav aria-label="主导航">
           {navs[role]
-            .filter(([p]) => p !== "routes" || !!workspace)
+            .filter(([p]) => !["routes", "funds"].includes(p) || !!workspace)
             .map(([p, label, I]) => (
               <button
                 key={p}
@@ -2213,10 +2217,10 @@ export default function Home() {
           ) : (
             <>
               {page === "routes" && workspace && (
-                <>
-                  <RouteSettings admin={role === "admin"} />
-                  {role === "admin" && <FundingAdmin />}
-                </>
+                <RouteSettings admin={role === "admin"} />
+              )}
+              {page === "funds" && workspace && role === "admin" && (
+                <FundingAdmin />
               )}
               {page === "wallet" && role === "customer" && (
                 <CustomerWallet
@@ -2227,6 +2231,9 @@ export default function Home() {
                   }
                   realFunds={health?.fundsMode === "live"}
                   fundingPayments={data.fundingPayments ?? []}
+                  moneyEnabled={!!health?.moneyOperationsEnabled}
+                  moneyMovements={data.moneyMovements ?? []}
+                  onRefresh={reload}
                   key={actor}
                   balances={walletBalances}
                   deposits={data.walletDeposits ?? []}
@@ -4519,7 +4526,7 @@ export default function Home() {
           aria-label="移动导航"
         >
           {navs[role]
-            .filter(([p]) => p !== "routes" || !!workspace)
+            .filter(([p]) => !["routes", "funds"].includes(p) || !!workspace)
             .map(([p, label, I]) => (
               <button
                 key={p}

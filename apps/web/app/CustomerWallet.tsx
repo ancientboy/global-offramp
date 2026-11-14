@@ -1,4 +1,6 @@
 "use client";
+import RefundDialog from "./RefundDialog";
+import { moneyRequest, movementLabels } from "./money-api";
 import FundingDialog, { fundingStatus } from "./FundingDialog";
 import { useState } from "react";
 import {
@@ -28,6 +30,9 @@ export default function CustomerWallet({
   fundsDisabled = false,
   realFunds = false,
   fundingPayments = [],
+  moneyEnabled = false,
+  moneyMovements = [],
+  onRefresh,
   onTopup,
   onExchange,
   onOrder,
@@ -42,10 +47,31 @@ export default function CustomerWallet({
   fundsDisabled?: boolean;
   realFunds?: boolean;
   fundingPayments?: any[];
+  moneyEnabled?: boolean;
+  moneyMovements?: any[];
+  onRefresh?: () => void | Promise<void>;
   onTopup: (currency: string) => void;
   onExchange: (currency: string) => void;
   onOrder: (id: string) => void;
 }) {
+  const [refundOpen, setRefundOpen] = useState(false),
+    [refundError, setRefundError] = useState(""),
+    [cancelling, setCancelling] = useState("");
+  async function cancelRefund(id: string) {
+    setRefundError("");
+    setCancelling(id);
+    try {
+      await moneyRequest("money-movements/" + id + "/decision", {
+        action: "cancel",
+        note: "客户取消退款申请",
+      });
+      await onRefresh?.();
+    } catch (e) {
+      setRefundError((e as Error).message);
+    } finally {
+      setCancelling("");
+    }
+  }
   const [fundingOpen, setFundingOpen] = useState(false);
   const [activeFunding, setActiveFunding] = useState<any>(null);
   const [currency, setCurrency] = useState(initialCurrency);
@@ -69,13 +95,24 @@ export default function CustomerWallet({
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return (
     <section className="customer-wallet">
+      {refundOpen && (
+        <RefundDialog
+          currency={currency}
+          available={balance?.available ?? "0"}
+          onClose={() => {
+            setRefundOpen(false);
+            void onRefresh?.();
+          }}
+        />
+      )}
       {fundingOpen && (
         <FundingDialog
           currency={currency}
           initialPayment={activeFunding}
           onClose={() => {
             setFundingOpen(false);
-            window.location.reload();
+            if (onRefresh) void onRefresh();
+            else window.location.reload();
           }}
         />
       )}
@@ -110,6 +147,7 @@ export default function CustomerWallet({
           </button>
         ))}
       </div>
+      {refundError && <p role="alert">{refundError}</p>}
       {!history ? (
         <>
           <div className="wallet-focus-card">
@@ -122,7 +160,7 @@ export default function CustomerWallet({
             </strong>
             <div className="wallet-reserved">
               <Lock size={16} />
-              <span>订单冻结</span>
+              <span>冻结余额</span>
               <strong>
                 {money(balance?.frozen ?? "0")} {currency}
               </strong>
@@ -161,6 +199,15 @@ export default function CustomerWallet({
               </button>
             </div>
           </div>
+          {moneyEnabled && (
+            <button
+              className="link wallet-refund-link"
+              disabled={locked}
+              onClick={() => setRefundOpen(true)}
+            >
+              申请退款
+            </button>
+          )}
           {resumeDraft && (
             <p className="draft-hint" role="status">
               草稿已保留，充值后返回将重新获取报价。
@@ -196,8 +243,52 @@ export default function CustomerWallet({
             >
               结汇资金 <em>{funded.length}</em>
             </button>
+            {moneyEnabled && (
+              <button
+                className={historyType === "refunds" ? "active" : ""}
+                onClick={() => setHistoryType("refunds")}
+              >
+                退款
+              </button>
+            )}
           </div>
-          {historyType === "deposits" && realFunds ? (
+          {historyType === "refunds" ? (
+            moneyMovements.filter(
+              (r) => r.kind === "refund" && r.currency === currency,
+            ).length ? (
+              moneyMovements
+                .filter((r) => r.kind === "refund" && r.currency === currency)
+                .map((r) => (
+                  <div className="refund-record" key={r.id}>
+                    <header>
+                      <strong>{movementLabels[r.status]}</strong>
+                      <strong>
+                        {money(r.amount)} {r.currency}
+                      </strong>
+                    </header>
+                    <small>
+                      {date(r.created_at)} ·{" "}
+                      {r.network === "usdttrc20" ? "TRON · TRC20" : "Base"}
+                    </small>
+                    <small className="money-address">{r.destination}</small>
+                    {r.txid && (
+                      <small className="money-address">交易：{r.txid}</small>
+                    )}
+                    {r.status === "requested" && (
+                      <button
+                        className="button text"
+                        disabled={!!cancelling}
+                        onClick={() => void cancelRefund(r.id)}
+                      >
+                        {cancelling === r.id ? "正在取消…" : "取消申请"}
+                      </button>
+                    )}
+                  </div>
+                ))
+            ) : (
+              <Empty title="暂无退款记录">退款申请将在这里显示进度。</Empty>
+            )
+          ) : historyType === "deposits" && realFunds ? (
             fundingPayments.filter((p) => p.currency === currency).length ? (
               fundingPayments
                 .filter((p) => p.currency === currency)

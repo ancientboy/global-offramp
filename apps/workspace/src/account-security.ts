@@ -167,7 +167,8 @@ export class AccountSecurity {
     const c = await this.auth.pool.connect();
     try {
       await c.query("BEGIN");
-      await this.auth.consumeMfa(c, account.id, v.code);
+      if (!(await this.auth.consumeMfa(c, account.id, v.code)))
+        throw new HttpError(403, "MFA_SETUP_REQUIRED");
       await c.query(
         "UPDATE workspace.sessions SET mfa_verified_at=$2 WHERE token_hash=$1",
         [digest(token), new Date(this.auth.now())],
@@ -181,6 +182,21 @@ export class AccountSecurity {
     } finally {
       c.release?.();
     }
+  }
+  async requireRecentMfa(account: Account, token: string) {
+    if (!(await this.status(account)).mfaEnabled)
+      throw new HttpError(403, "MFA_SETUP_REQUIRED");
+    const row = (
+      await this.auth.pool.query(
+        "SELECT mfa_verified_at FROM workspace.sessions WHERE token_hash=$1 AND account_id=$2",
+        [digest(token), account.id],
+      )
+    ).rows[0];
+    if (
+      !row?.mfa_verified_at ||
+      new Date(row.mfa_verified_at).getTime() < this.auth.now() - 10 * 60000
+    )
+      throw new HttpError(403, "MFA_STEP_UP_REQUIRED");
   }
   async requireReady(account: Account, token: string, recent = false) {
     const s = await this.status(account);

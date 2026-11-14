@@ -199,6 +199,7 @@ export interface Order {
     scanStatus: "not_scanned";
   };
   conversion?: {
+    accountingBasis?: "provider_clearing";
     providerReference: string;
     actualRate: string;
     evidence: string;
